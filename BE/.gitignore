@@ -21,10 +21,11 @@ bld/
 [Oo]bj/
 [Ll]og/
 
-# Visual Studio Code & IDEs
+# Visual Studio Code
 .vscode/
+
+# Visual Studio 2017/2019/2022 cache folder
 .vs/
-.idea/
 
 # Environment & Secrets files
 .env
@@ -34,11 +35,3 @@ bld/
 appsettings*.Local.json
 appsettings.local.json
 appsettings.Production.json
-
-# Frontend folder (managed in a separate repo)
-FE/
-fe/
-
-# OS generated files
-.DS_Store
-Thumbs.db
