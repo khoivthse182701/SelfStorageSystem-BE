@@ -1,0 +1,135 @@
+================================================================================
+           DANH SÁCH TASK API BACKEND: GIAI ĐOẠN 4 & GIAI ĐOẠN 5
+================================================================================
+
+--------------------------------------------------------------------------------
+1. POST /api/customer/reservations
+--------------------------------------------------------------------------------
+* Chức năng: Tạo đơn đặt giữ chỗ kho trực tuyến (Hold Unit) kèm hóa đơn đợt đầu.
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode:
+    + Không fix cứng thời gian giữ chỗ 15 phút hay 900 giây trong controller/service; giá trị timeout này cần đọc từ cấu hình hệ thống (System Settings / AppSettings).
+    + Quy tắc sinh mã đặt chỗ (tiền tố RSV, format ngày giờ, sequence) không ghép chuỗi tùy tiện mà dùng generator chuẩn.
+    + Tiền thuê, tiền cọc và tổng tiền hóa đơn phải tính toán động theo cấu hình giá tại thời điểm đặt.
+  - Concurrency Lock: Khi cập nhật trạng thái kho sang 'reserved', phải xử lý chống race condition (dùng Pessimistic Locking hoặc Distributed Lock qua Redis) để ngăn 2 khách hàng cùng giữ một ô kho tại cùng một thời điểm.
+* Business Rules liên quan:
+  - BR-RSV-01: Chuyển ô kho sang trạng thái giữ chỗ tạm thời với thời hạn tối đa 15 phút (holdUntil = UtcNow + 15 phút)[cite: 8]. Phải kích hoạt cơ chế đếm ngược hoặc background worker/job để tự động rollback về 'Available' nếu quá hạn thanh toán[cite: 8].
+  - BR-RSV-02: Kiểm tra tham số durationMonths bắt buộc từ 01 đến 12 tháng[cite: 8].
+  - BR-FIN-01: Hóa đơn đợt đầu phải tự động hạch toán tiền đặt cọc bằng đúng 100% tiền thuê của 01 tháng[cite: 8].
+  - BR-FIN-04: Áp dụng tối đa 01 voucher hợp lệ sau khi kiểm tra đủ điều kiện[cite: 8].
+  - BR-OPS-02: Chỉ cho phép đặt giữ chỗ với ô kho đang có status = 'Available'[cite: 8].
+
+--------------------------------------------------------------------------------
+2. GET /api/customer/reservations/my
+--------------------------------------------------------------------------------
+* Chức năng: Xem danh sách các đơn đặt chỗ của khách hàng hiện tại.
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode: Trích xuất CustomerId trực tiếp từ JWT Claim (Sub/UserId) của phiên đăng nhập, tuyệt đối không nhận customerId từ Query Params hay Request Body để tránh rò rỉ dữ liệu chéo giữa các khách hàng.
+  - Xử lý trạng thái động: Các đơn ở trạng thái 'pending_payment' nếu đã quá thời hạn holdUntil thì cần được query xử lý và hiển thị là 'expired'.
+* Business Rules liên quan:
+  - BR-RSV-01: Hiển thị đúng trạng thái vòng đời của đơn đặt chỗ (pending_payment, confirmed, cancelled, expired) theo mốc thời gian giữ chỗ 15 phút[cite: 8].
+
+--------------------------------------------------------------------------------
+3. GET /api/customer/reservations/{id}
+--------------------------------------------------------------------------------
+* Chức năng: Lấy thông tin chi tiết một đơn đặt chỗ & mã QR Check-in (nếu hợp lệ).
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode:
+    + Số giây còn lại (expiresInSeconds) phải tính động dựa trên: (holdUntil - DateTime.UtcNow).
+    + Logic cấp mã QR Check-in: Phải dựa trên trạng thái thanh toán thực tế của hóa đơn liên kết; không hardcode chuỗi QR rỗng hoặc tĩnh.
+  - Phân quyền dữ liệu: Kiểm tra đơn đặt chỗ có đúng thuộc về khách hàng đang đăng nhập hay không.
+* Business Rules liên quan:
+  - BR-RSV-01: Nếu chưa thanh toán và còn trong hạn 15 phút, trả về thời gian đếm ngược chính xác[cite: 8]. Nếu quá 15 phút, trả về trạng thái hết hạn[cite: 8].
+  - BR-RSV-04: Chỉ cung cấp Reservation Code / QR Check-in hợp lệ sau khi đơn hàng đã thanh toán đầy đủ cả tiền cọc và tiền thuê kỳ đầu[cite: 8].
+
+--------------------------------------------------------------------------------
+4. POST /api/customer/reservations/{id}/cancel
+--------------------------------------------------------------------------------
+* Chức năng: Khách hàng chủ động hủy giữ chỗ khi chưa thanh toán.
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Kiểm tra trạng thái: Chỉ cho phép hủy khi đơn đang ở trạng thái 'pending_payment'. Không cho phép hủy khi đơn đã được thanh toán thành công ('confirmed') hoặc đã hết hạn ('expired').
+  - Mở khóa ô kho: Lập tức chuyển trạng thái của ô kho liên kết từ 'reserved' trở lại 'available' để khách khác có thể nhìn thấy và đặt ngay.
+* Business Rules liên quan:
+  - BR-RSV-01: Xử lý giải phóng slot giữ kho trước thời hạn 15 phút, hoàn trả trạng thái về 'Available' trên hệ thống[cite: 8].
+
+--------------------------------------------------------------------------------
+5. POST /api/customer/payments/create-checkout
+--------------------------------------------------------------------------------
+* Chức năng: Tạo liên kết/yêu cầu thanh toán trực tuyến (VNPay / SePay / VietQR).
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode:
+    + Tỷ giá, định dạng tiền tệ, Merchant ID, Secret Key, Return URL, IPN URL phải lấy từ cấu hình bảo mật (Configuration / Environment Variables / Key Vault).
+    + Cú pháp nội dung chuyển khoản VietQR tự động (VD: cú pháp khớp lệnh với Payment Gateway) phải được sinh từ mẫu cấu hình chung gắn kèm InvoiceId/ReservationId.
+  - Kiểm tra tính hợp lệ của hóa đơn: Chỉ tạo liên kết thanh toán khi hóa đơn chưa được thanh toán (status = 'unpaid') và đơn đặt chỗ liên kết vẫn còn trong hạn 15 phút giữ chỗ.
+* Business Rules liên quan:
+  - BR-RSV-01: Từ chối tạo link thanh toán nếu đơn giữ chỗ đã vượt quá 15 phút (tránh trường hợp khách thanh toán sau khi kho đã bị hủy giữ chỗ và bán cho người khác)[cite: 8].
+
+--------------------------------------------------------------------------------
+6. GET /api/customer/payments/my-history
+--------------------------------------------------------------------------------
+* Chức năng: Xem lịch sử các giao dịch thanh toán và biên lai điện tử của tôi.
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Lấy định danh khách hàng tự động từ token; dữ liệu biên lai (mã giao dịch ngân hàng, cổng thanh toán, thời gian ghi nhận) load trực tiếp từ bảng lưu vết giao dịch thanh toán ([core].[payments]).
+
+--------------------------------------------------------------------------------
+7. GET & PUT /api/customer/profile
+--------------------------------------------------------------------------------
+* Chức năng: Xem và cập nhật hồ sơ khách hàng (CCCD/Hộ chiếu, địa chỉ, liên hệ khẩn cấp).
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Validate định dạng: Áp dụng Regex kiểm tra tính hợp lệ của số CCCD/CMND (12 số hoặc 9 số) và số điện thoại theo chuẩn viễn thông, không nhận chuỗi tùy tiện.
+  - Bảo mật dữ liệu: Dữ liệu CCCD/Hộ chiếu thuộc nhóm thông tin định danh cá nhân nhạy cảm, cần mã hóa hoặc che bớt (masking) khi trả về phía client nếu không cần hiển thị đầy đủ.
+* Business Rules liên quan:
+  - BR-RSV-04: Đảm bảo dữ liệu CCCD/Passport được lưu trữ chính xác làm căn cứ để nhân viên đối soát định danh khi làm thủ tục Check-in và bàn giao kho tại cơ sở[cite: 8].
+
+--------------------------------------------------------------------------------
+8. GET /api/customer/rentals
+--------------------------------------------------------------------------------
+* Chức năng: Xem danh sách các kho đang thuê của khách hàng (My Rentals).
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Lọc dữ liệu hợp đồng: Chỉ lấy các hợp đồng (rental agreements) thuộc về user đang đăng nhập và có trạng thái đang hoạt động ('active') hoặc sắp hết hạn ('expiring_soon').
+  - Ngày bắt đầu, ngày kết thúc và vị trí ô kho lấy từ database, không fix cứng logic tính ngày.
+
+--------------------------------------------------------------------------------
+9. GET /api/customer/rentals/{agreementId}/access-credentials
+--------------------------------------------------------------------------------
+* Chức năng: Lấy thông tin mã PIN mở cửa kho cá nhân và mã QR mở cổng/thang máy.
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode:
+    + Mã PIN (6 số) lưu dưới dạng mã hóa một chiều hoặc lưu an toàn theo quy chuẩn bảo mật thiết bị IoT.
+    + Mã QR Token mở cổng cơ sở phải được sinh động dưới dạng JWT / Time-based Token có thời hạn ngắn (TTL ~ 30-60 giây) để chống chụp màn hình chia sẻ bừa bãi.
+  - Kiểm tra quyền sở hữu hợp đồng của user đang gọi API.
+* Business Rules liên quan:
+  - BR-RSV-04: Chỉ cấp thông tin truy cập (PIN/QR) khi hợp đồng đã hoàn tất Check-in thành công và đã thanh toán đủ tiền cọc + kỳ đầu[cite: 8].
+  - BR-REN-03: Kiểm tra tức thời tình trạng công nợ; nếu hợp đồng trễ hạn thanh toán quá 01 ngày (từ ngày N+1), hệ thống bắt buộc trả về trạng thái mã là 'suspended' (vô hiệu hóa quyền truy cập)[cite: 8].
+
+--------------------------------------------------------------------------------
+10. PUT /api/customer/rentals/{agreementId}/change-pin
+--------------------------------------------------------------------------------
+* Chức năng: Khách hàng tự đổi mã PIN bàn phím mở cửa ô kho.
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Validate mã PIN mới: Kiểm tra độ dài đúng 6 chữ số, không cho phép các dãy số quá đơn giản (VD: không nhận '123456', '111111', '000000').
+  - Xác thực mã PIN cũ (currentPin) trước khi cho phép cập nhật mã mới vào hệ thống quản lý khóa IoT.
+* Business Rules liên quan:
+  - BR-REN-03: Nếu hợp đồng đang bị khóa quyền truy cập do nợ quá hạn, từ chối cho phép đổi PIN cho đến khi thanh toán xong[cite: 8].
+
+--------------------------------------------------------------------------------
+11. GET /api/customer/rentals/{agreementId}/handover
+--------------------------------------------------------------------------------
+* Chức năng: Xem biên bản bàn giao và ảnh chụp hiện trạng ô kho lúc Check-in.
+* Quyền truy cập: Authorize(Roles = "storage_customer").
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode: Danh sách URL ảnh hiện trạng (ảnh góc kho, sàn kho, khóa cửa) và chữ ký điện tử phải lấy từ bảng lưu trữ biên bản bàn giao ([core].[handover_records]) hoặc Object Storage (S3/MinIO/Blob Storage).
+* Business Rules liên quan:
+  - BR-FIN-02: Dữ liệu hiện trạng và hình ảnh bàn giao ban đầu là cơ sở pháp lý và kỹ thuật để đối chiếu xác định phí sửa chữa, hư hỏng hoặc phí vệ sinh nhằm tính toán khấu trừ tiền hoàn cọc khi Check-out[cite: 8].
+  - BR-OPS-02: Đảm bảo ô kho đã qua kiểm tra vệ sinh và có xác nhận của nhân viên trước khi bàn giao[cite: 8].
+================================================================================

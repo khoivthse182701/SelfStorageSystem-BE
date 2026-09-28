@@ -1,0 +1,299 @@
+
+PHẦN 1: THIẾT LẬP NỀN TẢNG FRONTEND & TÍCH HỢP HỆ THỐNG (FE CORE SETUP)
+
+
+[ ] FE-CORE-01 [NỀN TẢNG]: Khởi tạo dự án Frontend với Vite + React + TypeScript + Tailwind CSS
+    - Vị trí: /FE
+    - Các gói thư viện cần cài đặt:
+      + Routing: react-router-dom (v6)
+      + State & Data Fetching: @tanstack/react-query, axios
+      + UI & Icons: tailwindcss, clsx, tailwind-merge, lucide-react, sonner (Toast) hoặc react-hot-toast
+      + Form & Validation: react-hook-form, zod
+      + Tiện ích: date-fns hoặc dayjs (xử lý ngày giờ), qrcode.react (render mã QR)
+    - Cấu hình Alias path: @/components, @/pages, @/api, @/types, @/hooks, @/utils.
+    - Priority: Critical | Ước tính: 0.5 ngày
+
+[ ] FE-CORE-02 [NỀN TẢNG]: Xây dựng Cấu hình Axios Client & Interceptor chuẩn Clean Architecture
+    - File: /FE/src/api/apiClient.ts
+    - Cấu hình baseURL đọc từ import.meta.env.VITE_API_URL (tránh hardcode localhost:5000).
+    - Request Interceptor: Tự động trích xuất Access Token từ LocalStorage/SessionStorage và gắn vào header Authorization: Bearer <token>.
+    - Response Interceptor:
+      + Bắt lỗi 401 Unauthorized: Xóa token rỗng và chuyển hướng về /login.
+      + Bắt lỗi 403 Forbidden: Hiển thị thông báo không đủ quyền hạn.
+      + Bắt lỗi 429 Too Many Requests: Hiển thị Toast cảnh báo chống spam rate limit ("Bạn đã gửi quá nhiều yêu cầu, vui lòng thử lại sau").
+      + Format chuẩn hóa dữ liệu trả về theo schema ApiResponse<T> ({ success, data, message, errors }).
+    - Priority: Critical | Ước tính: 0.5 ngày
+
+[ ] FE-CORE-03 [NỀN TẢNG]: Xây dựng Hệ thống Layout & Role-Based Protected Routes
+    - File: /FE/src/routes/AppRoutes.tsx & /FE/src/components/layout/CustomerLayout.tsx
+    - Public Layout: Header (Logo, Danh sách cơ sở, Bảng giá, Nút Đăng nhập/Đăng ký), Footer.
+    - Customer Portal Layout: Sidebar bên trái (Dashboard, Kho đang thuê, Đơn đặt chỗ, Lịch sử thanh toán, Hồ sơ cá nhân), Header có Avatar, Tên người dùng và Nút Đăng xuất.
+    - Component ProtectedRoute: Kiểm tra user đã đăng nhập và có vai trò 'storage_customer'.
+    - Priority: High | Ước tính: 1 ngày
+
+====================================================================================================
+PHẦN 2: KHÁM PHÁ CƠ SỞ, LOẠI KHO, Ô KHO & SƠ ĐỒ 2D (GIAI ĐOẠN 2)
+(Tham chiếu: taskdatkho.txt - Mục 1 đến Mục 5)
+====================================================================================================
+
+[ ] FE-TASK-01 [MÀN HÌNH]: Trang Danh sách & Tìm kiếm Cơ sở kho (Facilities Explorer Page)
+    - Route: /facilities hoặc /
+    - API kết nối: GET /api/customer/facilities
+    - Chức năng giao diện:
+      + Bộ lọc tìm kiếm nhanh: Dropdown Tỉnh/Thành phố (TP.HCM, Hà Nội, Đà Nẵng...), Dropdown Quận/Huyện, Ô nhập từ khóa tên cơ sở hoặc địa chỉ.
+      + Chế độ hiển thị: Dạng Lưới Card (Grid View) và Bản đồ định vị (Map View).
+      + Card Cơ sở bao gồm: Ảnh đại diện cơ sở, Tên cơ sở, Địa chỉ chi tiết, Giờ đóng/mở cửa, Huy hiệu hiển thị "Còn X ô kho trống" (xanh lá).
+      + Khi click vào Card cơ sở -> Chuyển sang Trang chi tiết cơ sở /facilities/:id.
+    - Business Rules & Tránh Hardcode:
+      + Đọc dữ liệu tọa độ GPS (lat, lng), giờ mở cửa và số kho trống hoàn toàn từ response API (BR-OPS-02).
+    - Priority: High | Ước tính: 1.5 ngày
+
+[ ] FE-TASK-02 [MÀN HÌNH]: Trang Chi tiết Cơ sở kho (Facility Detail Page)
+    - Route: /facilities/:id
+    - API kết nối: GET /api/customer/facilities/:id
+    - Chức năng giao diện:
+      + Banner hình ảnh cơ sở, thông tin liên hệ, hotline hỗ trợ, địa chỉ Google Map.
+      + Khối danh mục Tiện ích cơ sở: Camera giám sát 24/7, Máy lạnh kiểm soát độ ẩm, Bãi đỗ xe tải bốc dỡ hàng, Thang máy nâng hàng tải trọng lớn, Bảo vệ trực 24/7.
+      + Bảng thống kê phân loại kho: Hiển thị các loại kho đang có tại cơ sở kèm số lượng kho trống khả dụng của từng loại (Ví dụ: Locker mini còn 5 kho, Kho Standard 5m3 còn 2 kho).
+      + Nút CTA: "Xem sơ đồ mặt bằng & Chọn ô kho" -> Chuyển đến component Sơ đồ 2D.
+    - Priority: High | Ước tính: 1 ngày
+
+[ ] FE-TASK-03 [COMPONENT]: Thư viện Danh mục Loại kho & Kích thước (Unit Types Showcase)
+    - Component: /FE/src/components/facilities/UnitTypesCatalog.tsx
+    - API kết nối: GET /api/customer/unit-types
+    - Chức năng giao diện:
+      + Hiển thị danh mục các loại kích thước kho tiêu chuẩn:
+        * Locker cá nhân (1m3): Chứa vali, hồ sơ, balo.
+        * Kho Mini (3m3 - 5m3): Chứa được 15-20 thùng carton, tủ đồ nhỏ, quạt máy.
+        * Kho Tiêu chuẩn (8m3 - 12m3): Chứa đồ đạc phòng ngủ, xe máy, sofa đơn.
+        * Kho Lớn / Container (20m3+): Chứa hàng kinh doanh, toàn bộ nội thất gia đình.
+      + Thông số chi tiết 3 chiều: Rộng (W) x Dài (L) x Cao (H) (đơn vị mét), Diện tích (m2), Thể tích (m3).
+      + Hình ảnh minh họa 3D trực quan trực quan hóa sức chứa thực tế.
+      + Nút "Chọn loại kho này để đặt" -> Tự động điền UnitType vào bộ lọc đặt chỗ.
+    - Priority: Medium | Ước tính: 1 ngày
+
+[ ] FE-TASK-04 [COMPONENT]: Sơ đồ Mặt bằng Kho tương tác 2D (Interactive 2D Floor Plan Component)
+    - Component: /FE/src/components/map/InteractiveFloorPlan.tsx
+    - API kết nối: GET /api/customer/facilities/:facilityId/map
+    - Chức năng giao diện (Core Feature):
+      + Bộ chuyển tầng/khu vực: Tabs chọn Tầng 1, Tầng 2, Khu A, Khu B (map_layer).
+      + Khung Canvas / SVG tương tác:
+        * Render các ô kho theo đúng tọa độ pos_x, pos_y, width, height, góc quay rotation_degrees từ API.
+        * Zoom in, Zoom out, Kéo rê (Pan) mặt bằng để xem toàn cảnh cơ sở.
+      + Hệ màu nhận diện trạng thái ô kho:
+        * Màu Xanh lá (#22c55e): Ô kho trống ('available') -> Có hiệu ứng hover sáng, con trỏ chuột pointer, cho phép CLICK CHỌN.
+        * Màu Đỏ (#ef4444): Ô kho đang có người thuê ('occupied') -> Disable click, hiển thị tooltip "Đang sử dụng".
+        * Màu Vàng (#eab308): Ô kho đang có người giữ chỗ 15 phút ('reserved' / 'pending_payment') -> Disable click, tooltip "Đang giữ chỗ".
+        * Màu Xám (#64748b): Ô kho bảo trì ('maintenance') -> Disable click, tooltip "Đang bảo trì kỹ thuật".
+      + Bảng chú giải màu sắc (Legend) ở góc sơ đồ.
+      + Khi click vào ô kho màu xanh:
+        * Ô kho được highlight viền xanh dương đậm.
+        * Bật Drawer / Popover bên phải hiển thị: Mã số kho (Unit Code), Kích thước, Loại kho, Bảng giá tháng, và Nút "Đặt ô kho này ngay".
+    - Business Rules & Lưu ý:
+      + Đảm bảo đồng bộ trạng thái màu theo đúng quy tắc BR-OPS-02 và BR-RSV-01.
+    - Priority: Critical | Ước tính: 2.5 - 3 ngày
+
+[ ] FE-TASK-05 [MÀN HÌNH]: Danh sách Lọc Kho Trống Dạng Bảng/Lưới (Available Units Grid/List View)
+    - Component: /FE/src/components/facilities/AvailableUnitsList.tsx
+    - API kết nối: GET /api/customer/storage-units/available
+    - Chức năng giao diện:
+      + Chế độ hiển thị song song với Sơ đồ 2D (nút chuyển đổi Map View <-> List View).
+      + Bộ lọc: Lọc theo Tầng (Facility Area), Lọc theo Loại kho (Unit Type), Lọc theo mức giá.
+      + Bảng danh sách các ô kho đang có status = 'available': Mã số ô kho, Vị trí tầng, Diện tích, Giá niêm yết/tháng.
+      + Nút hành động: "Chọn ô kho" để chuyển sang bước tính giá.
+    - Priority: Medium | Ước tính: 1 ngày
+
+====================================================================================================
+PHẦN 3: DỰ TOÁN BẢNG GIÁ, PHỤ PHÍ ====================================================================================================
+
+[ ] FE-TASK-06 [COMPONENT]: Widget / Modal Dự toán Chi phí Thuê & Tính Giá Tự Động (Price Calculator)
+    - Component: /FE/src/components/booking/PriceCalculatorWidget.tsx
+    - API kết nối: POST /api/customer/pricing/calculate
+    - Form Input người dùng:
+      + Ngày bắt đầu thuê (startDate): DatePicker, validate không chọn ngày quá khứ.
+      + Thời hạn thuê (durationMonths): Slider hoặc Dropdown chọn từ 1 đến 12 tháng (Validate theo BR-RSV-02).
+           + Hiển thị Bảng phân tích chi phí minh bạch (Cost Breakdown):
+        * Đơn giá thuê cơ bản/tháng: xx.xxx.xxx đ (baseMonthlyRate).
+        * Tổng tiền thuê theo kỳ hạn: xx.xxx.xxx đ (durationMonths x baseMonthlyRate).
+        * Tiền đặt cọc an toàn: xx.xxx.xxx đ (securityDeposit = 100% của 1 tháng tiền thuê - BR-FIN-01).
+                * Thuế VAT: 0 đ (hoặc theo cấu hình hệ thống).
+        * TỔNG TIỀN THANH TOÁN ĐỢT ĐẦU: xx.xxx.xxx đ (firstPaymentTotal = Tiền thuê kỳ 1 + Tiền cọc - Giảm giá).
+      + Dòng ghi chú giải thích rõ ràng cho khách hàng: "Kỳ đầu thanh toán bao gồm: 01 tháng tiền thuê và 01 tháng tiền cọc. Tiền cọc sẽ được hoàn trả khi kết thúc hợp đồng theo quy định BR-FIN-02".
+      + Nút CTA: "Tiến hành Đặt chỗ & Giữ kho" -> Chuyển sang bước Booking.
+    - Priority: Critical | Ước tính: 1.5 ngày
+
+====================================================================================================
+PHẦN 4: ĐẶT GIỮ CHỖ KHO TRỰC TUYẾN & THANH TOÁN ONLINE (GIAI ĐOẠN 4)
+====================================================================================================
+
+[ ] FE-TASK-07 [MÀN HÌNH]: Luồng Tạo Đơn Đặt Giữ Chỗ (Reservation Flow & Hold Unit)
+    - Route: /booking/checkout
+    - API kết nối: POST /api/customer/reservations
+    - Chức năng giao diện:
+      + Kiểm tra phiên đăng nhập: Nếu khách chưa đăng nhập, lưu tạm giỏ hàng vào sessionStorage và mở Modal Đăng nhập/Đăng ký nhanh.
+      + Màn hình Tóm tắt Đơn Đặt Chỗ (Order Review):
+        * Thông tin kho: Tên cơ sở, Mã ô kho (hoặc loại kho), Kích thước, Tầng.
+        * Thời gian thuê: Từ ngày ... đến ngày ... (tổng số tháng).
+        * Chi tiết hóa đơn đợt đầu (Tiền thuê kỳ 1 + Tiền cọc + Voucher áp dụng).
+      + Nút bấm "Xác nhận Giữ Chỗ & Thanh Toán":
+        * Gọi API POST /api/customer/reservations.
+        * Xử lý Concurrency Error (Nếu ô kho vừa bị người khác giữ chỗ trước): Hiển thị Toast thông báo thân thiện "Ô kho này vừa có người giữ chỗ. Vui lòng chọn ô kho khác trên sơ đồ!".
+        * Khi thành công: Nhận reservationId, reservationCode, holdUntil, invoiceId, expiresInSeconds -> Điều hướng ngay sang Màn hình Thanh toán có bộ đếm ngược.
+    - Priority: Critical | Ước tính: 2 ngày
+
+[ ] FE-TASK-08 [COMPONENT]: Đồng hồ Đếm ngược Thời gian Giữ chỗ 15 Phút (Hold Countdown Timer & Auto-Release)
+    - Component: /FE/src/components/booking/HoldCountdownBanner.tsx
+    - Input props: holdUntil (ISO string từ server) hoặc expiresInSeconds.
+    - Chức năng giao diện:
+      + Đồng hồ đếm ngược từng giây hiển thị trực quan (VD: "Thời gian giữ chỗ còn lại: 14:59").
+      + Thanh tiến trình (Progress Bar) thu hẹp dần theo tỷ lệ thời gian từ 15 phút về 0 phút.
+      + Đổi màu cảnh báo: Màu xanh (> 5 phút), Màu vàng (2 - 5 phút), Màu đỏ nhấp nháy (< 2 phút).
+      + Xử lý sự kiện Hết hạn (Time-up - BR-RSV-01):
+        * Khi đồng hồ chạm 00:00: Vô hiệu hóa nút thanh toán.
+        * Mở Modal thông báo: "Đơn đặt chỗ đã hết hạn sau 15 phút theo quy định hệ thống (BR-RSV-01). Ô kho đã được tự động giải phóng về trạng thái Trống."
+        * Nút điều hướng: "Quay lại Sơ đồ kho để chọn lại".
+    - Priority: Critical | Ước tính: 1 ngày
+
+[ ] FE-TASK-09 [MÀN HÌNH]: Màn hình Thanh toán Trực tuyến (Payment Checkout Page)
+    - Route: /booking/payment/:reservationId
+    - API kết nối:
+      + Lấy chi tiết đơn: GET /api/customer/reservations/:id
+      + Khách hủy đơn: POST /api/customer/reservations/:id/cancel
+      + Tạo link trả tiền: POST /api/customer/payments/create-checkout
+    - Chức năng giao diện:
+      + Đính kèm Component Đồng hồ đếm ngược 15 phút ở đầu trang.
+      + Khối chọn Phương thức Thanh toán:
+        1. Cổng thanh toán VNPay (Hỗ trợ Thẻ ATM nội địa, Thẻ quốc tế Visa/Master, VNPAY-QR):
+           * Khi bấm "Thanh toán VNPay": Gọi API lấy redirectUrl -> Chuyển hướng người dùng sang cổng VNPay Sandbox.
+        2. Chuyển khoản Ngân hàng tự động (VietQR / SePay):
+           * Hiển thị Mã QR VietQR chuẩn định dạng Napas 24/7.
+           * Hiển thị Số tài khoản, Ngân hàng thụ hưởng, Số tiền chính xác từng đồng, và CÚ PHÁP CHUYỂN KHOẢN duy nhất (Mã đơn/Mã hóa đơn) để hệ thống tự động khớp lệnh Webhook.
+           * Nút "Sao chép số tài khoản" và "Sao chép nội dung".
+           * Polling kiểm tra trạng thái thanh toán ngầm mỗi 3 giây.
+      + Nút "Hủy giữ chỗ": Nếu khách đổi ý không muốn thuê nữa, bấm nút này để hủy đơn giải phóng kho ngay lập tức.
+    - Priority: Critical | Ước tính: 2.5 ngày
+
+[ ] FE-TASK-10 [MÀN HÌNH]: Trang Kết quả Giao dịch Thanh toán (Payment Return / Callback Page)
+    - Route: /payment/callback (hứng params vnp_ResponseCode, vnp_TransactionNo...)
+    - Chức năng giao diện:
+      + Trường hợp Thanh toán Thành công:
+        * Icon Check xanh lá động (Animated Success Icon).
+        * Tiêu đề: "Đặt kho & Thanh toán thành công!".
+        * Thông tin xác nhận: Mã Đặt Chỗ (Reservation Code to rõ), Số tiền đã thanh toán, Tên kho, Cơ sở, Ngày hẹn Check-in.
+        * MÃ QR CHECK-IN: Hiển thị mã QR để khách hàng lưu về điện thoại hoặc chụp màn hình xuất trình khi đến nhận kho (BR-RSV-04).
+        * Nút CTA: "Xem đơn đặt chỗ của tôi" và "Về trang chủ".
+      + Trường hợp Thất bại hoặc Hủy giao dịch:
+        * Icon cảnh báo đỏ: "Giao dịch không thành công hoặc đã bị hủy".
+        * Nút "Thanh toán lại" (nếu đơn giữ chỗ vẫn còn trong hạn 15 phút) hoặc "Đặt lại kho mới".
+    - Priority: High | Ước tính: 1 ngày
+
+[ ] FE-TASK-11 [MÀN HÌNH]: Trang Quản lý Đơn Đặt Chỗ Của Tôi (My Reservations Page)
+    - Route: /customer/reservations
+    - API kết nối: GET /api/customer/reservations/my
+    - Chức năng giao diện:
+      + Bộ lọc Tab: Tất cả, Đang giữ chỗ (Pending), Đã thanh toán (Confirmed), Đã hoàn thành/Ký HĐ (Converted), Đã hết hạn (Expired), Đã hủy (Cancelled).
+      + Danh sách Card đơn đặt chỗ:
+        * Mã đơn đặt chỗ, Tên cơ sở kho, Loại kho, Thời gian thuê dự kiến.
+        * Huy hiệu trạng thái màu sắc tương ứng.
+        * Nút "Xem chi tiết & Mã QR" (đối với đơn Confirmed).
+        * Nút "Tiếp tục thanh toán" (đối với đơn Pending còn hạn 15 phút kèm đồng hồ đếm ngược).
+    - Priority: High | Ước tính: 1.5 ngày
+
+[ ] FE-TASK-12 [MODAL]: Modal Chi tiết Đơn Đặt Chỗ & Mã QR Check-in (Reservation Detail Modal)
+    - Component: /FE/src/components/booking/ReservationDetailModal.tsx
+    - API kết nối: GET /api/customer/reservations/:id
+    - Chức năng giao diện:
+      + Hiển thị toàn bộ thông tin chi tiết của đơn đặt chỗ.
+      + Đối với đơn đã thanh toán thành công (BR-RSV-04):
+        * Hiển thị mã QR Check-in kích thước lớn, độ tương phản cao, có thể tải về máy (Download PNG).
+        * Hướng dẫn: "Vui lòng mang theo CCCD/Hộ chiếu gốc trùng khớp với hồ sơ và xuất trình mã QR này cho nhân viên lễ tân tại chi nhánh để hoàn tất thủ tục bàn giao kho".
+      + Đối với đơn chưa thanh toán: Hiển thị số giây còn lại (expiresInSeconds) tính động từ server và nút dẫn tới cổng thanh toán.
+    - Priority: High | Ước tính: 1 ngày
+
+[ ] FE-TASK-13 [MÀN HÌNH]: Trang Lịch sử Thanh toán & Biên lai Điện tử (Payment History Page)
+    - Route: /customer/payment-history
+    - API kết nối: GET /api/customer/payments/my-history
+    - Chức năng giao diện:
+      + Bảng kê chi tiết các giao dịch thanh toán: Mã giao dịch, Cổng thanh toán (VNPay / SePay), Số tiền, Thời gian giao dịch, Trạng thái (Thành công / Thất bại).
+      + Modal xem Biên lai điện tử chi tiết (Electronic Receipt) kèm tùy chọn In / Lưu PDF.
+    - Priority: Medium | Ước tính: 1 ngày
+
+====================================================================================================
+PHẦN 5: CHECK-IN, MÃ MỞ CỬA PIN/QR & QUẢN LÝ KHO ĐANG THUÊ (GIAI ĐOẠN 5)
+(Tham chiếu: gemini-code-1790386908839.txt - Mục 7 đến Mục 11)
+====================================================================================================
+
+[ ] FE-TASK-14 [MÀN HÌNH]: Trang Hồ sơ Cá nhân & Cập nhật Thông tin Định danh (Customer Profile & KYC)
+    - Route: /customer/profile
+    - API kết nối: GET /api/customer/profile & PUT /api/customer/profile
+    - Chức năng giao diện:
+      + Form xem và cập nhật thông tin cá nhân:
+        * Họ và tên đầy đủ.
+        * Số CCCD / CMND / Hộ chiếu (Validate định dạng chuẩn Regex 12 số hoặc 9 số).
+        * Ngày sinh (DatePicker), Địa chỉ thường trú.
+        * Họ tên và Số điện thoại người liên hệ khẩn cấp (Emergency Contact).
+      + Hộp cảnh báo quan trọng: "Thông tin CCCD/Hộ chiếu bắt buộc phải chính xác để nhân viên đối chiếu định danh khi làm thủ tục Check-in và bàn giao kho tại cơ sở theo quy định BR-RSV-04".
+      + Masking bảo mật: Cho phép ẩn/hiện số CCCD trên giao diện.
+    - Priority: High | Ước tính: 1.5 ngày
+
+[ ] FE-TASK-15 [MÀN HÌNH]: Trang Quản lý Kho Đang Thuê (My Rented Storage Units Dashboard)
+    - Route: /customer/rentals
+    - API kết nối: GET /api/customer/rentals
+    - Chức năng giao diện:
+      + Hiển thị danh thiếp các ô kho đang vận hành của khách hàng:
+        * Mã ô kho (Unit Code), Cơ sở lưu trữ, Khu vực/Tầng.
+        * Thời hạn hợp đồng: Ngày bắt đầu - Ngày kết thúc.
+        * Huy hiệu trạng thái hợp đồng:
+          - Màu xanh: 'Active' (Đang sử dụng bình thường).
+          - Màu vàng: 'Expiring Soon' (Sắp hết hạn dưới 7 ngày) kèm nút "Gia hạn hợp đồng ngay".
+          - Màu đỏ: 'Overdue' (Trễ hạn thanh toán) kèm cảnh báo vi phạm.
+      + Các nút chức năng nhanh trên từng Card kho:
+        * "Xem Chìa khóa điện tử (PIN/QR)" -> Mở Smart Access Key Card.
+        * "Đổi mã PIN mở cửa" -> Mở Modal đổi PIN.
+        * "Xem Biên bản bàn giao lúc Check-in" -> Mở Handover Modal.
+        * "Gửi yêu cầu hỗ trợ (Ticket)" -> Báo hỏng/sự cố.
+    - Priority: Critical | Ước tính: 2 ngày
+
+[ ] FE-TASK-16 [COMPONENT]: Chìa khóa Điện tử Thông minh PIN & QR Code (Smart Access Key Card)
+    - Component: /FE/src/components/access/SmartAccessKeyCard.tsx
+    - API kết nối: GET /api/customer/rentals/:agreementId/access-credentials
+    - Chức năng giao diện:
+      + Mô phỏng chiếc thẻ thông minh (Virtual Keycard):
+        1. MÃ PIN MỞ KHO CÁ NHÂN:
+           * Hiển thị 6 chữ số bí mật (Mặc định che dấu chấm đen: ••••••, có nút Con mắt bật/tắt xem mã).
+           * Dùng để nhập trực tiếp vào khóa bàn phím số tại cửa kho riêng của khách.
+        2. MÃ QR TOKEN MỞ CỔNG CHÍNH / THANG MÁY:
+           * Render mã QR động hiển thị trên màn hình điện thoại.
+           * Thanh đếm ngược tự động xoay mã Token sau mỗi 60 giây (Time-based Token) chống chụp màn hình gửi người ngoài.
+        3. KIỂM SOÁT KHÓA TRUY CẬP QUÁ HẠN (BR-REN-03):
+           * Nếu hợp đồng bị trễ hạn thanh toán quá 01 ngày (từ ngày N+1), API trả về status = 'suspended':
+           * Giao diện lập tức chuyển sang chế độ Khóa (Lockout State): Ẩn mã PIN, vô hiệu hóa mã QR, hiện ổ khóa màu đỏ lớn kèm cảnh báo: "Quyền truy cập kho của bạn đã bị tạm khóa do hợp đồng quá hạn thanh toán. Vui lòng thanh toán hóa đơn để mở khóa tự động."
+    - Priority: Critical | Ước tính: 2 ngày
+
+[ ] FE-TASK-17 [MODAL]: Modal Tự Đổi Mã PIN Mở Cửa Kho (Change Door PIN Modal)
+    - Component: /FE/src/components/access/ChangePinModal.tsx
+    - API kết nối: PUT /api/customer/rentals/:agreementId/change-pin
+    - Form Input:
+      + Nhập mã PIN hiện tại (6 số).
+      + Nhập mã PIN mới (6 số).
+      + Nhập lại mã PIN mới để xác nhận.
+    - Client Validation:
+      + Bắt buộc đúng 6 chữ số.
+      + Chặn các dãy số quá đơn giản (VD: cấm '123456', '000000', '111111').
+    - Xử lý nghiệp vụ:
+      + Kiểm tra nếu hợp đồng đang bị suspended (BR-REN-03) thì chặn không cho đổi PIN và báo lỗi.
+      + Cập nhật thành công -> Hiển thị Toast thông báo và cập nhật mã PIN mới trên giao diện.
+    - Priority: High | Ước tính: 1 ngày
+
+[ ] FE-TASK-18 [MODAL]: Modal Xem Biên bản Bàn giao & Ảnh Hiện trường Lúc Check-in (Handover Record Modal)
+    - Component: /FE/src/components/rentals/HandoverRecordModal.tsx
+    - API kết nối: GET /api/customer/rentals/:agreementId/handover
+    - Chức năng giao diện:
+      + Hiển thị thông tin biên bản bàn giao: Mã hợp đồng, Mã ô kho, Thời gian bàn giao, Tên nhân viên tiếp đón, Chữ ký điện tử của hai bên.
+      + Bảng nghiệm thu các hạng mục bàn giao: Tình trạng ổ khóa, Cửa cuốn, Đèn chiếu sáng, Tường vách sạch sẽ.
+      + Gallery / Carousel Ảnh chụp hiện trường lúc nhận kho: Cho phép phóng to xem chi tiết ảnh chụp các góc trong kho lúc bàn giao ban đầu.
+    - Ý nghĩa nghiệp vụ:
+      + Khách hàng có thể tra cứu lại bất cứ lúc nào làm cơ sở đối chiếu pháp lý khi trả kho (Check-out) nhằm tránh tranh chấp khấu trừ tiền cọc theo BR-FIN-02.
+    - Priority: Medium | Ước tính: 1.5 ngày
+
+

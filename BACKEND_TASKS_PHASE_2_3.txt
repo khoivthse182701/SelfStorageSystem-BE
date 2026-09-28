@@ -1,0 +1,69 @@
+================================================================================
+           DANH SÁCH TASK API BACKEND: GIAI ĐOẠN 2 & GIAI ĐOẠN 3
+================================================================================
+
+--------------------------------------------------------------------------------
+1. GET /api/customer/facilities
+--------------------------------------------------------------------------------
+* Chức năng: Lấy danh sách các cơ sở kho đang hoạt động.
+* Quyền truy cập: Public.
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode: Trạng thái hoạt động ('active'), tọa độ định vị GPS (kinh độ, vĩ độ), giờ đóng/mở cửa, và tổng số lượng kho trống phải được query và tính toán động từ database theo thời gian thực.
+* Business Rules liên quan:
+  - BR-OPS-02: Số lượng kho trống của cơ sở chỉ được tính từ các ô kho có trạng thái hợp lệ là 'Available' (đã qua kiểm tra vệ sinh/kỹ thuật đạt yêu cầu)[cite: 8]. Tuyệt đối loại trừ các ô kho đang sử dụng ('Occupied' / 'In-Use'), đang bảo trì ('Under Maintenance')[cite: 8], hoặc đang bị giữ chỗ tạm thời ('Pending Payment' theo BR-RSV-01)[cite: 8].
+
+--------------------------------------------------------------------------------
+2. GET /api/customer/facilities/{id}
+--------------------------------------------------------------------------------
+* Chức năng: Lấy thông tin chi tiết của một cơ sở kho cụ thể.
+* Quyền truy cập: Public.
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode: Danh mục tiện ích (camera an ninh, máy lạnh 24/7, bãi đỗ xe tải...), bảng giá tham khảo, và số lượng tồn trống của từng loại kho (Unit Type) phải truy vấn động từ database.
+* Business Rules liên quan:
+  - BR-OPS-02: Thống kê ô kho còn trống phân bổ theo từng loại kho (Unit Type) chỉ được đếm các ô kho ở trạng thái 'Available'[cite: 8].
+
+--------------------------------------------------------------------------------
+3. GET /api/customer/unit-types
+--------------------------------------------------------------------------------
+* Chức năng: Lấy danh mục chuẩn các loại kho & kích thước tiêu chuẩn.
+* Quyền truy cập: Public.
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode: Kích thước dài, rộng, cao, diện tích (m2), thể tích (m3), nhãn loại kho (Locker mini, Standard, Kho phòng...) và danh sách hình ảnh/icon minh họa sức chứa phải load từ bảng cấu hình UnitTypes trong cơ sở dữ liệu.
+
+--------------------------------------------------------------------------------
+4. GET /api/customer/storage-units/available
+--------------------------------------------------------------------------------
+* Chức năng: Lấy danh sách các ô kho trống để khách hàng chọn đặt chỗ.
+* Quyền truy cập: Public.
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode: Lọc theo các tham số truy vấn linh hoạt (facilityId, unitTypeId, facilityAreaId).
+* Business Rules liên quan:
+  - BR-OPS-02: Bắt buộc lọc điều kiện status = 'available'[cite: 8]. Tuyệt đối không trả về các ô kho đang cho thuê ('Occupied' / 'In-Use') hoặc đang sửa chữa/bảo trì ('Under Maintenance')[cite: 8].
+  - BR-RSV-01: Cần kiểm tra loại trừ cả những ô kho đang nằm trong phiên giữ chỗ 15 phút ('Pending Payment') chưa hết hạn[cite: 8].
+
+--------------------------------------------------------------------------------
+5. GET /api/customer/facilities/{facilityId}/map
+--------------------------------------------------------------------------------
+* Chức năng: Lấy dữ liệu sơ đồ mặt bằng 2D tương tác (Interactive Floor Plan).
+* Quyền truy cập: Public.
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode: Tọa độ layout render đồ họa (pos_x, pos_y, width, height, rotation_degrees), thông tin phân khu/tầng (layer), và mã màu trạng thái phải do hệ thống tính toán hoặc mapping từ metadata của từng ô kho trong database.
+* Business Rules liên quan:
+  - BR-RSV-01: Trạng thái ô kho màu vàng ('reserved' / 'pending_payment') phải được xác định dựa trên kiểm tra thời gian thực (hệ thống giữ kho tối đa 15 phút, nếu quá 15 phút chưa hoàn tất thanh toán phải tự động tính là 'available' khi trả về map)[cite: 8].
+  - BR-OPS-02: Đồng bộ trạng thái màu xanh ('available'), màu đỏ ('occupied'), màu xám ('maintenance') chuẩn xác theo dữ liệu vận hành[cite: 8].
+
+--------------------------------------------------------------------------------
+6. POST /api/customer/pricing/calculate
+--------------------------------------------------------------------------------
+* Chức năng: Tính toán tự động dự toán chi phí thuê, cọc và giảm giá.
+* Quyền truy cập: Public hoặc storage_customer.
+* Lưu ý nghiệp vụ & Tránh Hardcode:
+  - Không hardcode:
+    + Giá thuê cơ bản hàng tháng (baseMonthlyRate) phải lấy từ cấu hình giá của unit_type/storage_unit.
+    + Tỷ lệ tiền đặt cọc, thuế suất (taxAmount), giá trị giảm giá voucher không được gán số cứng trong code (ví dụ: không hardcode 0.2 hay 1500000).
+* Business Rules liên quan:
+  - BR-RSV-02: Validate thời hạn thuê durationMonths bắt buộc nằm trong khoảng từ 01 tháng đến 12 tháng[cite: 8]. Báo lỗi nếu gửi ngoài khoảng này.
+  - BR-FIN-01: Mức tiền đặt cọc (securityDeposit) mặc định bằng đúng 100% giá thuê của 01 tháng tương ứng với loại kho đó[cite: 8].
+  - BR-FIN-04: Kiểm tra voucher hợp lệ; chỉ được áp dụng tối đa 01 mã giảm giá[cite: 8]. Kiểm tra điều kiện số tháng thuê tối thiểu và thời gian hiệu lực của chiến dịch từ cơ sở dữ liệu[cite: 8].
+
+

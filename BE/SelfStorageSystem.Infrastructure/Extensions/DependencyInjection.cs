@@ -23,7 +23,10 @@ public static class DependencyInjection
 
         services.AddDbContext<SelfStorageDbContext>(options =>
         {
-            options.UseSqlServer(connectionString);
+            options.UseSqlServer(connectionString, sqlOptions =>
+            {
+                sqlOptions.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
+            });
         });
 
         // 2. Memory Cache
@@ -36,6 +39,8 @@ public static class DependencyInjection
         services.Configure<OtpSettings>(configuration.GetSection(OtpSettings.SectionName));
         services.Configure<RateLimitingSettings>(configuration.GetSection(RateLimitingSettings.SectionName));
         services.Configure<CorsSettings>(configuration.GetSection(CorsSettings.SectionName));
+        services.Configure<ReservationSettings>(configuration.GetSection(ReservationSettings.SectionName));
+        services.Configure<PaymentSettings>(configuration.GetSection(PaymentSettings.SectionName));
 
         // 4. Domain & Application Services
         services.AddScoped<IJwtTokenService, JwtTokenService>();
@@ -43,6 +48,11 @@ public static class DependencyInjection
         services.AddScoped<IOtpService, OtpService>();
         services.AddScoped<IGoogleAuthService, GoogleAuthService>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<ICustomerReservationService, CustomerReservationService>();
+        services.AddScoped<ICustomerPaymentService, CustomerPaymentService>();
+
+        // 4.1. Background Hosted Workers
+        services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.ReservationHoldExpiryWorker>();
 
         // 5. JWT Authentication
         var jwtSettings = configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() 

@@ -106,4 +106,50 @@ public class EmailService : IEmailService
             throw new InvalidOperationException($"Không thể gửi email OTP qua Gmail: {ex.Message}", ex);
         }
     }
+
+    public async Task SendEmailAsync(
+        string toEmail,
+        string subject,
+        string htmlBody,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var message = new MimeMessage();
+            var fromAddress = string.IsNullOrWhiteSpace(_mailSettings.SenderEmail) 
+                ? _mailSettings.Username.Trim() 
+                : _mailSettings.SenderEmail.Trim();
+            message.From.Add(new MailboxAddress(_mailSettings.SenderName, fromAddress));
+            message.To.Add(new MailboxAddress(toEmail.Trim(), toEmail.Trim()));
+            message.Subject = subject;
+
+            var bodyBuilder = new BodyBuilder
+            {
+                HtmlBody = htmlBody
+            };
+            message.Body = bodyBuilder.ToMessageBody();
+
+            using var client = new SmtpClient();
+            var secureSocketOptions = _mailSettings.Port == 465 
+                ? SecureSocketOptions.SslOnConnect 
+                : SecureSocketOptions.StartTls;
+
+            await client.ConnectAsync(_mailSettings.Host.Trim(), _mailSettings.Port, secureSocketOptions, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(_mailSettings.Username) && !string.IsNullOrWhiteSpace(_mailSettings.Password))
+            {
+                var username = _mailSettings.Username.Trim();
+                var password = _mailSettings.Password.Trim().Replace(" ", "");
+                await client.AuthenticateAsync(username, password, cancellationToken);
+            }
+
+            await client.SendAsync(message, cancellationToken);
+            await client.DisconnectAsync(true, cancellationToken);
+            _logger.LogInformation("Sent email successfully to {Email} with subject {Subject}", toEmail, subject);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send email to {Email}: {Message}", toEmail, ex.Message);
+        }
+    }
 }
