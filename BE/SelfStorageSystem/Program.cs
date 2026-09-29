@@ -149,6 +149,7 @@ if (app.Environment.IsDevelopment())
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Self-Storage System API v1");
     });
     app.UseStaticFiles();
+    app.MapGet("/", () => Results.Redirect("/swagger"));
 }
 
 app.UseCors(CorsSettings.PolicyName);
