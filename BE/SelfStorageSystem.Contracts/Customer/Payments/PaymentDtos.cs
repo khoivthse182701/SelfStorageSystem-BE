@@ -42,16 +42,55 @@ public class VietQrPaymentInfo
 
 public class SePayWebhookPayload
 {
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
     public long Id { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("gateway")]
     public string Gateway { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("transactionDate")]
     public string TransactionDate { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("accountNumber")]
     public string AccountNumber { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
     public string? Code { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("content")]
     public string Content { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("transferType")]
     public string TransferType { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("transfer_type")]
+    public string? TransferTypeSnakeCase
+    {
+        set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(TransferType)) TransferType = value; }
+    }
+
+    [System.Text.Json.Serialization.JsonPropertyName("transferAmount")]
     public decimal TransferAmount { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("transfer_amount")]
+    public decimal? TransferAmountSnakeCase
+    {
+        set { if (value.HasValue && TransferAmount == 0) TransferAmount = value.Value; }
+    }
+
+    [System.Text.Json.Serialization.JsonPropertyName("accumulated")]
     public decimal Accumulated { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("referenceCode")]
     public string? ReferenceCode { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("reference_code")]
+    public string? ReferenceCodeSnakeCase
+    {
+        set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(ReferenceCode)) ReferenceCode = value; }
+    }
+
+    [System.Text.Json.Serialization.JsonPropertyName("subAccount")]
     public string? SubAccount { get; set; }
 }
 

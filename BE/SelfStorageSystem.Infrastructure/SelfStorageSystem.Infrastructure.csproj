@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SelfStorageSystem.Application\SelfStorageSystem.Application.csproj" />
+    <ProjectReference Include="..\SelfStorageSystem.Contracts\SelfStorageSystem.Contracts.csproj" />
     <ProjectReference Include="..\SelfStorageSystem.Domain\SelfStorageSystem.Domain.csproj" />
   </ItemGroup>
 
@@ -18,7 +19,7 @@
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="Google.Apis.Auth" Version="1.68.0" />
-    <PackageReference Include="MailKit" Version="4.10.0" />
+    <PackageReference Include="MailKit" Version="4.18.1" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.11" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">
       <PrivateAssets>all</PrivateAssets>

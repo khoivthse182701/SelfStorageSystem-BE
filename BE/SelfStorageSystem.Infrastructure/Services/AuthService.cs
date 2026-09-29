@@ -406,8 +406,8 @@ public class AuthService : IAuthService
         return new AuthResponse
         {
             AccessToken = token,
-            TokenType = "Bearer",
-            ExpiresInMinutes = _jwtSettings.AccessTokenMinutes > 0 ? _jwtSettings.AccessTokenMinutes : 60,
+            TokenType = AuthConstants.BearerTokenType,
+            ExpiresInMinutes = _jwtSettings.AccessTokenMinutes > 0 ? _jwtSettings.AccessTokenMinutes : AuthConstants.DefaultAccessTokenMinutes,
             User = MapToUserDto(user, roles, fullName)
         };
     }

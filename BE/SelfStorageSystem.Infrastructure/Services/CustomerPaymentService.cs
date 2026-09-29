@@ -1,10 +1,12 @@
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Customer.Payments;
+using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
 using SelfStorageSystem.Infrastructure.Persistence;
 
@@ -51,19 +53,22 @@ public class CustomerPaymentService : ICustomerPaymentService
         }
 
         // BR-RSV-01: Disallow payment if the hold period has expired
-        if (reservation.HoldUntil < now || reservation.Status == "expired" || reservation.Status == "cancelled")
+        if (reservation.HoldUntil < now ||
+            reservation.Status == ReservationStatusConstants.Expired ||
+            reservation.Status == ReservationStatusConstants.Cancelled)
         {
             throw new InvalidOperationException("Reservation hold time has expired as per BR-RSV-01. Please reserve a new unit.");
         }
 
-        if (reservation.Status == "confirmed" || reservation.Status == "converted")
+        if (reservation.Status == ReservationStatusConstants.Confirmed ||
+            reservation.Status == ReservationStatusConstants.Converted)
         {
             throw new InvalidOperationException("This reservation has already been confirmed and paid.");
         }
 
         // 2. Locate open/draft invoice
         var invoice = reservation.Invoices
-            .FirstOrDefault(i => i.Status == "open" || i.Status == "draft");
+            .FirstOrDefault(i => i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft);
 
         if (invoice == null)
         {
@@ -76,39 +81,64 @@ public class CustomerPaymentService : ICustomerPaymentService
             throw new InvalidOperationException("Invoice has already been fully paid.");
         }
 
-        const string paymentMethod = "bank_transfer";
-        const string provider = "SePay";
+        const string paymentMethod = PaymentConstants.MethodBankTransfer;
+        const string provider = PaymentConstants.ProviderSePay;
 
-        // 3. Create initial Payment record in pending status
-        var payment = new Payment
+        // 3. Reuse or create initial Payment record in pending status (prevents duplicate spam on refreshes)
+        var payment = await _dbContext.Payments
+            .FirstOrDefaultAsync(p => p.CustomerId == customerId
+                                   && p.TargetInvoiceId == invoice.Id
+                                   && p.Status == PaymentConstants.StatusPending
+                                   && p.Provider == provider, cancellationToken);
+
+        if (payment == null)
         {
-            CustomerId = customerId,
-            TargetInvoiceId = invoice.Id,
-            Amount = amountToPay,
-            Currency = "VND",
-            Method = paymentMethod,
-            Provider = provider,
-            IdempotencyKey = Guid.NewGuid().ToString("N"),
-            Status = "pending",
-            Metadata = "{}",
-            CreatedAt = now,
-            UpdatedAt = now
-        };
+            payment = new Payment
+            {
+                CustomerId = customerId,
+                TargetInvoiceId = invoice.Id,
+                TargetInvoice = invoice,
+                Amount = amountToPay,
+                Currency = PaymentConstants.CurrencyVnd,
+                Method = paymentMethod,
+                Provider = provider,
+                IdempotencyKey = Guid.NewGuid().ToString("N"),
+                Status = PaymentConstants.StatusPending,
+                Metadata = "{}",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
 
-        _dbContext.Payments.Add(payment);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+            _dbContext.Payments.Add(payment);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        else if (payment.Amount != amountToPay)
+        {
+            payment.Amount = amountToPay;
+            payment.UpdatedAt = now;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
 
         var expiresInSeconds = (int)Math.Max(0, (reservation.HoldUntil - now).TotalSeconds);
 
         // Dynamic invoice prefix configured from SePayConfig
-        var prefix = !string.IsNullOrWhiteSpace(_sePayConfig.InvoicePrefix) ? _sePayConfig.InvoicePrefix.Trim() : "DH";
+        var prefix = !string.IsNullOrWhiteSpace(_sePayConfig.InvoicePrefix)
+            ? _sePayConfig.InvoicePrefix.Trim()
+            : SePayConstants.DefaultInvoicePrefix;
         var transferContent = $"{prefix}{invoice.Id}";
 
         var baseUrl = !string.IsNullOrWhiteSpace(_vietQrConfig.BaseUrl)
             ? _vietQrConfig.BaseUrl.TrimEnd('/')
-            : "https://vietqr.app/img";
+            : SePayConstants.DefaultBaseUrl;
 
-        var qrUrl = $"{baseUrl}?bank={Uri.EscapeDataString(_vietQrConfig.BankCode)}&acc={Uri.EscapeDataString(_vietQrConfig.AccountNo)}&template={Uri.EscapeDataString(_vietQrConfig.Template)}&showinfo={(_vietQrConfig.ShowInfo ? "true" : "false")}&holder={Uri.EscapeDataString(_vietQrConfig.AccountName)}&amount={(long)amountToPay}&memo={Uri.EscapeDataString(transferContent)}";
+        var bankCode = Uri.EscapeDataString(_vietQrConfig.BankCode ?? SePayConstants.DefaultBankCode);
+        var accNo = Uri.EscapeDataString(_vietQrConfig.AccountNo ?? string.Empty);
+        var template = Uri.EscapeDataString(_vietQrConfig.Template ?? SePayConstants.DefaultTemplate);
+        var showInfo = _vietQrConfig.ShowInfo ? "true" : "false";
+        var holder = Uri.EscapeDataString(_vietQrConfig.AccountName ?? string.Empty);
+        var memo = Uri.EscapeDataString(transferContent);
+
+        var qrUrl = $"{baseUrl}?bank={bankCode}&acc={accNo}&template={template}&showinfo={showInfo}&holder={holder}&amount={(long)amountToPay}&memo={memo}";
 
         return new CheckoutResponse
         {
@@ -117,14 +147,14 @@ public class CustomerPaymentService : ICustomerPaymentService
             InvoiceId = invoice.Id,
             InvoiceNo = invoice.InvoiceNo,
             Amount = amountToPay,
-            Currency = "VND",
+            Currency = PaymentConstants.CurrencyVnd,
             PaymentMethod = paymentMethod,
             ExpiresInSeconds = expiresInSeconds,
             VietQr = new VietQrPaymentInfo
             {
-                BankCode = _vietQrConfig.BankCode,
-                AccountNo = _vietQrConfig.AccountNo,
-                AccountName = _vietQrConfig.AccountName,
+                BankCode = _vietQrConfig.BankCode ?? string.Empty,
+                AccountNo = _vietQrConfig.AccountNo ?? string.Empty,
+                AccountName = _vietQrConfig.AccountName ?? string.Empty,
                 Amount = amountToPay,
                 TransferContent = transferContent,
                 QrImageUrl = qrUrl
@@ -141,9 +171,24 @@ public class CustomerPaymentService : ICustomerPaymentService
             return false;
         }
 
-        // Extract invoice ID dynamically matching the configured prefix
-        var prefix = !string.IsNullOrWhiteSpace(_sePayConfig.InvoicePrefix) ? _sePayConfig.InvoicePrefix.Trim() : "DH";
-        var regexPattern = $@"{Regex.Escape(prefix)}(\d+)";
+        // Validate positive incoming amount (prevent zero/negative or outgoing debit transactions from triggering payments)
+        if (payload.TransferAmount <= 0)
+        {
+            _logger.LogWarning("SePay Webhook: Ignored non-positive transfer amount {Amount}", payload.TransferAmount);
+            return false;
+        }
+
+        if (string.Equals(payload.TransferType, SePayConstants.TransferTypeOut, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("SePay Webhook: Ignored outgoing account debit (transferType = out).");
+            return false;
+        }
+
+        // Extract invoice ID dynamically matching the configured prefix (allows optional spaces/dashes, e.g. DH123, DH 123, DH-123)
+        var prefix = !string.IsNullOrWhiteSpace(_sePayConfig.InvoicePrefix)
+            ? _sePayConfig.InvoicePrefix.Trim()
+            : SePayConstants.DefaultInvoicePrefix;
+        var regexPattern = $@"{Regex.Escape(prefix)}[\s\-_]*(\d+)";
 
         var match = Regex.Match(payload.Content, regexPattern, RegexOptions.IgnoreCase);
         if (!match.Success || !long.TryParse(match.Groups[1].Value, out var invoiceId))
@@ -152,13 +197,15 @@ public class CustomerPaymentService : ICustomerPaymentService
             return false;
         }
 
-        var transactionRef = payload.ReferenceCode ?? payload.Id.ToString();
+        var transactionRef = !string.IsNullOrWhiteSpace(payload.ReferenceCode)
+            ? payload.ReferenceCode.Trim()
+            : (payload.Id > 0 ? payload.Id.ToString() : Guid.NewGuid().ToString("N"));
 
         // 1. Idempotency Check: Prevent Replay Attacks
         var existingPayment = await _dbContext.Payments
-            .FirstOrDefaultAsync(p => p.Provider == "SePay" && p.ProviderTransactionId == transactionRef, cancellationToken);
+            .FirstOrDefaultAsync(p => p.Provider == PaymentConstants.ProviderSePay && p.ProviderTransactionId == transactionRef, cancellationToken);
 
-        if (existingPayment != null && existingPayment.Status == "succeeded")
+        if (existingPayment != null && existingPayment.Status == PaymentConstants.StatusSucceeded)
         {
             _logger.LogInformation("SePay Webhook: Transaction {Ref} already processed successfully. Skipping replay.", transactionRef);
             return true;
@@ -179,7 +226,7 @@ public class CustomerPaymentService : ICustomerPaymentService
             return false;
         }
 
-        if (invoice.Status == "paid")
+        if (invoice.Status == InvoiceStatusConstants.Paid)
         {
             _logger.LogInformation("SePay Webhook: Invoice ID {InvoiceId} already paid previously.", invoiceId);
             return true;
@@ -188,7 +235,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         var now = DateTimeOffset.UtcNow;
         var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
 
-        // 2. Amount Tampering Prevention: Validate transferred amount against remaining balance
+        // 2. Partial Payment Handling: Validate transferred amount against remaining balance
         if (payload.TransferAmount < remainingBalance)
         {
             _logger.LogWarning("SePay Webhook: Received amount {Amount} is less than required balance {Remaining} (Invoice {InvoiceId}). Recording partial payment without confirming reservation.",
@@ -198,13 +245,15 @@ public class CustomerPaymentService : ICustomerPaymentService
             {
                 CustomerId = invoice.CustomerId,
                 TargetInvoiceId = invoice.Id,
+                TargetInvoice = invoice,
+                Customer = invoice.Customer,
                 Amount = payload.TransferAmount,
-                Currency = "VND",
-                Method = "bank_transfer",
-                Provider = "SePay",
+                Currency = PaymentConstants.CurrencyVnd,
+                Method = PaymentConstants.MethodBankTransfer,
+                Provider = PaymentConstants.ProviderSePay,
                 ProviderTransactionId = transactionRef,
                 IdempotencyKey = $"SEPAY-{payload.Id}-{Guid.NewGuid():N}",
-                Status = "succeeded",
+                Status = PaymentConstants.StatusSucceeded,
                 PaidAt = now,
                 Metadata = "{\"note\": \"Partial payment received - reservation status kept pending until fully paid.\"}",
                 CreatedAt = now,
@@ -221,31 +270,50 @@ public class CustomerPaymentService : ICustomerPaymentService
                 AllocatedAmount = payload.TransferAmount,
                 AllocatedAt = now
             });
+
+            invoice.PaidAmount += payload.TransferAmount;
+            invoice.Status = InvoiceStatusConstants.PartiallyPaid;
+            invoice.UpdatedAt = now;
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            // DB trigger trg_payment_allocation_guard automatically marks invoice as 'partially_paid'
             return true;
         }
 
-        // Full payment record
-        var payment = new Payment
-        {
-            CustomerId = invoice.CustomerId,
-            TargetInvoiceId = invoice.Id,
-            Amount = payload.TransferAmount,
-            Currency = "VND",
-            Method = "bank_transfer",
-            Provider = "SePay",
-            ProviderTransactionId = transactionRef,
-            IdempotencyKey = $"SEPAY-{payload.Id}-{Guid.NewGuid():N}",
-            Status = "pending",
-            Metadata = "{}",
-            CreatedAt = now,
-            UpdatedAt = now
-        };
+        // 3. Full or Final Payment Handling: Reuse existing pending checkout payment or insert new one
+        var payment = await _dbContext.Payments
+            .FirstOrDefaultAsync(p => p.TargetInvoiceId == invoice.Id && p.Status == PaymentConstants.StatusPending, cancellationToken);
 
-        _dbContext.Payments.Add(payment);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        if (payment == null)
+        {
+            payment = new Payment
+            {
+                CustomerId = invoice.CustomerId,
+                TargetInvoiceId = invoice.Id,
+                TargetInvoice = invoice,
+                Customer = invoice.Customer,
+                Amount = payload.TransferAmount,
+                Currency = PaymentConstants.CurrencyVnd,
+                Method = PaymentConstants.MethodBankTransfer,
+                Provider = PaymentConstants.ProviderSePay,
+                ProviderTransactionId = transactionRef,
+                IdempotencyKey = $"SEPAY-{payload.Id}-{Guid.NewGuid():N}",
+                Status = PaymentConstants.StatusPending,
+                Metadata = "{}",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+
+            _dbContext.Payments.Add(payment);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        else
+        {
+            payment.TargetInvoice = invoice;
+            payment.Customer = invoice.Customer;
+            payment.Amount = payload.TransferAmount;
+            payment.ProviderTransactionId = transactionRef;
+            payment.UpdatedAt = now;
+        }
 
         await CompletePaymentAsync(payment, transactionRef, cancellationToken);
         return true;
@@ -267,9 +335,9 @@ public class CustomerPaymentService : ICustomerPaymentService
         {
             PaymentId = p.Id,
             InvoiceId = p.TargetInvoiceId,
-            InvoiceNo = p.TargetInvoice.InvoiceNo,
-            ReservationId = p.TargetInvoice.ReservationId,
-            ReservationCode = p.TargetInvoice.Reservation?.ReservationCode,
+            InvoiceNo = p.TargetInvoice?.InvoiceNo ?? string.Empty,
+            ReservationId = p.TargetInvoice?.ReservationId,
+            ReservationCode = p.TargetInvoice?.Reservation?.ReservationCode,
             Amount = p.Amount,
             Currency = p.Currency,
             Method = p.Method,
@@ -288,35 +356,65 @@ public class CustomerPaymentService : ICustomerPaymentService
         CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
-        var reservation = payment.TargetInvoice?.Reservation;
 
-        // 3. Late Payment Handling: Payment arrived after reservation expired or cancelled
-        var isLatePayment = reservation != null && (reservation.Status == "expired" || reservation.Status == "cancelled");
+        // Ensure TargetInvoice and navigations are thoroughly populated
+        var invoice = payment.TargetInvoice;
+        if (invoice == null && payment.TargetInvoiceId > 0)
+        {
+            invoice = await _dbContext.Invoices
+                .Include(i => i.Reservation)
+                    .ThenInclude(r => r!.Facility)
+                .Include(i => i.Reservation)
+                    .ThenInclude(r => r!.UnitType)
+                .Include(i => i.Customer)
+                    .ThenInclude(c => c.User)
+                .FirstOrDefaultAsync(i => i.Id == payment.TargetInvoiceId, cancellationToken);
+            if (invoice != null)
+            {
+                payment.TargetInvoice = invoice;
+            }
+        }
+
+        var customer = payment.Customer ?? invoice?.Customer;
+        var reservation = invoice?.Reservation;
+
+        // 1. Late Payment Handling: Payment arrived after reservation expired or cancelled
+        var isLatePayment = reservation != null &&
+            (reservation.Status == ReservationStatusConstants.Expired || reservation.Status == ReservationStatusConstants.Cancelled);
 
         if (isLatePayment)
         {
             _logger.LogWarning("Late Payment: Reservation {ReservationCode} is in {Status} state. Recording payment for manual refund or unit change.",
                 reservation!.ReservationCode, reservation.Status);
 
-            using var lateTx = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+            IDbContextTransaction? lateTx = null;
+            if (_dbContext.Database.IsSqlServer())
+            {
+                lateTx = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+            }
+
             try
             {
-                payment.Status = "succeeded";
+                payment.Status = PaymentConstants.StatusSucceeded;
                 payment.PaidAt = now;
                 payment.ProviderTransactionId = transactionNo;
                 payment.Metadata = $"{{\"note\": \"Late payment received after reservation was {reservation.Status}. Needs manual refund or unit reassignment.\", \"isLatePayment\": true}}";
                 payment.UpdatedAt = now;
 
                 await _dbContext.SaveChangesAsync(cancellationToken);
-                await lateTx.CommitAsync(cancellationToken);
+
+                if (lateTx != null)
+                {
+                    await lateTx.CommitAsync(cancellationToken);
+                }
 
                 // Notify customer via email regarding late payment
-                if (payment.Customer?.User?.Email != null)
+                var userEmail = customer?.User?.Email;
+                if (!string.IsNullOrWhiteSpace(userEmail))
                 {
                     try
                     {
-                        var userEmail = payment.Customer.User.Email;
-                        var customerName = payment.Customer.FullName ?? "Valued Customer";
+                        var customerName = customer?.FullName ?? "Valued Customer";
                         var subject = $"[Self-Storage] Payment Recorded for Reservation {reservation.ReservationCode} (Action Required)";
                         var body = $@"
                             <h3>Dear {customerName},</h3>
@@ -329,7 +427,7 @@ public class CustomerPaymentService : ICustomerPaymentService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to send late payment email notification to {Email}", payment.Customer?.User?.Email);
+                        _logger.LogWarning(ex, "Failed to send late payment email notification to {Email}", userEmail);
                     }
                 }
 
@@ -337,66 +435,117 @@ public class CustomerPaymentService : ICustomerPaymentService
             }
             catch (Exception ex)
             {
-                await lateTx.RollbackAsync(cancellationToken);
+                if (lateTx != null)
+                {
+                    await lateTx.RollbackAsync(cancellationToken);
+                }
                 _logger.LogError(ex, "Error processing late payment for Payment ID {PaymentId}: {Message}", payment.Id, ex.Message);
                 return;
             }
+            finally
+            {
+                if (lateTx != null)
+                {
+                    await lateTx.DisposeAsync();
+                }
+            }
         }
 
-        using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        IDbContextTransaction? transaction = null;
+        if (_dbContext.Database.IsSqlServer())
+        {
+            transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        }
+
         try
         {
-            payment.Status = "succeeded";
+            payment.Status = PaymentConstants.StatusSucceeded;
             payment.PaidAt = now;
             payment.ProviderTransactionId = transactionNo;
             payment.UpdatedAt = now;
 
-            // Create PaymentAllocation (Database trigger trg_payment_allocation_guard will mark invoice as 'paid')
+            // Safe allocation amount calculation: cannot exceed remaining invoice balance (prevents SQL trigger 51011 throw)
+            var remainingBalance = invoice != null ? Math.Max(0, invoice.TotalAmount - invoice.PaidAmount) : payment.Amount;
+            var allocatedAmount = Math.Min(payment.Amount, remainingBalance);
+
+            // Create PaymentAllocation if not already present
             var existingAllocation = await _dbContext.PaymentAllocations
                 .FirstOrDefaultAsync(pa => pa.PaymentId == payment.Id && pa.InvoiceId == payment.TargetInvoiceId, cancellationToken);
 
-            if (existingAllocation == null)
+            if (existingAllocation == null && allocatedAmount > 0)
             {
                 var allocation = new PaymentAllocation
                 {
                     PaymentId = payment.Id,
                     InvoiceId = payment.TargetInvoiceId,
-                    AllocatedAmount = payment.Amount,
+                    AllocatedAmount = allocatedAmount,
                     AllocatedAt = now
                 };
                 _dbContext.PaymentAllocations.Add(allocation);
             }
 
-            // Update Reservation status to confirmed
-            if (reservation != null && reservation.Status != "confirmed")
+            // Sync invoice paid amount and status
+            if (invoice != null)
             {
-                reservation.Status = "confirmed";
+                invoice.PaidAmount += allocatedAmount;
+                if (invoice.PaidAmount >= invoice.TotalAmount)
+                {
+                    invoice.Status = InvoiceStatusConstants.Paid;
+                }
+                else if (invoice.PaidAmount > 0)
+                {
+                    invoice.Status = InvoiceStatusConstants.PartiallyPaid;
+                }
+                invoice.UpdatedAt = now;
+            }
+
+            // Cancel any older/duplicate pending payments for this invoice
+            var otherPendingPayments = await _dbContext.Payments
+                .Where(p => p.TargetInvoiceId == payment.TargetInvoiceId && p.Id != payment.Id && p.Status == PaymentConstants.StatusPending)
+                .ToListAsync(cancellationToken);
+
+            foreach (var opp in otherPendingPayments)
+            {
+                opp.Status = PaymentConstants.StatusCancelled;
+                opp.FailureReason = "Superseded by completed transaction.";
+                opp.UpdatedAt = now;
+            }
+
+            // Update Reservation status to confirmed (BR-RSV-01, BR-RSV-04)
+            if (reservation != null && reservation.Status != ReservationStatusConstants.Confirmed)
+            {
+                reservation.Status = ReservationStatusConstants.Confirmed;
                 reservation.ConfirmedAt = now;
                 reservation.UpdatedAt = now;
 
                 // Finalize applied promotions
                 var redemptions = await _dbContext.PromotionRedemptions
-                    .Where(pr => pr.ReservationId == reservation.Id && pr.Status == "reserved")
+                    .Where(pr => pr.ReservationId == reservation.Id && pr.Status == PromotionRedemptionStatusConstants.Reserved)
                     .ToListAsync(cancellationToken);
 
                 foreach (var red in redemptions)
                 {
-                    red.Status = "applied";
+                    red.Status = PromotionRedemptionStatusConstants.Applied;
                 }
             }
 
             await _dbContext.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
 
-            _logger.LogInformation("Payment completed successfully for Payment ID {PaymentId}, Invoice ID {InvoiceId}", payment.Id, payment.TargetInvoiceId);
+            if (transaction != null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+
+            _logger.LogInformation("Payment completed successfully for Payment ID {PaymentId}, Invoice ID {InvoiceId}, Reservation {ReservationCode}",
+                payment.Id, payment.TargetInvoiceId, reservation?.ReservationCode ?? "N/A");
 
             // Send confirmation email
-            if (reservation != null && payment.Customer?.User?.Email != null)
+            var customerEmail = customer?.User?.Email;
+            if (reservation != null && !string.IsNullOrWhiteSpace(customerEmail))
             {
                 try
                 {
-                    var userEmail = payment.Customer.User.Email;
-                    var customerName = payment.Customer.FullName ?? "Valued Customer";
+                    var customerName = customer?.FullName ?? "Valued Customer";
                     var subject = $"[Self-Storage] Reservation Confirmed - Code: {reservation.ReservationCode}";
                     var body = $@"
                         <h3>Dear {customerName},</h3>
@@ -412,19 +561,29 @@ public class CustomerPaymentService : ICustomerPaymentService
                         <p><strong>Check-In Instructions:</strong> Please present your national ID/Passport and your Reservation Code on your mobile app when visiting our facility for handover as per BR-RSV-04.</p>
                         <p>Best regards,<br/>Self Storage System Support Team</p>";
 
-                    await _emailService.SendEmailAsync(userEmail, subject, body, cancellationToken);
+                    await _emailService.SendEmailAsync(customerEmail, subject, body, cancellationToken);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to send reservation confirmation email to {Email}", payment.Customer?.User?.Email);
+                    _logger.LogWarning(ex, "Failed to send reservation confirmation email to {Email}", customerEmail);
                 }
             }
         }
         catch (Exception ex)
         {
-            await transaction.RollbackAsync(cancellationToken);
+            if (transaction != null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
             _logger.LogError(ex, "Error completing payment for Payment ID {PaymentId}: {Message}", payment.Id, ex.Message);
             throw;
+        }
+        finally
+        {
+            if (transaction != null)
+            {
+                await transaction.DisposeAsync();
+            }
         }
     }
 }

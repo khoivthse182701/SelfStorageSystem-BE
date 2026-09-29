@@ -442,4 +442,255 @@ public class CustomerReservationAndPaymentTests
         Assert.Equal("succeeded", payment.Status);
         Assert.Contains("Late payment", payment.Metadata);
     }
+
+    [Fact]
+    public async Task Test5_SePayWebhook_FullPayment_ShouldConfirmReservationAndMarkInvoicePaid()
+    {
+        // Arrange
+        using var dbContext = CreateInMemoryDbContext();
+        var user = new User { Id = 40, Email = "test5@example.com", PasswordHash = "hash", Status = "active" };
+        var customer = new CustomerProfile { UserId = 40, FullName = "Customer Full Pay", User = user };
+        var facility = new Facility { Id = 5, Code = "F05", Name = "Facility E", AddressLine = "555 St", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var unitType = new UnitType { Id = 5, Name = "Medium", Code = "MED", IsActive = true };
+        var reservation = new Reservation
+        {
+            Id = 105,
+            CustomerId = 40,
+            FacilityId = 5,
+            UnitTypeId = 5,
+            FacilityRateId = 5,
+            ReservationCode = "RSV-TEST-FULLPAY",
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(1)),
+            Status = "pending",
+            HoldUntil = DateTimeOffset.UtcNow.AddMinutes(15)
+        };
+        var invoice = new Invoice
+        {
+            CustomerId = 40,
+            ReservationId = 105,
+            InvoiceNo = "INV-TEST-FULLPAY",
+            IssueDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            DueDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency = "VND",
+            TotalAmount = 2500000m,
+            PaidAmount = 0,
+            Status = "open"
+        };
+
+        dbContext.Users.Add(user);
+        dbContext.CustomerProfiles.Add(customer);
+        dbContext.Facilities.Add(facility);
+        dbContext.UnitTypes.Add(unitType);
+        dbContext.Reservations.Add(reservation);
+        dbContext.Invoices.Add(invoice);
+        await dbContext.SaveChangesAsync();
+
+        var paymentService = new CustomerPaymentService(
+            dbContext,
+            Mock.Of<IEmailService>(),
+            Options.Create(new PaymentSettings { SePay = new SePayConfig { ApiKey = "Admin@123", InvoicePrefix = "DH" } }),
+            NullLogger<CustomerPaymentService>.Instance);
+
+        var payload = new SePayWebhookPayload
+        {
+            Id = 9901,
+            ReferenceCode = "SEPAY_FULL_9901",
+            Content = $"Thanh toan DH{invoice.Id} noi dung chuyen khoan",
+            TransferAmount = 2500000m,
+            TransferType = "in"
+        };
+
+        // Act
+        var result = await paymentService.ProcessSePayWebhookAsync(payload);
+
+        // Assert
+        Assert.True(result);
+
+        var updatedReservation = await dbContext.Reservations.FindAsync(105L);
+        Assert.NotNull(updatedReservation);
+        Assert.Equal("confirmed", updatedReservation.Status);
+        Assert.NotNull(updatedReservation.ConfirmedAt);
+
+        var updatedInvoice = await dbContext.Invoices.FindAsync(invoice.Id);
+        Assert.NotNull(updatedInvoice);
+        Assert.Equal("paid", updatedInvoice.Status);
+        Assert.Equal(2500000m, updatedInvoice.PaidAmount);
+
+        var allocation = await dbContext.PaymentAllocations.FirstOrDefaultAsync(pa => pa.InvoiceId == invoice.Id);
+        Assert.NotNull(allocation);
+        Assert.Equal(2500000m, allocation.AllocatedAmount);
+    }
+
+    [Fact]
+    public async Task Test6_SePayWebhook_OutgoingOrNonPositiveTransfer_ShouldBeIgnored()
+    {
+        // Arrange
+        using var dbContext = CreateInMemoryDbContext();
+        var paymentService = new CustomerPaymentService(
+            dbContext,
+            Mock.Of<IEmailService>(),
+            Options.Create(new PaymentSettings { SePay = new SePayConfig { ApiKey = "Admin@123", InvoicePrefix = "DH" } }),
+            NullLogger<CustomerPaymentService>.Instance);
+
+        // Act 1: Non-positive transfer amount
+        var zeroPayload = new SePayWebhookPayload
+        {
+            Id = 9902,
+            Content = "DH100 Transfer",
+            TransferAmount = 0m
+        };
+        var zeroResult = await paymentService.ProcessSePayWebhookAsync(zeroPayload);
+
+        // Act 2: Outgoing account debit
+        var outPayload = new SePayWebhookPayload
+        {
+            Id = 9903,
+            Content = "DH100 Transfer",
+            TransferAmount = 500000m,
+            TransferType = "out"
+        };
+        var outResult = await paymentService.ProcessSePayWebhookAsync(outPayload);
+
+        // Assert
+        Assert.False(zeroResult);
+        Assert.False(outResult);
+    }
+
+    [Fact]
+    public async Task Test7_CancelReservationAsync_ShouldReleaseUnitToAvailableAndCancelAllocation()
+    {
+        // Arrange
+        using var dbContext = CreateInMemoryDbContext();
+        var user = new User { Id = 50, Email = "test7@example.com", PasswordHash = "hash", Status = "active" };
+        var customer = new CustomerProfile { UserId = 50, FullName = "Customer Cancel", User = user };
+        var facility = new Facility { Id = 6, Code = "F06", Name = "Facility F", AddressLine = "666 St", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var unitType = new UnitType { Id = 6, Name = "Small", Code = "SML", IsActive = true };
+        var unit = new StorageUnit
+        {
+            Id = 601,
+            FacilityId = 6,
+            UnitTypeId = 6,
+            UnitCode = "U-601",
+            PhysicalStatus = "reserved"
+        };
+        var reservation = new Reservation
+        {
+            Id = 106,
+            CustomerId = 50,
+            FacilityId = 6,
+            UnitTypeId = 6,
+            FacilityRateId = 6,
+            ReservationCode = "RSV-TEST-CANCEL",
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(1)),
+            Status = "pending",
+            HoldUntil = DateTimeOffset.UtcNow.AddMinutes(15)
+        };
+        var allocation = new UnitAllocation
+        {
+            Id = 1,
+            StorageUnitId = 601,
+            ReservationId = 106,
+            AllocationKind = "reservation",
+            AllocationStartDate = reservation.StartDate,
+            AllocationEndDate = reservation.EndDate,
+            Status = "active"
+        };
+
+        dbContext.Users.Add(user);
+        dbContext.CustomerProfiles.Add(customer);
+        dbContext.Facilities.Add(facility);
+        dbContext.UnitTypes.Add(unitType);
+        dbContext.StorageUnits.Add(unit);
+        dbContext.Reservations.Add(reservation);
+        dbContext.UnitAllocations.Add(allocation);
+        await dbContext.SaveChangesAsync();
+
+        var reservationService = new CustomerReservationService(
+            dbContext,
+            Options.Create(new ReservationSettings()),
+            NullLogger<CustomerReservationService>.Instance);
+
+        // Act
+        var result = await reservationService.CancelReservationAsync(customerId: 50, reservationId: 106, reason: "Customer changed mind");
+
+        // Assert
+        Assert.True(result);
+
+        var updatedReservation = await dbContext.Reservations.FindAsync(106L);
+        Assert.NotNull(updatedReservation);
+        Assert.Equal("cancelled", updatedReservation.Status);
+
+        var updatedUnit = await dbContext.StorageUnits.FindAsync(601L);
+        Assert.NotNull(updatedUnit);
+        Assert.Equal("available", updatedUnit.PhysicalStatus);
+
+        var updatedAllocation = await dbContext.UnitAllocations.FindAsync(1L);
+        Assert.NotNull(updatedAllocation);
+        Assert.Equal("cancelled", updatedAllocation.Status);
+    }
+
+    [Fact]
+    public async Task Test8_CreateCheckoutAsync_ReusedPendingPayment_PreventsDuplicatePendingSpam()
+    {
+        // Arrange
+        using var dbContext = CreateInMemoryDbContext();
+        var user = new User { Id = 60, Email = "test8@example.com", PasswordHash = "hash", Status = "active" };
+        var customer = new CustomerProfile { UserId = 60, FullName = "Customer Spam Check", User = user };
+        var facility = new Facility { Id = 7, Code = "F07", Name = "Facility G", AddressLine = "777 St", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var unitType = new UnitType { Id = 7, Name = "Standard", Code = "STD2", IsActive = true };
+        var reservation = new Reservation
+        {
+            Id = 107,
+            CustomerId = 60,
+            FacilityId = 7,
+            UnitTypeId = 7,
+            FacilityRateId = 7,
+            ReservationCode = "RSV-TEST-IDEMP",
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(1)),
+            Status = "pending",
+            HoldUntil = DateTimeOffset.UtcNow.AddMinutes(15)
+        };
+        var invoice = new Invoice
+        {
+            CustomerId = 60,
+            ReservationId = 107,
+            InvoiceNo = "INV-TEST-IDEMP",
+            IssueDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            DueDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Currency = "VND",
+            TotalAmount = 1800000m,
+            PaidAmount = 0,
+            Status = "open"
+        };
+
+        dbContext.Users.Add(user);
+        dbContext.CustomerProfiles.Add(customer);
+        dbContext.Facilities.Add(facility);
+        dbContext.UnitTypes.Add(unitType);
+        dbContext.Reservations.Add(reservation);
+        dbContext.Invoices.Add(invoice);
+        await dbContext.SaveChangesAsync();
+
+        var paymentService = new CustomerPaymentService(
+            dbContext,
+            Mock.Of<IEmailService>(),
+            Options.Create(new PaymentSettings
+            {
+                SePay = new SePayConfig { ApiKey = "Admin@123", InvoicePrefix = "DH" },
+                VietQr = new VietQrConfig { BankCode = "MBBank", AccountNo = "123456", AccountName = "TEST HOLDER" }
+            }),
+            NullLogger<CustomerPaymentService>.Instance);
+
+        // Act: User opens checkout twice
+        var firstResult = await paymentService.CreateCheckoutAsync(60, new CreateCheckoutRequest { ReservationId = 107 });
+        var secondResult = await paymentService.CreateCheckoutAsync(60, new CreateCheckoutRequest { ReservationId = 107 });
+
+        // Assert: Same PaymentId reused, exactly 1 payment record in database
+        Assert.Equal(firstResult.PaymentId, secondResult.PaymentId);
+        var pendingCount = await dbContext.Payments.CountAsync(p => p.TargetInvoiceId == invoice.Id);
+        Assert.Equal(1, pendingCount);
+    }
 }

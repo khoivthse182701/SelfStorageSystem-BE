@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Customer.Reservations;
+using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
 using SelfStorageSystem.Infrastructure.Persistence;
 
@@ -58,7 +59,7 @@ public class CustomerReservationService : ICustomerReservationService
 
         // 3. Verify facility and unit type
         var facility = await _dbContext.Facilities
-            .FirstOrDefaultAsync(f => f.Id == request.FacilityId && f.Status == "active", cancellationToken);
+            .FirstOrDefaultAsync(f => f.Id == request.FacilityId && f.Status == FacilityStatusConstants.Active, cancellationToken);
         if (facility == null)
         {
             throw new KeyNotFoundException("Facility not found or currently inactive.");
@@ -116,7 +117,7 @@ public class CustomerReservationService : ICustomerReservationService
             if (appliedPromo.UsageLimit.HasValue)
             {
                 var usedCount = await _dbContext.PromotionRedemptions
-                    .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.Status != "released", cancellationToken);
+                    .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.Status != PromotionRedemptionStatusConstants.Released, cancellationToken);
                 if (usedCount >= appliedPromo.UsageLimit.Value)
                 {
                     throw new InvalidOperationException("Promotion code has reached its overall usage limit.");
@@ -126,14 +127,14 @@ public class CustomerReservationService : ICustomerReservationService
             if (appliedPromo.PerCustomerLimit.HasValue)
             {
                 var customerUsedCount = await _dbContext.PromotionRedemptions
-                    .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.CustomerId == customerId && pr.Status != "released", cancellationToken);
+                    .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.CustomerId == customerId && pr.Status != PromotionRedemptionStatusConstants.Released, cancellationToken);
                 if (customerUsedCount >= appliedPromo.PerCustomerLimit.Value)
                 {
                     throw new InvalidOperationException($"You have reached the redemption limit for this promotion code (maximum {appliedPromo.PerCustomerLimit.Value} times).");
                 }
             }
 
-            if (appliedPromo.DiscountType == "percentage")
+            if (appliedPromo.DiscountType == PromotionDiscountTypeConstants.Percentage)
             {
                 discountAmount = (monthlyRate * appliedPromo.DiscountValue) / 100m;
                 if (appliedPromo.MaxDiscountAmount.HasValue && discountAmount > appliedPromo.MaxDiscountAmount.Value)
@@ -141,7 +142,7 @@ public class CustomerReservationService : ICustomerReservationService
                     discountAmount = appliedPromo.MaxDiscountAmount.Value;
                 }
             }
-            else if (appliedPromo.DiscountType == "fixed")
+            else if (appliedPromo.DiscountType == PromotionDiscountTypeConstants.Fixed)
             {
                 discountAmount = appliedPromo.DiscountValue;
             }
@@ -173,14 +174,14 @@ public class CustomerReservationService : ICustomerReservationService
             }
 
             // BR-OPS-02: Must be in available status
-            if (!string.Equals(selectedUnit.PhysicalStatus, "available", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(selectedUnit.PhysicalStatus, StorageUnitStatusConstants.Available, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("This storage unit has already been reserved or occupied. Please select another unit on the floor map.");
             }
 
             var hasActiveAllocation = await _dbContext.UnitAllocations
                 .AnyAsync(ua => ua.StorageUnitId == selectedUnit.Id
-                             && ua.Status == "active"
+                             && ua.Status == AllocationStatusConstants.Active
                              && ua.AllocationStartDate < endDate
                              && ua.AllocationEndDate > request.StartDate, cancellationToken);
             if (hasActiveAllocation)
@@ -194,7 +195,7 @@ public class CustomerReservationService : ICustomerReservationService
             var availableCount = await _dbContext.StorageUnits
                 .CountAsync(u => u.FacilityId == request.FacilityId
                               && u.UnitTypeId == request.UnitTypeId
-                              && u.PhysicalStatus == "available", cancellationToken);
+                              && u.PhysicalStatus == StorageUnitStatusConstants.Available, cancellationToken);
 
             if (availableCount <= 0)
             {
@@ -234,7 +235,7 @@ public class CustomerReservationService : ICustomerReservationService
                 DiscountSnapshot = discountAmount,
                 QuotedTotal = quotedTotal,
                 HoldUntil = holdUntil,
-                Status = "pending",
+                Status = ReservationStatusConstants.Pending,
                 CreatedAt = nowOffset,
                 UpdatedAt = nowOffset
             };
@@ -249,13 +250,16 @@ public class CustomerReservationService : ICustomerReservationService
                 {
                     StorageUnitId = selectedUnit.Id,
                     ReservationId = reservation.Id,
-                    AllocationKind = "reservation",
+                    AllocationKind = AllocationKindConstants.Reservation,
                     AllocationStartDate = request.StartDate,
                     AllocationEndDate = endDate,
-                    Status = "active",
+                    Status = AllocationStatusConstants.Active,
                     CreatedAt = nowOffset
                 };
                 _dbContext.UnitAllocations.Add(allocation);
+
+                selectedUnit.PhysicalStatus = StorageUnitStatusConstants.Reserved;
+                selectedUnit.UpdatedAt = nowOffset;
             }
 
             // Record promotion redemption in reserved state
@@ -267,7 +271,7 @@ public class CustomerReservationService : ICustomerReservationService
                     CustomerId = customerId,
                     ReservationId = reservation.Id,
                     DiscountAmount = discountAmount,
-                    Status = "reserved",
+                    Status = PromotionRedemptionStatusConstants.Reserved,
                     RedeemedAt = nowOffset
                 };
                 _dbContext.PromotionRedemptions.Add(redemption);
@@ -281,13 +285,13 @@ public class CustomerReservationService : ICustomerReservationService
                 InvoiceNo = invoiceNo,
                 IssueDate = today,
                 DueDate = today,
-                Currency = "VND",
+                Currency = PaymentConstants.CurrencyVnd,
                 SubtotalAmount = monthlyRate + depositAmount + bookingFee,
                 DiscountAmount = discountAmount,
                 TaxAmount = 0,
                 TotalAmount = firstPaymentTotal,
                 PaidAmount = 0,
-                Status = "open",
+                Status = InvoiceStatusConstants.Open,
                 CreatedAt = nowOffset,
                 UpdatedAt = nowOffset
             };
@@ -301,7 +305,7 @@ public class CustomerReservationService : ICustomerReservationService
                 new()
                 {
                     InvoiceId = invoice.Id,
-                    LineType = "rent",
+                    LineType = InvoiceLineTypeConstants.Rent,
                     Description = $"Rental fee for {unitType.Name} ({request.StartDate:yyyy-MM-dd} - {endDate:yyyy-MM-dd})",
                     Quantity = 1,
                     UnitPrice = monthlyRate,
@@ -311,7 +315,7 @@ public class CustomerReservationService : ICustomerReservationService
                 new()
                 {
                     InvoiceId = invoice.Id,
-                    LineType = "deposit",
+                    LineType = InvoiceLineTypeConstants.Deposit,
                     Description = "Security deposit (1 month rent per BR-FIN-01)",
                     Quantity = 1,
                     UnitPrice = depositAmount,
@@ -325,7 +329,7 @@ public class CustomerReservationService : ICustomerReservationService
                 lineItems.Add(new InvoiceLine
                 {
                     InvoiceId = invoice.Id,
-                    LineType = "fee",
+                    LineType = InvoiceLineTypeConstants.BookingFee,
                     Description = "Reservation booking fee",
                     Quantity = 1,
                     UnitPrice = bookingFee,
@@ -339,7 +343,7 @@ public class CustomerReservationService : ICustomerReservationService
                 lineItems.Add(new InvoiceLine
                 {
                     InvoiceId = invoice.Id,
-                    LineType = "discount",
+                    LineType = InvoiceLineTypeConstants.Discount,
                     Description = $"Promotion voucher discount ({appliedPromo.Code})",
                     Quantity = 1,
                     UnitPrice = -discountAmount,
@@ -425,13 +429,13 @@ public class CustomerReservationService : ICustomerReservationService
         return list.Select(r =>
         {
             var invoice = r.Invoices.OrderByDescending(i => i.CreatedAt).FirstOrDefault();
-            var isExpired = r.Status == "pending" && r.HoldUntil < now;
+            var isExpired = r.Status == ReservationStatusConstants.Pending && r.HoldUntil < now;
             var displayStatus = r.Status switch
             {
-                "confirmed" => "Confirmed",
-                "expired" => "Expired",
-                "cancelled" => "Cancelled",
-                "pending" => isExpired ? "Expired" : "Pending Payment",
+                ReservationStatusConstants.Confirmed => ReservationDisplayStatusConstants.Confirmed,
+                ReservationStatusConstants.Expired => ReservationDisplayStatusConstants.Expired,
+                ReservationStatusConstants.Cancelled => ReservationDisplayStatusConstants.Cancelled,
+                ReservationStatusConstants.Pending => isExpired ? ReservationDisplayStatusConstants.Expired : ReservationDisplayStatusConstants.PendingPayment,
                 _ => r.Status
             };
 
@@ -497,13 +501,13 @@ public class CustomerReservationService : ICustomerReservationService
         }
 
         var now = DateTimeOffset.UtcNow;
-        var isExpired = reservation.Status == "pending" && reservation.HoldUntil < now;
+        var isExpired = reservation.Status == ReservationStatusConstants.Pending && reservation.HoldUntil < now;
         var displayStatus = reservation.Status switch
         {
-            "confirmed" => "Confirmed",
-            "expired" => "Expired",
-            "cancelled" => "Cancelled",
-            "pending" => isExpired ? "Expired" : "Pending Payment",
+            ReservationStatusConstants.Confirmed => ReservationDisplayStatusConstants.Confirmed,
+            ReservationStatusConstants.Expired => ReservationDisplayStatusConstants.Expired,
+            ReservationStatusConstants.Cancelled => ReservationDisplayStatusConstants.Cancelled,
+            ReservationStatusConstants.Pending => isExpired ? ReservationDisplayStatusConstants.Expired : ReservationDisplayStatusConstants.PendingPayment,
             _ => reservation.Status
         };
 
@@ -512,7 +516,7 @@ public class CustomerReservationService : ICustomerReservationService
         var expiresInSeconds = (int)Math.Max(0, (reservation.HoldUntil - now).TotalSeconds);
 
         string? checkInQrToken = null;
-        if (reservation.Status == "confirmed")
+        if (reservation.Status == ReservationStatusConstants.Confirmed)
         {
             checkInQrToken = $"CHECKIN:{reservation.ReservationCode}:{reservation.CustomerId}:{reservation.FacilityId}";
         }
@@ -547,7 +551,7 @@ public class CustomerReservationService : ICustomerReservationService
             FirstPaymentTotal = invoice?.TotalAmount ?? (reservation.MonthlyRateSnapshot + reservation.DepositSnapshot + reservation.BookingFeeSnapshot - reservation.DiscountSnapshot),
             PromotionCode = redemption?.Promotion.Code,
             CheckInQrToken = checkInQrToken,
-            CheckInInstructions = "Please present your national ID/Passport and your reservation code upon check-in at the facility.",
+            CheckInInstructions = DefaultMessageConstants.CheckInInstructions,
             Invoices = reservation.Invoices.Select(i => new InvoiceSummaryDto
             {
                 Id = i.Id,
@@ -582,6 +586,8 @@ public class CustomerReservationService : ICustomerReservationService
         CancellationToken cancellationToken = default)
     {
         var reservation = await _dbContext.Reservations
+            .Include(r => r.UnitAllocation)
+                .ThenInclude(ua => ua!.StorageUnit)
             .Include(r => r.Invoices)
             .Include(r => r.PromotionRedemptions)
             .FirstOrDefaultAsync(r => r.Id == reservationId, cancellationToken);
@@ -596,28 +602,42 @@ public class CustomerReservationService : ICustomerReservationService
             throw new UnauthorizedAccessException("You do not have permission to cancel this reservation.");
         }
 
-        if (reservation.Status != "pending")
+        if (reservation.Status != ReservationStatusConstants.Pending &&
+            reservation.Status != ReservationStatusConstants.AwaitingDeposit)
         {
             throw new InvalidOperationException("Only pending unpaid reservations can be cancelled.");
         }
 
         var now = DateTimeOffset.UtcNow;
-        reservation.Status = "cancelled";
+        reservation.Status = ReservationStatusConstants.Cancelled;
         reservation.CancelledAt = now;
-        reservation.CancellationReason = reason ?? "Cancelled by customer";
+        reservation.CancellationReason = reason ?? DefaultMessageConstants.DefaultCancellationReason;
         reservation.UpdatedAt = now;
 
-        // Cancel associated open invoices
-        foreach (var invoice in reservation.Invoices.Where(i => i.Status == "open" || i.Status == "draft"))
+        // Release allocated storage unit back to available per BR-RSV-01
+        if (reservation.UnitAllocation != null)
         {
-            invoice.Status = "voided";
+            reservation.UnitAllocation.Status = AllocationStatusConstants.Cancelled;
+            reservation.UnitAllocation.EndedAt = now;
+
+            if (reservation.UnitAllocation.StorageUnit != null)
+            {
+                reservation.UnitAllocation.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Available;
+                reservation.UnitAllocation.StorageUnit.UpdatedAt = now;
+            }
+        }
+
+        // Cancel associated open invoices
+        foreach (var invoice in reservation.Invoices.Where(i => i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft))
+        {
+            invoice.Status = InvoiceStatusConstants.Voided;
             invoice.UpdatedAt = now;
         }
 
         // Release reserved promotion redemptions
-        foreach (var red in reservation.PromotionRedemptions.Where(pr => pr.Status == "reserved"))
+        foreach (var red in reservation.PromotionRedemptions.Where(pr => pr.Status == PromotionRedemptionStatusConstants.Reserved))
         {
-            red.Status = "released";
+            red.Status = PromotionRedemptionStatusConstants.Released;
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -639,7 +659,7 @@ public class CustomerReservationService : ICustomerReservationService
                 }
 
                 using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT NEXT VALUE FOR core.reservation_code_seq";
+                cmd.CommandText = DbSequenceConstants.ReservationCodeSeqQuery;
                 var seqObj = await cmd.ExecuteScalarAsync(cancellationToken);
                 var seq = Convert.ToInt64(seqObj);
                 return $"RSV-{DateTime.UtcNow:yyyyMMdd}-{seq:D5}";
@@ -666,7 +686,7 @@ public class CustomerReservationService : ICustomerReservationService
                 }
 
                 using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT NEXT VALUE FOR core.invoice_no_seq";
+                cmd.CommandText = DbSequenceConstants.InvoiceNoSeqQuery;
                 var seqObj = await cmd.ExecuteScalarAsync(cancellationToken);
                 var seq = Convert.ToInt64(seqObj);
                 return $"INV-{DateTime.UtcNow:yyyyMMdd}-{seq:D5}";

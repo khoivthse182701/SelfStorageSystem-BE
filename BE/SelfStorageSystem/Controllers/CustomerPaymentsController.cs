@@ -74,16 +74,23 @@ public class CustomerPaymentsController : ControllerBase
     {
         // Verify API Key / Bearer Token from SePay
         var authHeader = Request.Headers["Authorization"].ToString();
+        var apiKeyHeader = Request.Headers["X-Api-Key"].ToString();
         var expectedKey = _paymentSettings.SePay?.ApiKey;
 
         if (!string.IsNullOrWhiteSpace(expectedKey))
         {
             var isValidKey = false;
-            if (!string.IsNullOrEmpty(authHeader))
+            var expectedTrimmed = expectedKey.Trim();
+
+            if (!string.IsNullOrWhiteSpace(apiKeyHeader) && string.Equals(apiKeyHeader.Trim(), expectedTrimmed, StringComparison.Ordinal))
+            {
+                isValidKey = true;
+            }
+            else if (!string.IsNullOrWhiteSpace(authHeader))
             {
                 var token = authHeader.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase)
                                       .Replace("Apikey ", "", StringComparison.OrdinalIgnoreCase).Trim();
-                isValidKey = string.Equals(token, expectedKey.Trim(), StringComparison.Ordinal);
+                isValidKey = string.Equals(token, expectedTrimmed, StringComparison.Ordinal);
             }
 
             if (!isValidKey)

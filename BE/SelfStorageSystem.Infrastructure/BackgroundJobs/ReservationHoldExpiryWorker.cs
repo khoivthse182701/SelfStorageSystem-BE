@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SelfStorageSystem.Application.Settings;
+using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Infrastructure.Persistence;
 
 namespace SelfStorageSystem.Infrastructure.BackgroundJobs;
@@ -69,7 +70,7 @@ public class ReservationHoldExpiryWorker : BackgroundService
                 .ThenInclude(ua => ua!.StorageUnit)
             .Include(r => r.Invoices)
             .Include(r => r.PromotionRedemptions)
-            .Where(r => (r.Status == "pending" || r.Status == "awaiting_deposit") && r.HoldUntil < graceCutoff)
+            .Where(r => (r.Status == ReservationStatusConstants.Pending || r.Status == ReservationStatusConstants.AwaitingDeposit) && r.HoldUntil < graceCutoff)
             .OrderBy(r => r.HoldUntil)
             .Take(50) // Batch 50 items per check
             .ToListAsync(cancellationToken);
@@ -82,7 +83,12 @@ public class ReservationHoldExpiryWorker : BackgroundService
         _logger.LogInformation("Detected {Count} reservations exceeding hold period + {Grace}m grace period. Releasing units to 'available' per BR-RSV-01...", 
             expiredReservations.Count, _settings.HoldGracePeriodMinutes);
 
-        using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? transaction = null;
+        if (dbContext.Database.IsSqlServer())
+        {
+            transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        }
+
         try
         {
             foreach (var r in expiredReservations)
@@ -93,50 +99,64 @@ public class ReservationHoldExpiryWorker : BackgroundService
                     .Select(x => x.Status)
                     .FirstOrDefaultAsync(cancellationToken);
 
-                if (latestStatus != "pending" && latestStatus != "awaiting_deposit")
+                if (latestStatus != ReservationStatusConstants.Pending && latestStatus != ReservationStatusConstants.AwaitingDeposit)
                 {
                     _logger.LogInformation("Reservation {ReservationCode} transitioned to {Status}; skipping auto-expiration.", r.ReservationCode, latestStatus);
                     continue;
                 }
 
-                r.Status = "expired";
+                r.Status = ReservationStatusConstants.Expired;
                 r.UpdatedAt = now;
 
                 if (r.UnitAllocation != null)
                 {
-                    r.UnitAllocation.Status = "expired";
+                    r.UnitAllocation.Status = AllocationStatusConstants.Expired;
                     r.UnitAllocation.EndedAt = now;
 
                     if (r.UnitAllocation.StorageUnit != null)
                     {
-                        r.UnitAllocation.StorageUnit.PhysicalStatus = "available";
+                        r.UnitAllocation.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Available;
                         r.UnitAllocation.StorageUnit.UpdatedAt = now;
                     }
                 }
 
-                foreach (var inv in r.Invoices.Where(i => i.Status == "open" || i.Status == "draft"))
+                foreach (var inv in r.Invoices.Where(i => i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft))
                 {
-                    inv.Status = "voided";
+                    inv.Status = InvoiceStatusConstants.Voided;
                     inv.VoidedAt = now;
                     inv.UpdatedAt = now;
                 }
 
-                foreach (var red in r.PromotionRedemptions.Where(p => p.Status == "reserved"))
+                foreach (var red in r.PromotionRedemptions.Where(p => p.Status == PromotionRedemptionStatusConstants.Reserved))
                 {
-                    red.Status = "released";
+                    red.Status = PromotionRedemptionStatusConstants.Released;
                 }
 
                 _logger.LogInformation("Reservation {ReservationCode} has expired. Storage unit unlocked and released.", r.ReservationCode);
             }
 
             await dbContext.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+
+            if (transaction != null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
         }
         catch (Exception ex)
         {
-            await transaction.RollbackAsync(cancellationToken);
+            if (transaction != null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
             _logger.LogError(ex, "Error releasing expired reservations in transaction: {Message}", ex.Message);
             throw;
+        }
+        finally
+        {
+            if (transaction != null)
+            {
+                await transaction.DisposeAsync();
+            }
         }
     }
 }
