@@ -9,6 +9,7 @@ using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Customer.Payments;
 using SelfStorageSystem.Contracts.Customer.Reservations;
 using SelfStorageSystem.Domain.Entities;
+using SelfStorageSystem.Domain.Exceptions;
 using SelfStorageSystem.Infrastructure.Persistence;
 using SelfStorageSystem.Infrastructure.Services;
 using Xunit;
@@ -360,9 +361,10 @@ public class CustomerReservationAndPaymentTests
             NullLogger<CustomerReservationService>.Instance);
 
         // Act & Assert: User A tries to access User B's reservation details
-        var exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        var exception = await Assert.ThrowsAsync<AppForbiddenException>(() =>
             reservationService.GetReservationDetailAsync(customerId: 100, reservationId: 300));
 
+        Assert.Equal("Reservation.Unauthorized", exception.Error.Code);
         Assert.Contains("permission", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 

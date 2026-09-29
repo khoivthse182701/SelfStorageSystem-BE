@@ -33,7 +33,7 @@ public class GoogleAuthService : IGoogleAuthService
 
             if (payload == null)
             {
-                throw new InvalidOperationException("Google ID Token không hợp lệ.");
+                throw new InvalidOperationException("Google ID Token is invalid.");
             }
 
             return new GoogleUserInfo
@@ -47,12 +47,12 @@ public class GoogleAuthService : IGoogleAuthService
         catch (InvalidJwtException ex)
         {
             _logger.LogWarning(ex, "Invalid Google ID Token: {Message}", ex.Message);
-            throw new InvalidOperationException("Google ID Token không hợp lệ hoặc đã hết hạn.", ex);
+            throw new InvalidOperationException("Google ID Token is invalid or has expired.", ex);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error verifying Google ID Token: {Message}", ex.Message);
-            throw new InvalidOperationException($"Lỗi xác thực Google ID Token: {ex.Message}", ex);
+            throw new InvalidOperationException($"Error validating Google ID Token: {ex.Message}", ex);
         }
     }
 }

@@ -12,4 +12,9 @@
     <ProjectReference Include="..\SelfStorageSystem.Domain\SelfStorageSystem.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Customer\Payments\" />
+    <Folder Include="Customer\Reservations\" />
+  </ItemGroup>
+
 </Project>

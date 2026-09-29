@@ -8,6 +8,8 @@ using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Customer.Payments;
 using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
+using SelfStorageSystem.Domain.Errors;
+using SelfStorageSystem.Domain.Exceptions;
 using SelfStorageSystem.Infrastructure.Persistence;
 
 namespace SelfStorageSystem.Infrastructure.Services;
@@ -49,7 +51,7 @@ public class CustomerPaymentService : ICustomerPaymentService
 
         if (reservation == null)
         {
-            throw new KeyNotFoundException("Reservation not found for this customer.");
+            throw AppException.FromError(PaymentErrors.ReservationNotFound);
         }
 
         // BR-RSV-01: Disallow payment if the hold period has expired
@@ -57,13 +59,13 @@ public class CustomerPaymentService : ICustomerPaymentService
             reservation.Status == ReservationStatusConstants.Expired ||
             reservation.Status == ReservationStatusConstants.Cancelled)
         {
-            throw new InvalidOperationException("Reservation hold time has expired as per BR-RSV-01. Please reserve a new unit.");
+            throw AppException.FromError(PaymentErrors.HoldExpired);
         }
 
         if (reservation.Status == ReservationStatusConstants.Confirmed ||
             reservation.Status == ReservationStatusConstants.Converted)
         {
-            throw new InvalidOperationException("This reservation has already been confirmed and paid.");
+            throw AppException.FromError(PaymentErrors.AlreadyConfirmed);
         }
 
         // 2. Locate open/draft invoice
@@ -72,13 +74,13 @@ public class CustomerPaymentService : ICustomerPaymentService
 
         if (invoice == null)
         {
-            throw new InvalidOperationException("No unpaid invoice found for this reservation.");
+            throw AppException.FromError(PaymentErrors.InvoiceNotFound);
         }
 
         var amountToPay = invoice.TotalAmount - invoice.PaidAmount;
         if (amountToPay <= 0)
         {
-            throw new InvalidOperationException("Invoice has already been fully paid.");
+            throw AppException.FromError(PaymentErrors.InvoiceAlreadyPaid);
         }
 
         const string paymentMethod = PaymentConstants.MethodBankTransfer;

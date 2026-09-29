@@ -7,6 +7,8 @@ using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Auth;
 using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
+using SelfStorageSystem.Domain.Errors;
+using SelfStorageSystem.Domain.Exceptions;
 using SelfStorageSystem.Infrastructure.Persistence;
 
 namespace SelfStorageSystem.Infrastructure.Services;
@@ -55,7 +57,7 @@ public class AuthService : IAuthService
 
         if (user == null)
         {
-            throw new UnauthorizedAccessException("Email hoặc mật khẩu không chính xác.");
+            throw AppException.FromError(AuthErrors.InvalidCredentials);
         }
 
         bool isPasswordValid = false;
@@ -70,17 +72,17 @@ public class AuthService : IAuthService
 
         if (!isPasswordValid)
         {
-            throw new UnauthorizedAccessException("Email hoặc mật khẩu không chính xác.");
+            throw AppException.FromError(AuthErrors.InvalidCredentials);
         }
 
         if (string.Equals(user.Status, UserStatusConstants.Locked, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.");
+            throw AppException.FromError(AuthErrors.AccountLocked);
         }
 
         if (string.Equals(user.Status, UserStatusConstants.Disabled, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Tài khoản chưa được kích hoạt. Vui lòng xác thực mã OTP qua email.");
+            throw AppException.FromError(AuthErrors.AccountNotActivated);
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -99,18 +101,18 @@ public class AuthService : IAuthService
         if (_otpService.IsLockedOut(normalizedEmail))
         {
             var remainingMin = _otpService.GetRemainingLockoutMinutes(normalizedEmail);
-            throw new InvalidOperationException($"Tài khoản tạm thời bị khóa do nhập sai OTP quá nhiều lần. Vui lòng thử lại sau {remainingMin} phút.");
+            throw AppException.FromError(AuthErrors.OtpLockedOut(remainingMin));
         }
 
         if (_otpService.IsInCooldown(normalizedEmail))
         {
             var cooldown = _otpService.GetRemainingCooldownSeconds(normalizedEmail);
-            throw new InvalidOperationException($"Vui lòng đợi {cooldown} giây trước khi yêu cầu mã OTP mới.");
+            throw AppException.FromError(AuthErrors.OtpCooldown(cooldown));
         }
 
         if (_otpService.HasExceededHourlyLimit(normalizedEmail))
         {
-            throw new InvalidOperationException($"Bạn đã vượt quá giới hạn yêu cầu mã OTP trong 1 giờ ({_otpSettings.MaxRequestsPerHour} lần). Vui lòng thử lại sau.");
+            throw AppException.FromError(AuthErrors.OtpHourlyLimitExceeded(_otpSettings.MaxRequestsPerHour));
         }
 
         var existingUser = await _dbContext.Users
@@ -124,12 +126,12 @@ public class AuthService : IAuthService
         {
             if (string.Equals(existingUser.Status, UserStatusConstants.Active, StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException("Email này đã được sử dụng. Vui lòng đăng nhập hoặc chọn email khác.");
+                throw AppException.FromError(AuthErrors.EmailAlreadyInUse);
             }
 
             if (string.Equals(existingUser.Status, UserStatusConstants.Locked, StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException("Tài khoản này đã bị khóa. Vui lòng liên hệ quản trị viên.");
+                throw AppException.FromError(AuthErrors.AccountLocked);
             }
 
             // Update existing unverified account with new registration details
@@ -199,7 +201,7 @@ public class AuthService : IAuthService
             _otpSettings.ExpirationMinutes,
             cancellationToken);
 
-        return "Đăng ký thành công! Mã OTP xác nhận đã được gửi đến email của bạn.";
+        return "Registration successful! Verification OTP code has been sent to your email.";
     }
 
     public async Task<AuthResponse> VerifyOtpAsync(VerifyOtpRequest request, CancellationToken cancellationToken = default)
@@ -210,7 +212,7 @@ public class AuthService : IAuthService
         if (_otpService.IsLockedOut(normalizedEmail))
         {
             var remainingMin = _otpService.GetRemainingLockoutMinutes(normalizedEmail);
-            throw new InvalidOperationException($"Tài khoản tạm thời bị khóa do nhập sai OTP quá nhiều lần. Vui lòng thử lại sau {remainingMin} phút.");
+            throw AppException.FromError(AuthErrors.OtpLockedOut(remainingMin));
         }
 
         // 2. Verify OTP
@@ -220,11 +222,11 @@ public class AuthService : IAuthService
             _otpService.RecordFailedAttempt(normalizedEmail);
             if (_otpService.HasExceededMaxAttempts(normalizedEmail))
             {
-                throw new InvalidOperationException($"Bạn đã nhập sai mã OTP {_otpSettings.MaxFailedAttempts} lần liên tiếp. Mã OTP này đã bị hủy và tính năng xác thực tạm thời bị khóa {_otpSettings.LockoutMinutes} phút.");
+                throw AppException.FromError(AuthErrors.OtpMaxAttempts(_otpSettings.MaxFailedAttempts, _otpSettings.LockoutMinutes));
             }
 
             var remaining = _otpService.GetRemainingAttempts(normalizedEmail);
-            throw new InvalidOperationException($"Mã OTP không chính xác hoặc đã hết hạn. Bạn còn {remaining} lần thử.");
+            throw AppException.FromError(AuthErrors.OtpRemainingAttempts(remaining));
         }
 
         var user = await _dbContext.Users
@@ -236,7 +238,7 @@ public class AuthService : IAuthService
 
         if (user == null)
         {
-            throw new KeyNotFoundException("Không tìm thấy thông tin tài khoản cho email này.");
+            throw AppException.FromError(AuthErrors.UserNotFound);
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -262,30 +264,30 @@ public class AuthService : IAuthService
 
         if (user == null)
         {
-            throw new KeyNotFoundException("Không tìm thấy thông tin tài khoản với email này.");
+            throw AppException.FromError(AuthErrors.UserNotFound);
         }
 
         if (string.Equals(user.Status, UserStatusConstants.Active, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Tài khoản của bạn đã được kích hoạt trước đó. Vui lòng đăng nhập.");
+            throw AppException.FromError(AuthErrors.AccountAlreadyActivated);
         }
 
         // Anti-spam checks
         if (_otpService.IsLockedOut(normalizedEmail))
         {
             var remainingMin = _otpService.GetRemainingLockoutMinutes(normalizedEmail);
-            throw new InvalidOperationException($"Tài khoản tạm thời bị khóa do nhập sai OTP quá nhiều lần. Vui lòng thử lại sau {remainingMin} phút.");
+            throw AppException.FromError(AuthErrors.OtpLockedOut(remainingMin));
         }
 
         if (_otpService.IsInCooldown(normalizedEmail))
         {
             var cooldown = _otpService.GetRemainingCooldownSeconds(normalizedEmail);
-            throw new InvalidOperationException($"Vui lòng đợi {cooldown} giây trước khi yêu cầu gửi lại mã OTP mới.");
+            throw AppException.FromError(AuthErrors.OtpCooldown(cooldown));
         }
 
         if (_otpService.HasExceededHourlyLimit(normalizedEmail))
         {
-            throw new InvalidOperationException($"Bạn đã vượt quá giới hạn yêu cầu mã OTP trong 1 giờ ({_otpSettings.MaxRequestsPerHour} lần). Vui lòng thử lại sau.");
+            throw AppException.FromError(AuthErrors.OtpHourlyLimitExceeded(_otpSettings.MaxRequestsPerHour));
         }
 
         var fullName = user.CustomerProfile?.FullName ?? user.EmployeeProfile?.FullName ?? user.Email;
@@ -298,7 +300,7 @@ public class AuthService : IAuthService
             _otpSettings.ExpirationMinutes,
             cancellationToken);
 
-        return "Mã OTP mới đã được gửi đến email của bạn.";
+        return "A new OTP code has been sent to your email.";
     }
 
     public async Task<AuthResponse> GoogleLoginAsync(GoogleLoginRequest request, CancellationToken cancellationToken = default)
@@ -354,7 +356,7 @@ public class AuthService : IAuthService
         {
             if (string.Equals(user.Status, UserStatusConstants.Locked, StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException("Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.");
+                throw AppException.FromError(AuthErrors.AccountLocked);
             }
 
             if (string.Equals(user.Status, UserStatusConstants.Disabled, StringComparison.OrdinalIgnoreCase))
@@ -382,7 +384,7 @@ public class AuthService : IAuthService
 
         if (user == null)
         {
-            throw new KeyNotFoundException("Không tìm thấy người dùng.");
+            throw AppException.FromError(AuthErrors.UserNotFound);
         }
 
         return MapToUserDto(user);

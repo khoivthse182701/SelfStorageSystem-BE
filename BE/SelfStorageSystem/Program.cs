@@ -94,7 +94,7 @@ builder.Services.AddRateLimiter(options =>
     options.OnRejected = async (context, token) =>
     {
         context.HttpContext.Response.ContentType = "application/json";
-        var response = ApiResponse.Fail("Bạn đã gửi quá nhiều yêu cầu trong thời gian ngắn. Vui lòng thử lại sau.");
+        var response = ApiResponse.Fail("Too many requests received in a short period. Please try again later.");
         await context.HttpContext.Response.WriteAsJsonAsync(response, cancellationToken: token);
     };
 
@@ -132,10 +132,13 @@ app.UseExceptionHandler(exceptionHandlerApp =>
     {
         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
         context.Response.ContentType = "application/json";
-        var response = ApiResponse.Fail("Đã xảy ra lỗi hệ thống. Vui lòng liên hệ quản trị viên hoặc thử lại sau.");
+        var response = ApiResponse.Fail("An internal system error occurred. Please contact administrator or try again later.");
         await context.Response.WriteAsJsonAsync(response);
     });
 });
+
+// Map typed domain errors (IHasAppError) to structured JSON with correct HTTP status
+app.UseMiddleware<AppExceptionMiddleware>();
 
 // Defensive security response headers
 app.UseMiddleware<SecurityHeadersMiddleware>();

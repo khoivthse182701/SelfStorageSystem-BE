@@ -24,169 +24,86 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
-    /// Đăng ký tài khoản mới và gửi mã OTP qua Gmail
+    /// Register a new account and send OTP verification code via email.
     /// </summary>
     [HttpPost("register")]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request, CancellationToken cancellationToken)
     {
-        try
-        {
-            var message = await _authService.RegisterAsync(request, cancellationToken);
-            return Ok(ApiResponse.Ok(message));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Lỗi xảy ra trong quá trình đăng ký: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("Đã xảy ra lỗi hệ thống trong quá trình xử lý đăng ký. Vui lòng thử lại sau."));
-        }
+        var message = await _authService.RegisterAsync(request, cancellationToken);
+        return Ok(ApiResponse.Ok(message));
     }
 
     /// <summary>
-    /// Xác thực mã OTP gửi về Gmail để kích hoạt tài khoản
+    /// Verify OTP code sent via email to activate the account.
     /// </summary>
     [HttpPost("verify-otp")]
     [ProducesResponseType(typeof(ApiResponse<AuthResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpRequest request, CancellationToken cancellationToken)
     {
-        try
-        {
-            var response = await _authService.VerifyOtpAsync(request, cancellationToken);
-            return Ok(ApiResponse<AuthResponse>.Ok(response, "Xác thực mã OTP thành công. Tài khoản của bạn đã được kích hoạt."));
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(ApiResponse.Fail(ex.Message));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Lỗi xác thực OTP: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("Đã xảy ra lỗi hệ thống khi xác thực OTP. Vui lòng thử lại sau."));
-        }
+        var response = await _authService.VerifyOtpAsync(request, cancellationToken);
+        return Ok(ApiResponse<AuthResponse>.Ok(response, "OTP verification successful. Your account has been activated."));
     }
 
     /// <summary>
-    /// Gửi lại mã OTP qua Gmail
+    /// Resend OTP verification code via email.
     /// </summary>
     [HttpPost("resend-otp")]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> ResendOtp([FromBody] ResendOtpRequest request, CancellationToken cancellationToken)
     {
-        try
-        {
-            var message = await _authService.ResendOtpAsync(request, cancellationToken);
-            return Ok(ApiResponse.Ok(message));
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(ApiResponse.Fail(ex.Message));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Lỗi gửi lại mã OTP: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("Đã xảy ra lỗi hệ thống khi gửi lại mã OTP. Vui lòng thử lại sau."));
-        }
+        var message = await _authService.ResendOtpAsync(request, cancellationToken);
+        return Ok(ApiResponse.Ok(message));
     }
 
     /// <summary>
-    /// Đăng nhập bằng Email và Password nhận JWT Access Token
+    /// Login with Email and Password to receive JWT Access Token.
     /// </summary>
     [HttpPost("login")]
     [ProducesResponseType(typeof(ApiResponse<AuthResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken cancellationToken)
     {
-        try
-        {
-            var response = await _authService.LoginAsync(request, cancellationToken);
-            return Ok(ApiResponse<AuthResponse>.Ok(response, "Đăng nhập thành công."));
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Unauthorized(ApiResponse.Fail(ex.Message));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Lỗi đăng nhập: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("Đã xảy ra lỗi hệ thống trong quá trình đăng nhập. Vui lòng thử lại sau."));
-        }
+        var response = await _authService.LoginAsync(request, cancellationToken);
+        return Ok(ApiResponse<AuthResponse>.Ok(response, "Login successful."));
     }
 
     /// <summary>
-    /// Đăng nhập / Đăng ký bằng Google (sử dụng Google ID Token)
+    /// Login / Register with Google (using Google ID Token).
     /// </summary>
     [HttpPost("google-login")]
     [ProducesResponseType(typeof(ApiResponse<AuthResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginRequest request, CancellationToken cancellationToken)
     {
-        try
-        {
-            var response = await _authService.GoogleLoginAsync(request, cancellationToken);
-            return Ok(ApiResponse<AuthResponse>.Ok(response, "Đăng nhập bằng Google thành công."));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Lỗi đăng nhập Google: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("Đã xảy ra lỗi hệ thống khi đăng nhập bằng Google. Vui lòng thử lại sau."));
-        }
+        var response = await _authService.GoogleLoginAsync(request, cancellationToken);
+        return Ok(ApiResponse<AuthResponse>.Ok(response, "Google login successful."));
     }
 
     /// <summary>
-    /// Lấy thông tin tài khoản hiện tại từ JWT token
+    /// Get current authenticated user profile from JWT token.
     /// </summary>
     [HttpGet("me")]
     [Authorize]
     [ProducesResponseType(typeof(ApiResponse<AuthUserDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetCurrentUser(CancellationToken cancellationToken)
     {
         var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrEmpty(userIdClaim) || !long.TryParse(userIdClaim, out var userId))
         {
-            return Unauthorized(ApiResponse.Fail("Không thể xác thực thông tin người dùng từ token."));
+            return Unauthorized(ApiResponse.Fail("Cannot authenticate user identity from token."));
         }
 
-        try
-        {
-            var user = await _authService.GetCurrentUserAsync(userId, cancellationToken);
-            return Ok(ApiResponse<AuthUserDto>.Ok(user, "Lấy thông tin người dùng thành công."));
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Lỗi lấy thông tin người dùng: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("Đã xảy ra lỗi hệ thống khi truy xuất thông tin tài khoản. Vui lòng thử lại sau."));
-        }
+        var user = await _authService.GetCurrentUserAsync(userId, cancellationToken);
+        return Ok(ApiResponse<AuthUserDto>.Ok(user, "User profile retrieved successfully."));
     }
 }

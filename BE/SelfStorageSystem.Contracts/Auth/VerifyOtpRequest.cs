@@ -4,11 +4,11 @@ namespace SelfStorageSystem.Contracts.Auth;
 
 public class VerifyOtpRequest
 {
-    [Required(ErrorMessage = "Email là bắt buộc.")]
-    [EmailAddress(ErrorMessage = "Định dạng email không hợp lệ.")]
+    [Required(ErrorMessage = "Email is required.")]
+    [EmailAddress(ErrorMessage = "Invalid email format.")]
     public string Email { get; set; } = string.Empty;
 
-    [Required(ErrorMessage = "Mã OTP là bắt buộc.")]
-    [StringLength(6, MinimumLength = 6, ErrorMessage = "Mã OTP phải có đúng 6 chữ số.")]
+    [Required(ErrorMessage = "OTP code is required.")]
+    [StringLength(6, MinimumLength = 6, ErrorMessage = "OTP code must be exactly 6 digits.")]
     public string OtpCode { get; set; } = string.Empty;
 }

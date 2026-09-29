@@ -8,6 +8,8 @@ using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Customer.Reservations;
 using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
+using SelfStorageSystem.Domain.Errors;
+using SelfStorageSystem.Domain.Exceptions;
 using SelfStorageSystem.Infrastructure.Persistence;
 
 namespace SelfStorageSystem.Infrastructure.Services;
@@ -38,21 +40,22 @@ public class CustomerReservationService : ICustomerReservationService
             .AnyAsync(c => c.UserId == customerId, cancellationToken);
         if (!customerExists)
         {
-            throw new KeyNotFoundException("Customer profile not found.");
+            throw AppException.FromError(ReservationErrors.CustomerNotFound);
         }
 
         // 2. Validate duration per BR-RSV-02
         if (request.DurationMonths < _reservationSettings.MinDurationMonths ||
             request.DurationMonths > _reservationSettings.MaxDurationMonths)
         {
-            throw new ArgumentException($"Rental duration must be between {_reservationSettings.MinDurationMonths} and {_reservationSettings.MaxDurationMonths} months as per BR-RSV-02.");
+            throw AppException.FromError(ReservationErrors.InvalidDuration(
+                _reservationSettings.MinDurationMonths, _reservationSettings.MaxDurationMonths));
         }
 
         // Validate start date is not in the past
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         if (request.StartDate < today)
         {
-            throw new ArgumentException("Rental start date cannot be in the past.");
+            throw AppException.FromError(ReservationErrors.StartDateInPast);
         }
 
         var endDate = request.StartDate.AddMonths(request.DurationMonths);
@@ -62,14 +65,14 @@ public class CustomerReservationService : ICustomerReservationService
             .FirstOrDefaultAsync(f => f.Id == request.FacilityId && f.Status == FacilityStatusConstants.Active, cancellationToken);
         if (facility == null)
         {
-            throw new KeyNotFoundException("Facility not found or currently inactive.");
+            throw AppException.FromError(ReservationErrors.FacilityNotFound);
         }
 
         var unitType = await _dbContext.UnitTypes
             .FirstOrDefaultAsync(u => u.Id == request.UnitTypeId && u.IsActive, cancellationToken);
         if (unitType == null)
         {
-            throw new KeyNotFoundException("Unit type not found or no longer offered.");
+            throw AppException.FromError(ReservationErrors.UnitTypeNotFound);
         }
 
         // 4. Retrieve applicable FacilityRate
@@ -90,7 +93,7 @@ public class CustomerReservationService : ICustomerReservationService
 
         if (facilityRate == null)
         {
-            throw new InvalidOperationException("No published price rate found for this unit type at the selected facility.");
+            throw AppException.FromError(ReservationErrors.NoPublishedRate);
         }
 
         var monthlyRate = facilityRate.MonthlyRate;
@@ -111,7 +114,7 @@ public class CustomerReservationService : ICustomerReservationService
 
             if (appliedPromo == null || appliedPromo.ValidFrom > now || appliedPromo.ValidTo < now)
             {
-                throw new InvalidOperationException("Promotion code is invalid or has expired.");
+                throw AppException.FromError(ReservationErrors.PromotionInvalidOrExpired);
             }
 
             if (appliedPromo.UsageLimit.HasValue)
@@ -120,7 +123,7 @@ public class CustomerReservationService : ICustomerReservationService
                     .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.Status != PromotionRedemptionStatusConstants.Released, cancellationToken);
                 if (usedCount >= appliedPromo.UsageLimit.Value)
                 {
-                    throw new InvalidOperationException("Promotion code has reached its overall usage limit.");
+                    throw AppException.FromError(ReservationErrors.PromotionUsageLimitReached);
                 }
             }
 
@@ -130,7 +133,7 @@ public class CustomerReservationService : ICustomerReservationService
                     .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.CustomerId == customerId && pr.Status != PromotionRedemptionStatusConstants.Released, cancellationToken);
                 if (customerUsedCount >= appliedPromo.PerCustomerLimit.Value)
                 {
-                    throw new InvalidOperationException($"You have reached the redemption limit for this promotion code (maximum {appliedPromo.PerCustomerLimit.Value} times).");
+                    throw AppException.FromError(ReservationErrors.PromotionPerCustomerLimitReached(appliedPromo.PerCustomerLimit.Value));
                 }
             }
 
@@ -165,18 +168,18 @@ public class CustomerReservationService : ICustomerReservationService
 
             if (selectedUnit == null)
             {
-                throw new KeyNotFoundException("Selected storage unit not found.");
+                throw AppException.FromError(ReservationErrors.StorageUnitNotFound);
             }
 
             if (selectedUnit.FacilityId != request.FacilityId || selectedUnit.UnitTypeId != request.UnitTypeId)
             {
-                throw new InvalidOperationException("Selected unit is incompatible with chosen facility or unit type.");
+                throw AppException.FromError(ReservationErrors.UnitIncompatible);
             }
 
             // BR-OPS-02: Must be in available status
             if (!string.Equals(selectedUnit.PhysicalStatus, StorageUnitStatusConstants.Available, StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException("This storage unit has already been reserved or occupied. Please select another unit on the floor map.");
+                throw AppException.FromError(ReservationErrors.UnitNotAvailable);
             }
 
             var hasActiveAllocation = await _dbContext.UnitAllocations
@@ -186,7 +189,7 @@ public class CustomerReservationService : ICustomerReservationService
                              && ua.AllocationEndDate > request.StartDate, cancellationToken);
             if (hasActiveAllocation)
             {
-                throw new InvalidOperationException("This storage unit has already been reserved or occupied. Please select another unit on the floor map.");
+                throw AppException.FromError(ReservationErrors.UnitNotAvailable);
             }
         }
         else
@@ -199,7 +202,7 @@ public class CustomerReservationService : ICustomerReservationService
 
             if (availableCount <= 0)
             {
-                throw new InvalidOperationException("No available storage units of this type currently exist at the selected facility.");
+                throw AppException.FromError(ReservationErrors.NoAvailableUnits);
             }
         }
 
@@ -491,13 +494,13 @@ public class CustomerReservationService : ICustomerReservationService
 
         if (reservation == null)
         {
-            throw new KeyNotFoundException("Reservation not found.");
+            throw AppException.FromError(ReservationErrors.NotFound);
         }
 
         // BOLA / IDOR ownership validation
         if (reservation.CustomerId != customerId)
         {
-            throw new UnauthorizedAccessException("You do not have permission to access this reservation.");
+            throw AppException.FromError(ReservationErrors.Unauthorized);
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -594,18 +597,18 @@ public class CustomerReservationService : ICustomerReservationService
 
         if (reservation == null)
         {
-            throw new KeyNotFoundException("Reservation not found.");
+            throw AppException.FromError(ReservationErrors.NotFound);
         }
 
         if (reservation.CustomerId != customerId)
         {
-            throw new UnauthorizedAccessException("You do not have permission to cancel this reservation.");
+            throw AppException.FromError(ReservationErrors.UnauthorizedCancel);
         }
 
         if (reservation.Status != ReservationStatusConstants.Pending &&
             reservation.Status != ReservationStatusConstants.AwaitingDeposit)
         {
-            throw new InvalidOperationException("Only pending unpaid reservations can be cancelled.");
+            throw AppException.FromError(ReservationErrors.CannotCancelNonPending);
         }
 
         var now = DateTimeOffset.UtcNow;

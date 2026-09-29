@@ -7,7 +7,7 @@ public class ApiResponse<T>
     public T? Data { get; set; }
     public List<string>? Errors { get; set; }
 
-    public static ApiResponse<T> Ok(T data, string message = "Thành công.")
+    public static ApiResponse<T> Ok(T data, string message = "Success.")
     {
         return new ApiResponse<T>
         {
@@ -30,7 +30,7 @@ public class ApiResponse<T>
 
 public class ApiResponse : ApiResponse<object>
 {
-    public static ApiResponse Ok(string message = "Thành công.")
+    public static ApiResponse Ok(string message = "Success.")
     {
         return new ApiResponse
         {
@@ -49,4 +49,14 @@ public class ApiResponse : ApiResponse<object>
             Errors = errors
         };
     }
+}
+
+/// <summary>
+/// Structured error response emitted by <c>AppExceptionMiddleware</c> for all typed domain errors.
+/// </summary>
+/// <param name="ErrorCode">Machine-readable dot-notation error code (e.g. "Auth.InvalidCredentials").</param>
+/// <param name="Message">Human-readable error description.</param>
+public record ApiErrorResponse(string ErrorCode, string Message)
+{
+    public bool Success { get; } = false;
 }

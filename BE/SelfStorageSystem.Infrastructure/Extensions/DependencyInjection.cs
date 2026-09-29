@@ -19,7 +19,7 @@ public static class DependencyInjection
     {
         // 1. Connection string
         var connectionString = configuration.GetConnectionString("DefaultConnection") 
-            ?? throw new InvalidOperationException("Chuỗi kết nối 'DefaultConnection' chưa được cấu hình trong appsettings.json.");
+            ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured in appsettings.json.");
 
         services.AddDbContext<SelfStorageDbContext>(options =>
         {
@@ -56,11 +56,11 @@ public static class DependencyInjection
 
         // 5. JWT Authentication
         var jwtSettings = configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() 
-            ?? throw new InvalidOperationException("Cấu hình 'JwtSettings' chưa được định nghĩa trong appsettings.json.");
+            ?? throw new InvalidOperationException("Configuration 'JwtSettings' is not defined in appsettings.json.");
 
         if (string.IsNullOrWhiteSpace(jwtSettings.Secret) || jwtSettings.Secret.Length < 32)
         {
-            throw new InvalidOperationException("JwtSettings:Secret bắt buộc phải có ít nhất 32 ký tự.");
+            throw new InvalidOperationException("JwtSettings:Secret must be configured and at least 32 characters long.");
         }
         var secret = jwtSettings.Secret;
 

@@ -32,7 +32,7 @@ public class EmailService : IEmailService
             : _mailSettings.SenderEmail.Trim();
         message.From.Add(new MailboxAddress(_mailSettings.SenderName, fromAddress));
         message.To.Add(new MailboxAddress(fullName, toEmail.Trim()));
-        message.Subject = $"[{_mailSettings.SenderName}] Mã xác thực OTP đăng ký: {otpCode}";
+        message.Subject = $"[{_mailSettings.SenderName}] Registration OTP Verification Code: {otpCode}";
 
         var bodyBuilder = new BodyBuilder
         {
@@ -59,18 +59,18 @@ public class EmailService : IEmailService
         <div class='header'>
             <h1>{_mailSettings.SenderName}</h1>
         </div>
-        <p class='greeting'>Xin chào <strong>{fullName}</strong>,</p>
-        <p class='note'>Cảm ơn bạn đã đăng ký tài khoản tại hệ thống {_mailSettings.SenderName}. Dưới đây là mã xác thực OTP của bạn:</p>
+        <p class='greeting'>Hello <strong>{fullName}</strong>,</p>
+        <p class='note'>Thank you for registering an account with {_mailSettings.SenderName}. Below is your OTP verification code:</p>
         
         <div class='otp-box'>
             <div class='otp-code'>{otpCode}</div>
         </div>
 
-        <p class='note'>Mã xác thực có hiệu lực trong vòng <strong>{expiryMinutes} phút</strong>. Vui lòng nhập mã này vào trang xác thực để hoàn tất kích hoạt tài khoản.</p>
-        <p class='warning'>* Lưu ý: Không chia sẻ mã OTP này cho bất kỳ ai nhằm bảo mật thông tin tài khoản của bạn.</p>
+        <p class='note'>This verification code is valid for <strong>{expiryMinutes} minutes</strong>. Please enter this code on the verification page to complete your account activation.</p>
+        <p class='warning'>* Notice: Do not share this OTP code with anyone to protect your account security.</p>
 
         <div class='footer'>
-            <p>Email này được gửi tự động từ hệ thống {_mailSettings.SenderName}. Vui lòng không phản hồi thư này.</p>
+            <p>This is an automated email sent from {_mailSettings.SenderName}. Please do not reply to this email.</p>
         </div>
     </div>
 </body>
@@ -103,7 +103,7 @@ public class EmailService : IEmailService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send OTP email to {Email}: {Message}", toEmail, ex.Message);
-            throw new InvalidOperationException($"Không thể gửi email OTP qua Gmail: {ex.Message}", ex);
+            throw new InvalidOperationException($"Failed to send OTP email via Gmail: {ex.Message}", ex);
         }
     }
 

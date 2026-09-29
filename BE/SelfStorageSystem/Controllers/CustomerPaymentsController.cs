@@ -32,8 +32,9 @@ public class CustomerPaymentsController : ControllerBase
     [HttpPost("create-checkout")]
     [Authorize(Roles = "storage_customer")]
     [ProducesResponseType(typeof(ApiResponse<CheckoutResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> CreateCheckout(
         [FromBody] CreateCheckoutRequest request,
         CancellationToken cancellationToken)
@@ -43,24 +44,8 @@ public class CustomerPaymentsController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
         }
 
-        try
-        {
-            var response = await _paymentService.CreateCheckoutAsync(customerId, request, cancellationToken);
-            return Ok(ApiResponse<CheckoutResponse>.Ok(response, "Checkout payment request initialized successfully."));
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(ApiResponse.Fail(ex.Message));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error creating checkout request: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("A system error occurred while generating payment request."));
-        }
+        var response = await _paymentService.CreateCheckoutAsync(customerId, request, cancellationToken);
+        return Ok(ApiResponse<CheckoutResponse>.Ok(response, "Checkout payment request initialized successfully."));
     }
 
     /// <summary>
@@ -100,21 +85,13 @@ public class CustomerPaymentsController : ControllerBase
             }
         }
 
-        try
+        var processed = await _paymentService.ProcessSePayWebhookAsync(payload, cancellationToken);
+        if (processed)
         {
-            var processed = await _paymentService.ProcessSePayWebhookAsync(payload, cancellationToken);
-            if (processed)
-            {
-                return Ok(new { success = true, message = "Payment matched and processed successfully." });
-            }
+            return Ok(new { success = true, message = "Payment matched and processed successfully." });
+        }
 
-            return Ok(new { success = false, message = "Transaction did not match any open invoice or was already processed." });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error processing SePay Webhook: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, new { success = false, message = "Webhook internal system error." });
-        }
+        return Ok(new { success = false, message = "Transaction did not match any open invoice or was already processed." });
     }
 
     /// <summary>
@@ -130,16 +107,8 @@ public class CustomerPaymentsController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
         }
 
-        try
-        {
-            var history = await _paymentService.GetMyPaymentHistoryAsync(customerId, cancellationToken);
-            return Ok(ApiResponse<List<PaymentHistoryDto>>.Ok(history, "Retrieved payment history successfully."));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error retrieving payment history for customer {CustomerId}: {Message}", customerId, ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("A system error occurred while retrieving payment history."));
-        }
+        var history = await _paymentService.GetMyPaymentHistoryAsync(customerId, cancellationToken);
+        return Ok(ApiResponse<List<PaymentHistoryDto>>.Ok(history, "Retrieved payment history successfully."));
     }
 
     private bool TryGetCustomerId(out long customerId)

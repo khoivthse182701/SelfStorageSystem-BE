@@ -28,8 +28,9 @@ public class CustomerReservationsController : ControllerBase
     /// </summary>
     [HttpPost]
     [ProducesResponseType(typeof(ApiResponse<CreateReservationResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> CreateReservation(
         [FromBody] CreateReservationRequest request,
         CancellationToken cancellationToken)
@@ -39,28 +40,8 @@ public class CustomerReservationsController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
         }
 
-        try
-        {
-            var response = await _reservationService.CreateReservationAsync(customerId, request, cancellationToken);
-            return Ok(ApiResponse<CreateReservationResponse>.Ok(response, "Unit reserved successfully. Please complete your payment within 15 minutes."));
-        }
-        catch (ArgumentException ex)
-        {
-            return BadRequest(ApiResponse.Fail(ex.Message));
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(ApiResponse.Fail(ex.Message));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return Conflict(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error creating reservation: {Message}", ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("A system error occurred while creating reservation. Please try again."));
-        }
+        var response = await _reservationService.CreateReservationAsync(customerId, request, cancellationToken);
+        return Ok(ApiResponse<CreateReservationResponse>.Ok(response, "Unit reserved successfully. Please complete your payment within 15 minutes."));
     }
 
     /// <summary>
@@ -77,16 +58,8 @@ public class CustomerReservationsController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
         }
 
-        try
-        {
-            var list = await _reservationService.GetMyReservationsAsync(customerId, status, cancellationToken);
-            return Ok(ApiResponse<List<ReservationSummaryDto>>.Ok(list, "Retrieved reservations list successfully."));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error retrieving reservations for customer {CustomerId}: {Message}", customerId, ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("A system error occurred while retrieving reservations list."));
-        }
+        var list = await _reservationService.GetMyReservationsAsync(customerId, status, cancellationToken);
+        return Ok(ApiResponse<List<ReservationSummaryDto>>.Ok(list, "Retrieved reservations list successfully."));
     }
 
     /// <summary>
@@ -94,8 +67,8 @@ public class CustomerReservationsController : ControllerBase
     /// </summary>
     [HttpGet("{id:long}")]
     [ProducesResponseType(typeof(ApiResponse<ReservationDetailDto>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetReservationDetail(
         [FromRoute] long id,
         CancellationToken cancellationToken)
@@ -105,24 +78,8 @@ public class CustomerReservationsController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
         }
 
-        try
-        {
-            var detail = await _reservationService.GetReservationDetailAsync(customerId, id, cancellationToken);
-            return Ok(ApiResponse<ReservationDetailDto>.Ok(detail, "Retrieved reservation details successfully."));
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(ApiResponse.Fail(ex.Message));
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error retrieving reservation details for ID {ReservationId}: {Message}", id, ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("A system error occurred while retrieving reservation details."));
-        }
+        var detail = await _reservationService.GetReservationDetailAsync(customerId, id, cancellationToken);
+        return Ok(ApiResponse<ReservationDetailDto>.Ok(detail, "Retrieved reservation details successfully."));
     }
 
     /// <summary>
@@ -130,9 +87,9 @@ public class CustomerReservationsController : ControllerBase
     /// </summary>
     [HttpPost("{id:long}/cancel")]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> CancelReservation(
         [FromRoute] long id,
         [FromBody] CancelReservationRequest? request,
@@ -143,28 +100,8 @@ public class CustomerReservationsController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
         }
 
-        try
-        {
-            await _reservationService.CancelReservationAsync(customerId, id, request?.Reason, cancellationToken);
-            return Ok(ApiResponse.Ok("Reservation cancelled successfully. Storage unit has been released."));
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(ApiResponse.Fail(ex.Message));
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, ApiResponse.Fail(ex.Message));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ApiResponse.Fail(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error cancelling reservation {ReservationId}: {Message}", id, ex.Message);
-            return StatusCode(StatusCodes.Status500InternalServerError, ApiResponse.Fail("A system error occurred while cancelling reservation."));
-        }
+        await _reservationService.CancelReservationAsync(customerId, id, request?.Reason, cancellationToken);
+        return Ok(ApiResponse.Ok("Reservation cancelled successfully. Storage unit has been released."));
     }
 
     private bool TryGetCustomerId(out long customerId)
