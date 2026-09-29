@@ -36,6 +36,19 @@ public static class RentalSuspensionReasons
     public const string OverdueDebtExceeded = "Access is currently suspended due to overdue payment exceeding 1 day (BR-REN-03). Please settle your overdue invoices.";
 }
 
+public static class PinSyncStatusConstants
+{
+    public const string Synced = "synced";
+    public const string Pending = "pending";
+    public const string Failed = "failed";
+}
+
+public static class RentalPinMessages
+{
+    public const string PinSyncPending = "PIN updated successfully. Syncing with door smart lock. Please allow up to 1 minute before using the new PIN at the door.";
+    public const string PinSyncCompleted = "PIN updated and synchronized successfully.";
+}
+
 public static class RentalLogMessages
 {
     public const string RentalsRetrieved = "Customer {CustomerId} retrieved {Count} active/expiring rentals.";

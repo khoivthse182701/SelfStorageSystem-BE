@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SelfStorageSystem.Application.Settings;
@@ -36,10 +37,12 @@ public class CustomerRentalServiceTests
         });
     }
 
-    private CustomerRentalService CreateService(SelfStorageDbContext dbContext)
+    private CustomerRentalService CreateService(SelfStorageDbContext dbContext, IMemoryCache? cache = null)
     {
+        var memoryCache = cache ?? new MemoryCache(new MemoryCacheOptions());
         return new CustomerRentalService(
             dbContext,
+            memoryCache,
             CreateJwtSettings(),
             NullLogger<CustomerRentalService>.Instance);
     }
@@ -324,7 +327,7 @@ public class CustomerRentalServiceTests
     }
 
     [Fact]
-    public async Task GetAccessCredentialsAsync_ShouldReturnActiveCredentialsAnd60sToken_WhenValid()
+    public async Task GetAccessCredentialsAsync_ShouldReturnActiveCredentialsAnd120sToken_WhenValid()
     {
         using var dbContext = CreateInMemoryDbContext();
         long customerId = 1001;
@@ -392,7 +395,49 @@ public class CustomerRentalServiceTests
         Assert.Equal(CredentialStatusConstants.Active, result.Status);
         Assert.Equal("847291", result.KeypadPin);
         Assert.NotNull(result.GateQrToken);
-        Assert.Equal(60, result.QrExpiresInSeconds);
+        Assert.Equal(120, result.QrExpiresInSeconds); // 120s TTL for clock skew resilience
+    }
+
+    [Fact]
+    public async Task GetAccessCredentialsAsync_ShouldThrowOutsideBusinessHours_WhenOutsideOperatingHours()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+
+        // Facility open only during impossible time range (e.g. 03:00 to 03:01 AM)
+        var facility = new Facility
+        {
+            Id = 1,
+            Code = "FAC-01",
+            Name = "Strict Hours Branch",
+            AddressLine = "123 Storage Road",
+            City = "Ho Chi Minh City",
+            Timezone = "Asia/Ho_Chi_Minh",
+            OpeningTime = new TimeOnly(3, 0),
+            ClosingTime = new TimeOnly(3, 1),
+            Status = "active"
+        };
+        var agreement = new RentalAgreement
+        {
+            Id = 209,
+            AgreementNo = "AGR-009",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            CheckedInAt = DateTimeOffset.UtcNow.AddDays(-5),
+            Facility = facility
+        };
+
+        await dbContext.Facilities.AddAsync(facility);
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext);
+
+        var ex = await Assert.ThrowsAsync<AppConflictException>(
+            () => service.GetAccessCredentialsAsync(customerId, agreement.Id, CancellationToken.None));
+
+        Assert.Equal(RentalErrors.OutsideBusinessHours.Code, ex.Error.Code);
     }
 
     [Theory]
@@ -434,7 +479,69 @@ public class CustomerRentalServiceTests
     }
 
     [Fact]
-    public async Task ChangePinAsync_ShouldSucceed_WhenValid()
+    public async Task ChangePinAsync_ShouldLockOut_WhenFailedAttemptsExceedLimit()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+        long agreementId = 208;
+
+        var agreement = new RentalAgreement
+        {
+            Id = agreementId,
+            AgreementNo = "AGR-008",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            CheckedInAt = DateTimeOffset.UtcNow
+        };
+
+        var initialPin = "847291";
+        var currentHash = BCrypt.Net.BCrypt.HashPassword(initialPin);
+        var credential = new AccessCredential
+        {
+            Id = 1,
+            AgreementId = agreement.Id,
+            CredentialType = CredentialTypeConstants.Pin,
+            SecretDigest = currentHash,
+            DisplayHint = initialPin,
+            IssuedAt = DateTimeOffset.UtcNow,
+            Status = CredentialStatusConstants.Active
+        };
+
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.AccessCredentials.AddAsync(credential);
+        await dbContext.SaveChangesAsync();
+
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var service = CreateService(dbContext, cache);
+
+        // Fail 5 times
+        for (int i = 0; i < 5; i++)
+        {
+            var wrongRequest = new ChangePinRequest
+            {
+                CurrentPin = "999999",
+                NewPin = "846201"
+            };
+            await Assert.ThrowsAsync<AppValidationException>(
+                () => service.ChangePinAsync(customerId, agreementId, wrongRequest, CancellationToken.None));
+        }
+
+        // 6th attempt: should be blocked by anti-brute force lockout
+        var lockedRequest = new ChangePinRequest
+        {
+            CurrentPin = initialPin, // Even with correct PIN, must be locked out
+            NewPin = "846201"
+        };
+
+        var ex = await Assert.ThrowsAsync<AppConflictException>(
+            () => service.ChangePinAsync(customerId, agreementId, lockedRequest, CancellationToken.None));
+
+        Assert.Equal(RentalErrors.TooManyFailedPinAttempts.Code, ex.Error.Code);
+    }
+
+    [Fact]
+    public async Task ChangePinAsync_ShouldSucceedAndReturnPendingSyncStatus_WhenValid()
     {
         using var dbContext = CreateInMemoryDbContext();
         long customerId = 1001;
@@ -475,14 +582,18 @@ public class CustomerRentalServiceTests
             NewPin = newPin
         };
 
-        var success = await service.ChangePinAsync(customerId, agreement.Id, request, CancellationToken.None);
+        var result = await service.ChangePinAsync(customerId, agreement.Id, request, CancellationToken.None);
 
-        Assert.True(success);
+        Assert.NotNull(result);
+        Assert.True(result.Success);
+        Assert.Equal(PinSyncStatusConstants.Pending, result.SyncStatus);
+        Assert.Equal(60, result.EstimatedSyncSeconds);
 
         var updatedCred = await dbContext.AccessCredentials.FirstOrDefaultAsync(c => c.AgreementId == agreement.Id);
         Assert.NotNull(updatedCred);
         Assert.True(BCrypt.Net.BCrypt.Verify(newPin, updatedCred.SecretDigest));
         Assert.Equal(newPin, updatedCred.DisplayHint);
+        Assert.Equal(CredentialStatusConstants.Pending, updatedCred.Status);
     }
 
     [Fact]
