@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using MimeKit;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
+using SelfStorageSystem.Domain.Constants;
 
 namespace SelfStorageSystem.Infrastructure.Services;
 
@@ -98,11 +99,11 @@ public class EmailService : IEmailService
             await client.SendAsync(message, cancellationToken);
             await client.DisconnectAsync(true, cancellationToken);
 
-            _logger.LogInformation("Sent OTP email successfully to {Email}", toEmail);
+            _logger.LogInformation(EmailLogMessages.SentOtpSuccess, toEmail);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to send OTP email to {Email}: {Message}", toEmail, ex.Message);
+            _logger.LogError(ex, EmailLogMessages.SentOtpFailed, toEmail, ex.Message);
             throw new InvalidOperationException($"Failed to send OTP email via Gmail: {ex.Message}", ex);
         }
     }
@@ -145,11 +146,11 @@ public class EmailService : IEmailService
 
             await client.SendAsync(message, cancellationToken);
             await client.DisconnectAsync(true, cancellationToken);
-            _logger.LogInformation("Sent email successfully to {Email} with subject {Subject}", toEmail, subject);
+            _logger.LogInformation(EmailLogMessages.SentEmailSuccess, toEmail, subject);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to send email to {Email}: {Message}", toEmail, ex.Message);
+            _logger.LogError(ex, EmailLogMessages.SentEmailFailed, toEmail, ex.Message);
         }
     }
 }

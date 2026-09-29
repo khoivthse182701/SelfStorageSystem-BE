@@ -47,9 +47,13 @@ public sealed class CustomerCatalogController(ICustomerCatalogService catalog) :
     }
 
     [HttpGet("facilities/{facilityId:long}/map")]
-    public async Task<IActionResult> GetMap(long facilityId, CancellationToken ct)
+    public async Task<IActionResult> GetMap(
+        long facilityId,
+        [FromQuery] long? areaId,
+        [FromQuery] string? floor,
+        CancellationToken ct)
     {
-        var result = await catalog.GetFacilityMapAsync(facilityId, ct);
+        var result = await catalog.GetFacilityMapAsync(facilityId, areaId, floor, ct);
         if (result is null)
         {
             return NotFound(ApiResponse.Fail("Facility not found."));

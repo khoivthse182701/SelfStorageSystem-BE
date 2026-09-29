@@ -32,3 +32,12 @@ public static class StorageUnitStatusConstants
     public const string UnderMaintenance = "under_maintenance";
     public const string InUse = "in_use";
 }
+
+public static class FacilityMapStatusConstants
+{
+    public const string Available = "available";
+    public const string Occupied = "occupied";
+    public const string Maintenance = "maintenance";
+    public const string PendingPayment = "pending_payment";
+    public const string Reserved = "reserved";
+}

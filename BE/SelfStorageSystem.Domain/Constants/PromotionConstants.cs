@@ -12,3 +12,10 @@ public static class PromotionRedemptionStatusConstants
     public const string Applied = "applied";
     public const string Released = "released";
 }
+
+public static class PromotionRuleTypeConstants
+{
+    public const string Month = "month";
+    public const string Facility = "facility";
+    public const string UnitType = "unit_type";
+}
