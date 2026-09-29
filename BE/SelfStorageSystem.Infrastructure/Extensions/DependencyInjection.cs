@@ -50,6 +50,7 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<ICustomerReservationService, CustomerReservationService>();
         services.AddScoped<ICustomerPaymentService, CustomerPaymentService>();
+        services.AddScoped<ICustomerCatalogService, CustomerCatalogService>();
 
         // 4.1. Background Hosted Workers
         services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.ReservationHoldExpiryWorker>();
