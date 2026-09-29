@@ -32,3 +32,16 @@ public static class DefaultMessageConstants
     public const string CheckInInstructions = "Please present your national ID/Passport and your reservation code upon check-in at the facility.";
     public const string DefaultCancellationReason = "Cancelled by customer";
 }
+
+public static class TimezoneConstants
+{
+    public const string DefaultVietnam = "Asia/Ho_Chi_Minh";
+    public const string WindowsVietnam = "SE Asia Standard Time";
+    public const int VietnamUtcOffsetHours = 7;
+}
+
+public static class FeeRuleTypeConstants
+{
+    public const string Booking = "booking";
+    public const string Tax = "tax";
+}

@@ -46,12 +46,12 @@ public class GoogleAuthService : IGoogleAuthService
         }
         catch (InvalidJwtException ex)
         {
-            _logger.LogWarning(ex, "Invalid Google ID Token: {Message}", ex.Message);
+            _logger.LogWarning(ex, SelfStorageSystem.Domain.Constants.AuthLogMessages.InvalidGoogleToken, ex.Message);
             throw new InvalidOperationException("Google ID Token is invalid or has expired.", ex);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error verifying Google ID Token: {Message}", ex.Message);
+            _logger.LogError(ex, SelfStorageSystem.Domain.Constants.AuthLogMessages.VerifyGoogleTokenError, ex.Message);
             throw new InvalidOperationException($"Error validating Google ID Token: {ex.Message}", ex);
         }
     }

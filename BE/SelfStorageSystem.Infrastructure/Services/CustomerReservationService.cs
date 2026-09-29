@@ -101,112 +101,7 @@ public class CustomerReservationService : ICustomerReservationService
         var depositAmount = facilityRate.DepositAmount > 0 ? facilityRate.DepositAmount : monthlyRate;
         var bookingFee = facilityRate.BookingFee;
 
-        // 5. Evaluate Promotion Voucher if provided (BR-FIN-04)
-        decimal discountAmount = 0;
-        Promotion? appliedPromo = null;
-        if (!string.IsNullOrWhiteSpace(request.PromotionCode))
-        {
-            var now = DateTimeOffset.UtcNow;
-            var promoCode = request.PromotionCode.Trim();
-            appliedPromo = await _dbContext.Promotions
-                .Include(p => p.PromotionRules)
-                .FirstOrDefaultAsync(p => p.Code == promoCode && p.IsActive, cancellationToken);
-
-            if (appliedPromo == null || appliedPromo.ValidFrom > now || appliedPromo.ValidTo < now)
-            {
-                throw AppException.FromError(ReservationErrors.PromotionInvalidOrExpired);
-            }
-
-            if (appliedPromo.UsageLimit.HasValue)
-            {
-                var usedCount = await _dbContext.PromotionRedemptions
-                    .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.Status != PromotionRedemptionStatusConstants.Released, cancellationToken);
-                if (usedCount >= appliedPromo.UsageLimit.Value)
-                {
-                    throw AppException.FromError(ReservationErrors.PromotionUsageLimitReached);
-                }
-            }
-
-            if (appliedPromo.PerCustomerLimit.HasValue)
-            {
-                var customerUsedCount = await _dbContext.PromotionRedemptions
-                    .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.CustomerId == customerId && pr.Status != PromotionRedemptionStatusConstants.Released, cancellationToken);
-                if (customerUsedCount >= appliedPromo.PerCustomerLimit.Value)
-                {
-                    throw AppException.FromError(ReservationErrors.PromotionPerCustomerLimitReached(appliedPromo.PerCustomerLimit.Value));
-                }
-            }
-
-            if (appliedPromo.DiscountType == PromotionDiscountTypeConstants.Percentage)
-            {
-                discountAmount = (monthlyRate * appliedPromo.DiscountValue) / 100m;
-                if (appliedPromo.MaxDiscountAmount.HasValue && discountAmount > appliedPromo.MaxDiscountAmount.Value)
-                {
-                    discountAmount = appliedPromo.MaxDiscountAmount.Value;
-                }
-            }
-            else if (appliedPromo.DiscountType == PromotionDiscountTypeConstants.Fixed)
-            {
-                discountAmount = appliedPromo.DiscountValue;
-            }
-        }
-
-        if (discountAmount > monthlyRate)
-        {
-            discountAmount = monthlyRate;
-        }
-
-        var quotedTotal = (monthlyRate * request.DurationMonths) + depositAmount + bookingFee - discountAmount;
-        var firstPaymentTotal = monthlyRate + depositAmount + bookingFee - discountAmount;
-
-        // 6. Concurrency Locking & Specific Storage Unit check
-        StorageUnit? selectedUnit = null;
-        if (request.StorageUnitId.HasValue)
-        {
-            selectedUnit = await _dbContext.StorageUnits
-                .FirstOrDefaultAsync(u => u.Id == request.StorageUnitId.Value, cancellationToken);
-
-            if (selectedUnit == null)
-            {
-                throw AppException.FromError(ReservationErrors.StorageUnitNotFound);
-            }
-
-            if (selectedUnit.FacilityId != request.FacilityId || selectedUnit.UnitTypeId != request.UnitTypeId)
-            {
-                throw AppException.FromError(ReservationErrors.UnitIncompatible);
-            }
-
-            // BR-OPS-02: Must be in available status
-            if (!string.Equals(selectedUnit.PhysicalStatus, StorageUnitStatusConstants.Available, StringComparison.OrdinalIgnoreCase))
-            {
-                throw AppException.FromError(ReservationErrors.UnitNotAvailable);
-            }
-
-            var hasActiveAllocation = await _dbContext.UnitAllocations
-                .AnyAsync(ua => ua.StorageUnitId == selectedUnit.Id
-                             && ua.Status == AllocationStatusConstants.Active
-                             && ua.AllocationStartDate < endDate
-                             && ua.AllocationEndDate > request.StartDate, cancellationToken);
-            if (hasActiveAllocation)
-            {
-                throw AppException.FromError(ReservationErrors.UnitNotAvailable);
-            }
-        }
-        else
-        {
-            // Auto-assign validation (BR-RSV-03)
-            var availableCount = await _dbContext.StorageUnits
-                .CountAsync(u => u.FacilityId == request.FacilityId
-                              && u.UnitTypeId == request.UnitTypeId
-                              && u.PhysicalStatus == StorageUnitStatusConstants.Available, cancellationToken);
-
-            if (availableCount <= 0)
-            {
-                throw AppException.FromError(ReservationErrors.NoAvailableUnits);
-            }
-        }
-
-        // 7. Atomic Transaction Execution
+        // 5. Atomic Transaction & Concurrency Locking Execution
         var holdUntil = DateTimeOffset.UtcNow.AddMinutes(_reservationSettings.HoldDurationMinutes);
         var nowOffset = DateTimeOffset.UtcNow;
 
@@ -218,6 +113,144 @@ public class CustomerReservationService : ICustomerReservationService
 
         try
         {
+            // Evaluate Promotion Voucher if provided (BR-FIN-04)
+            decimal discountAmount = 0;
+            Promotion? appliedPromo = null;
+            if (!string.IsNullOrWhiteSpace(request.PromotionCode))
+            {
+                var now = DateTimeOffset.UtcNow;
+                var promoCode = request.PromotionCode.Trim();
+
+                if (_dbContext.Database.IsSqlServer())
+                {
+                    appliedPromo = await _dbContext.Promotions
+                        .FromSqlInterpolated($"SELECT * FROM promotions WITH (UPDLOCK, ROWLOCK) WHERE code = {promoCode} AND is_active = 1")
+                        .Include(p => p.PromotionRules)
+                        .FirstOrDefaultAsync(cancellationToken);
+                }
+                else
+                {
+                    appliedPromo = await _dbContext.Promotions
+                        .Include(p => p.PromotionRules)
+                        .FirstOrDefaultAsync(p => p.Code == promoCode && p.IsActive, cancellationToken);
+                }
+
+                if (appliedPromo == null || appliedPromo.ValidFrom > now || appliedPromo.ValidTo < now)
+                {
+                    throw AppException.FromError(ReservationErrors.PromotionInvalidOrExpired);
+                }
+
+                if (appliedPromo.UsageLimit.HasValue)
+                {
+                    var usedCount = await _dbContext.PromotionRedemptions
+                        .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.Status != PromotionRedemptionStatusConstants.Released, cancellationToken);
+                    if (usedCount >= appliedPromo.UsageLimit.Value)
+                    {
+                        throw AppException.FromError(ReservationErrors.PromotionUsageLimitReached);
+                    }
+                }
+
+                if (appliedPromo.PerCustomerLimit.HasValue)
+                {
+                    var customerUsedCount = await _dbContext.PromotionRedemptions
+                        .CountAsync(pr => pr.PromotionId == appliedPromo.Id && pr.CustomerId == customerId && pr.Status != PromotionRedemptionStatusConstants.Released, cancellationToken);
+                    if (customerUsedCount >= appliedPromo.PerCustomerLimit.Value)
+                    {
+                        throw AppException.FromError(ReservationErrors.PromotionPerCustomerLimitReached(appliedPromo.PerCustomerLimit.Value));
+                    }
+                }
+
+                if (appliedPromo.DiscountType == PromotionDiscountTypeConstants.Percentage)
+                {
+                    discountAmount = (monthlyRate * appliedPromo.DiscountValue) / 100m;
+                    if (appliedPromo.MaxDiscountAmount.HasValue && discountAmount > appliedPromo.MaxDiscountAmount.Value)
+                    {
+                        discountAmount = appliedPromo.MaxDiscountAmount.Value;
+                    }
+                }
+                else if (appliedPromo.DiscountType == PromotionDiscountTypeConstants.Fixed)
+                {
+                    discountAmount = appliedPromo.DiscountValue;
+                }
+            }
+
+            if (discountAmount > monthlyRate)
+            {
+                discountAmount = monthlyRate;
+            }
+
+            var quotedTotal = (monthlyRate * request.DurationMonths) + depositAmount + bookingFee - discountAmount;
+            var firstPaymentTotal = monthlyRate + depositAmount + bookingFee - discountAmount;
+
+            // 6. Concurrency Locking & Specific Storage Unit check
+            StorageUnit? selectedUnit = null;
+            if (request.StorageUnitId.HasValue)
+            {
+                if (_dbContext.Database.IsSqlServer())
+                {
+                    selectedUnit = await _dbContext.StorageUnits
+                        .FromSqlInterpolated($"SELECT * FROM storage_units WITH (UPDLOCK, ROWLOCK) WHERE id = {request.StorageUnitId.Value}")
+                        .FirstOrDefaultAsync(cancellationToken);
+                }
+                else
+                {
+                    selectedUnit = await _dbContext.StorageUnits
+                        .FirstOrDefaultAsync(u => u.Id == request.StorageUnitId.Value, cancellationToken);
+                }
+
+                if (selectedUnit == null)
+                {
+                    throw AppException.FromError(ReservationErrors.StorageUnitNotFound);
+                }
+
+                if (selectedUnit.FacilityId != request.FacilityId || selectedUnit.UnitTypeId != request.UnitTypeId)
+                {
+                    throw AppException.FromError(ReservationErrors.UnitIncompatible);
+                }
+
+                // BR-OPS-02: Must be in available status
+                if (!string.Equals(selectedUnit.PhysicalStatus, StorageUnitStatusConstants.Available, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw AppException.FromError(ReservationErrors.UnitNotAvailable);
+                }
+
+                var hasActiveAllocation = await _dbContext.UnitAllocations
+                    .AnyAsync(ua => ua.StorageUnitId == selectedUnit.Id
+                                 && ua.Status == AllocationStatusConstants.Active
+                                 && ua.AllocationStartDate < endDate
+                                 && ua.AllocationEndDate > request.StartDate, cancellationToken);
+                if (hasActiveAllocation)
+                {
+                    throw AppException.FromError(ReservationErrors.UnitNotAvailable);
+                }
+            }
+            else
+            {
+                // Auto-assign validation (BR-RSV-03)
+                if (_dbContext.Database.IsSqlServer())
+                {
+                    selectedUnit = await _dbContext.StorageUnits
+                        .FromSqlInterpolated($"SELECT TOP 1 * FROM storage_units WITH (UPDLOCK, ROWLOCK, READPAST) WHERE facility_id = {request.FacilityId} AND unit_type_id = {request.UnitTypeId} AND physical_status = {StorageUnitStatusConstants.Available} AND is_listed = 1")
+                        .FirstOrDefaultAsync(cancellationToken);
+
+                    if (selectedUnit == null)
+                    {
+                        throw AppException.FromError(ReservationErrors.NoAvailableUnits);
+                    }
+                }
+                else
+                {
+                    var availableCount = await _dbContext.StorageUnits
+                        .CountAsync(u => u.FacilityId == request.FacilityId
+                                      && u.UnitTypeId == request.UnitTypeId
+                                      && u.PhysicalStatus == StorageUnitStatusConstants.Available, cancellationToken);
+
+                    if (availableCount <= 0)
+                    {
+                        throw AppException.FromError(ReservationErrors.NoAvailableUnits);
+                    }
+                }
+            }
             // Generate sequence codes
             var reservationCode = await GenerateReservationCodeAsync(cancellationToken);
             var invoiceNo = await GenerateInvoiceNoAsync(cancellationToken);
@@ -363,7 +396,8 @@ public class CustomerReservationService : ICustomerReservationService
                 await transaction.CommitAsync(cancellationToken);
             }
 
-            _logger.LogInformation("Reservation hold created: {ReservationCode} for customer {CustomerId}, unit {UnitId}, holds until {HoldUntil}",
+            _logger.LogInformation(
+                ReservationLogMessages.HoldCreated,
                 reservationCode, customerId, selectedUnit?.UnitCode ?? "Unassigned", holdUntil);
 
             var expiresInSeconds = (int)Math.Max(0, (holdUntil - nowOffset).TotalSeconds);
@@ -392,7 +426,7 @@ public class CustomerReservationService : ICustomerReservationService
             {
                 await transaction.RollbackAsync(cancellationToken);
             }
-            _logger.LogError(ex, "Failed to create reservation for customer {CustomerId}: {Message}", customerId, ex.Message);
+            _logger.LogError(ex, ReservationLogMessages.CreateFailed, customerId, ex.Message);
             throw;
         }
         finally
@@ -644,7 +678,7 @@ public class CustomerReservationService : ICustomerReservationService
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
-        _logger.LogInformation("Reservation {ReservationCode} successfully cancelled by customer {CustomerId}. Unit released.", reservation.ReservationCode, customerId);
+        _logger.LogInformation(ReservationLogMessages.CancelledByCustomer, reservation.ReservationCode, customerId);
 
         return true;
     }
@@ -669,7 +703,7 @@ public class CustomerReservationService : ICustomerReservationService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to fetch from core.reservation_code_seq. Using fallback sequence generator.");
+                _logger.LogWarning(ex, ReservationLogMessages.FallbackReservationSeq);
             }
         }
 
@@ -696,7 +730,7 @@ public class CustomerReservationService : ICustomerReservationService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to fetch from core.invoice_no_seq. Using fallback sequence generator.");
+                _logger.LogWarning(ex, ReservationLogMessages.FallbackInvoiceSeq);
             }
         }
 

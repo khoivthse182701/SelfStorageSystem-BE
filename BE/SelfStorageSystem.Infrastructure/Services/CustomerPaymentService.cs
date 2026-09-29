@@ -176,13 +176,13 @@ public class CustomerPaymentService : ICustomerPaymentService
         // Validate positive incoming amount (prevent zero/negative or outgoing debit transactions from triggering payments)
         if (payload.TransferAmount <= 0)
         {
-            _logger.LogWarning("SePay Webhook: Ignored non-positive transfer amount {Amount}", payload.TransferAmount);
+            _logger.LogWarning(PaymentLogMessages.NonPositiveTransfer, payload.TransferAmount);
             return false;
         }
 
         if (string.Equals(payload.TransferType, SePayConstants.TransferTypeOut, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogInformation("SePay Webhook: Ignored outgoing account debit (transferType = out).");
+            _logger.LogInformation(PaymentLogMessages.OutgoingDebitIgnored);
             return false;
         }
 
@@ -195,7 +195,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         var match = Regex.Match(payload.Content, regexPattern, RegexOptions.IgnoreCase);
         if (!match.Success || !long.TryParse(match.Groups[1].Value, out var invoiceId))
         {
-            _logger.LogInformation("SePay Webhook: Content does not match pattern {Prefix}(invoiceId). Content: {Content}", prefix, payload.Content);
+            _logger.LogInformation(PaymentLogMessages.PatternMismatch, prefix, payload.Content);
             return false;
         }
 
@@ -209,7 +209,7 @@ public class CustomerPaymentService : ICustomerPaymentService
 
         if (existingPayment != null && existingPayment.Status == PaymentConstants.StatusSucceeded)
         {
-            _logger.LogInformation("SePay Webhook: Transaction {Ref} already processed successfully. Skipping replay.", transactionRef);
+            _logger.LogInformation(PaymentLogMessages.TransactionReplay, transactionRef);
             return true;
         }
 
@@ -224,13 +224,13 @@ public class CustomerPaymentService : ICustomerPaymentService
 
         if (invoice == null)
         {
-            _logger.LogWarning("SePay Webhook: Invoice ID {InvoiceId} not found.", invoiceId);
+            _logger.LogWarning(PaymentLogMessages.InvoiceNotFound, invoiceId);
             return false;
         }
 
         if (invoice.Status == InvoiceStatusConstants.Paid)
         {
-            _logger.LogInformation("SePay Webhook: Invoice ID {InvoiceId} already paid previously.", invoiceId);
+            _logger.LogInformation(PaymentLogMessages.InvoiceAlreadyPaid, invoiceId);
             return true;
         }
 
@@ -240,7 +240,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         // 2. Partial Payment Handling: Validate transferred amount against remaining balance
         if (payload.TransferAmount < remainingBalance)
         {
-            _logger.LogWarning("SePay Webhook: Received amount {Amount} is less than required balance {Remaining} (Invoice {InvoiceId}). Recording partial payment without confirming reservation.",
+            _logger.LogWarning(PaymentLogMessages.PartialPayment,
                 payload.TransferAmount, remainingBalance, invoice.Id);
 
             var partialPayment = new Payment
@@ -386,7 +386,7 @@ public class CustomerPaymentService : ICustomerPaymentService
 
         if (isLatePayment)
         {
-            _logger.LogWarning("Late Payment: Reservation {ReservationCode} is in {Status} state. Recording payment for manual refund or unit change.",
+            _logger.LogWarning(PaymentLogMessages.LatePaymentState,
                 reservation!.ReservationCode, reservation.Status);
 
             IDbContextTransaction? lateTx = null;
@@ -429,7 +429,7 @@ public class CustomerPaymentService : ICustomerPaymentService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to send late payment email notification to {Email}", userEmail);
+                        _logger.LogWarning(ex, PaymentLogMessages.LatePaymentEmailFailed, userEmail);
                     }
                 }
 
@@ -441,7 +441,7 @@ public class CustomerPaymentService : ICustomerPaymentService
                 {
                     await lateTx.RollbackAsync(cancellationToken);
                 }
-                _logger.LogError(ex, "Error processing late payment for Payment ID {PaymentId}: {Message}", payment.Id, ex.Message);
+                _logger.LogError(ex, PaymentLogMessages.LatePaymentFailed, payment.Id, ex.Message);
                 return;
             }
             finally
@@ -538,7 +538,7 @@ public class CustomerPaymentService : ICustomerPaymentService
                 await transaction.CommitAsync(cancellationToken);
             }
 
-            _logger.LogInformation("Payment completed successfully for Payment ID {PaymentId}, Invoice ID {InvoiceId}, Reservation {ReservationCode}",
+            _logger.LogInformation(PaymentLogMessages.PaymentCompleted,
                 payment.Id, payment.TargetInvoiceId, reservation?.ReservationCode ?? "N/A");
 
             // Send confirmation email
@@ -567,7 +567,7 @@ public class CustomerPaymentService : ICustomerPaymentService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to send reservation confirmation email to {Email}", customerEmail);
+                    _logger.LogWarning(ex, PaymentLogMessages.ConfirmationEmailFailed, customerEmail);
                 }
             }
         }
@@ -577,7 +577,7 @@ public class CustomerPaymentService : ICustomerPaymentService
             {
                 await transaction.RollbackAsync(cancellationToken);
             }
-            _logger.LogError(ex, "Error completing payment for Payment ID {PaymentId}: {Message}", payment.Id, ex.Message);
+            _logger.LogError(ex, PaymentLogMessages.PaymentCompletionError, payment.Id, ex.Message);
             throw;
         }
         finally

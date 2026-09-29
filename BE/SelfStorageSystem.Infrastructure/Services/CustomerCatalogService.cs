@@ -28,15 +28,20 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             {
                 u.FacilityId,
                 u.PhysicalStatus,
-                Holds = u.UnitAllocations.Any(a =>
+                IsBlocked = u.UnitAllocations.Any(a =>
+                    a.Status == AllocationStatusConstants.Active &&
+                    (a.AgreementId != null ||
+                     (a.Reservation != null && (
+                         a.Reservation.Status == ReservationStatusConstants.Confirmed ||
+                         a.Reservation.Status == ReservationStatusConstants.Converted ||
+                         ((a.Reservation.Status == ReservationStatusConstants.Pending ||
+                           a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
+                          a.Reservation.HoldUntil > now))))),
+                HasExpiredPendingHold = u.UnitAllocations.Any(a =>
                     a.Status == AllocationStatusConstants.Active &&
                     a.ReservationId != null &&
-                    a.Reservation!.Status == ReservationStatusConstants.Pending &&
-                    a.Reservation.HoldUntil > now),
-                ExpiredHold = u.UnitAllocations.Any(a =>
-                    a.Status == AllocationStatusConstants.Active &&
-                    a.ReservationId != null &&
-                    a.Reservation!.Status == ReservationStatusConstants.Pending &&
+                    (a.Reservation!.Status == ReservationStatusConstants.Pending ||
+                     a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
                     a.Reservation.HoldUntil <= now)
             })
             .ToListAsync(ct);
@@ -52,9 +57,9 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             Longitude = f.Longitude,
             OpeningTime = f.OpeningTime,
             ClosingTime = f.ClosingTime,
-            AvailableUnitCount = unitRows.Count(u => u.FacilityId == f.Id &&
+            AvailableUnitCount = unitRows.Count(u => u.FacilityId == f.Id && !u.IsBlocked &&
                 (u.PhysicalStatus == StorageUnitStatusConstants.Available ||
-                 (u.PhysicalStatus == StorageUnitStatusConstants.Reserved && u.ExpiredHold && !u.Holds)))
+                 (u.PhysicalStatus == StorageUnitStatusConstants.Reserved && u.HasExpiredPendingHold)))
         }).ToList();
     }
 
@@ -67,6 +72,7 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
         if (f is null) return null;
 
         var now = DateTimeOffset.UtcNow;
+        var today = GetBusinessDate(f.Timezone, now);
 
         var units = await ListedUnits()
             .Where(u => u.FacilityId == id)
@@ -75,27 +81,34 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 u.UnitTypeId,
                 u.PhysicalStatus,
                 u.UnitType,
-                Holds = u.UnitAllocations.Any(a =>
+                IsBlocked = u.UnitAllocations.Any(a =>
+                    a.Status == AllocationStatusConstants.Active &&
+                    (a.AgreementId != null ||
+                     (a.Reservation != null && (
+                         a.Reservation.Status == ReservationStatusConstants.Confirmed ||
+                         a.Reservation.Status == ReservationStatusConstants.Converted ||
+                         ((a.Reservation.Status == ReservationStatusConstants.Pending ||
+                           a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
+                          a.Reservation.HoldUntil > now))))),
+                HasExpiredPendingHold = u.UnitAllocations.Any(a =>
                     a.Status == AllocationStatusConstants.Active &&
                     a.ReservationId != null &&
-                    a.Reservation!.Status == ReservationStatusConstants.Pending &&
-                    a.Reservation.HoldUntil > now),
-                ExpiredHold = u.UnitAllocations.Any(a =>
-                    a.Status == AllocationStatusConstants.Active &&
-                    a.ReservationId != null &&
-                    a.Reservation!.Status == ReservationStatusConstants.Pending &&
+                    (a.Reservation!.Status == ReservationStatusConstants.Pending ||
+                     a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
                     a.Reservation.HoldUntil <= now)
             })
             .ToListAsync(ct);
 
-        var rates = await ActiveRates(id, DateOnly.FromDateTime(DateTime.UtcNow)).ToListAsync(ct);
+        var rates = await ActiveRates(id, today)
+            .OrderByDescending(r => r.ValidFrom)
+            .ToListAsync(ct);
 
         var types = units.GroupBy(x => x.UnitTypeId).Select(g =>
         {
             var t = g.First().UnitType;
-            var availableCount = g.Count(x =>
-                x.PhysicalStatus == StorageUnitStatusConstants.Available ||
-                (x.PhysicalStatus == StorageUnitStatusConstants.Reserved && x.ExpiredHold && !x.Holds));
+            var availableCount = g.Count(x => !x.IsBlocked &&
+                (x.PhysicalStatus == StorageUnitStatusConstants.Available ||
+                 (x.PhysicalStatus == StorageUnitStatusConstants.Reserved && x.HasExpiredPendingHold)));
 
             return new UnitTypeAvailabilityDto
             {
@@ -159,7 +172,10 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
         CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var facility = facilityId.HasValue
+            ? await db.Facilities.AsNoTracking().FirstOrDefaultAsync(f => f.Id == facilityId.Value, ct)
+            : null;
+        var today = GetBusinessDate(facility?.Timezone, now);
 
         var rates = await db.FacilityRates
             .AsNoTracking()
@@ -168,6 +184,7 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 (!unitTypeId.HasValue || r.UnitTypeId == unitTypeId) &&
                 r.ValidFrom <= today &&
                 (r.ValidTo == null || r.ValidTo >= today))
+            .OrderByDescending(r => r.ValidFrom)
             .ToListAsync(ct);
 
         var units = await ListedUnits()
@@ -175,17 +192,22 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 (!facilityId.HasValue || u.FacilityId == facilityId) &&
                 (!unitTypeId.HasValue || u.UnitTypeId == unitTypeId) &&
                 (!facilityAreaId.HasValue || u.AreaId == facilityAreaId) &&
+                !u.UnitAllocations.Any(a =>
+                    a.Status == AllocationStatusConstants.Active &&
+                    (a.AgreementId != null ||
+                     (a.Reservation != null && (
+                         a.Reservation.Status == ReservationStatusConstants.Confirmed ||
+                         a.Reservation.Status == ReservationStatusConstants.Converted ||
+                         ((a.Reservation.Status == ReservationStatusConstants.Pending ||
+                           a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
+                          a.Reservation.HoldUntil > now))))) &&
                 (u.PhysicalStatus == StorageUnitStatusConstants.Available ||
                  (u.PhysicalStatus == StorageUnitStatusConstants.Reserved && u.UnitAllocations.Any(a =>
                      a.Status == AllocationStatusConstants.Active &&
                      a.ReservationId != null &&
-                     a.Reservation!.Status == ReservationStatusConstants.Pending &&
-                     a.Reservation.HoldUntil <= now))) &&
-                !u.UnitAllocations.Any(a =>
-                    a.Status == AllocationStatusConstants.Active &&
-                    a.ReservationId != null &&
-                    a.Reservation!.Status == ReservationStatusConstants.Pending &&
-                    a.Reservation.HoldUntil > now))
+                     (a.Reservation!.Status == ReservationStatusConstants.Pending ||
+                      a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
+                     a.Reservation.HoldUntil <= now))))
             .Select(u => new
             {
                 u.Id,
@@ -211,18 +233,26 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
         }).ToList();
     }
 
-    public async Task<FacilityMapDto?> GetFacilityMapAsync(long facilityId, CancellationToken ct = default)
+    public async Task<FacilityMapDto?> GetFacilityMapAsync(
+        long facilityId,
+        long? areaId = null,
+        string? floor = null,
+        CancellationToken ct = default)
     {
-        var facilityExists = await db.Facilities
-            .AnyAsync(f => f.Id == facilityId && f.Status == FacilityStatusConstants.Active, ct);
+        var facility = await db.Facilities
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == facilityId && f.Status == FacilityStatusConstants.Active, ct);
 
-        if (!facilityExists) return null;
+        if (facility is null) return null;
 
         var now = DateTimeOffset.UtcNow;
 
         var data = await db.UnitMapPositions
             .AsNoTracking()
-            .Where(p => p.Unit.FacilityId == facilityId && p.Area.IsActive)
+            .Where(p => p.Unit.FacilityId == facilityId &&
+                        (!areaId.HasValue || p.AreaId == areaId.Value) &&
+                        (string.IsNullOrWhiteSpace(floor) || p.Unit.FloorLabel == floor) &&
+                        p.Area.IsActive)
             .Select(p => new
             {
                 p.UnitId,
@@ -237,15 +267,23 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 p.RotationDegrees,
                 p.Metadata,
                 p.Unit.PhysicalStatus,
+                IsBlockedOrConfirmed = p.Unit.UnitAllocations.Any(a =>
+                    a.Status == AllocationStatusConstants.Active &&
+                    (a.AgreementId != null ||
+                     (a.Reservation != null && (
+                         a.Reservation.Status == ReservationStatusConstants.Confirmed ||
+                         a.Reservation.Status == ReservationStatusConstants.Converted)))),
                 Pending = p.Unit.UnitAllocations.Any(a =>
                     a.Status == AllocationStatusConstants.Active &&
                     a.ReservationId != null &&
-                    a.Reservation!.Status == ReservationStatusConstants.Pending &&
+                    (a.Reservation!.Status == ReservationStatusConstants.Pending ||
+                     a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
                     a.Reservation.HoldUntil > now),
                 ExpiredHold = p.Unit.UnitAllocations.Any(a =>
                     a.Status == AllocationStatusConstants.Active &&
                     a.ReservationId != null &&
-                    a.Reservation!.Status == ReservationStatusConstants.Pending &&
+                    (a.Reservation!.Status == ReservationStatusConstants.Pending ||
+                     a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
                     a.Reservation.HoldUntil <= now)
             })
             .ToListAsync(ct);
@@ -265,7 +303,7 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 Width = p.Width,
                 Height = p.Height,
                 RotationDegrees = p.RotationDegrees,
-                Status = DetermineUnitMapStatus(p.Pending, p.PhysicalStatus, p.ExpiredHold),
+                Status = DetermineUnitMapStatus(p.IsBlockedOrConfirmed, p.Pending, p.PhysicalStatus, p.ExpiredHold),
                 Metadata = p.Metadata
             }).ToList()
         };
@@ -280,7 +318,17 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             throw AppException.FromError(CatalogErrors.InvalidPricingRequest);
         }
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var facility = await db.Facilities
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == request.FacilityId && f.Status == FacilityStatusConstants.Active, ct);
+
+        if (facility is null)
+        {
+            throw AppException.FromError(CatalogErrors.InvalidPricingRequest);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var today = GetBusinessDate(facility.Timezone, now);
 
         var rate = await ActiveRates(request.FacilityId, today)
             .Where(r => r.UnitTypeId == request.UnitTypeId)
@@ -292,13 +340,12 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             throw AppException.FromError(CatalogErrors.InvalidPricingRequest);
         }
 
-        var rent = rate.MonthlyRate * request.DurationMonths;
+        var rent = Math.Round(rate.MonthlyRate * request.DurationMonths, 0, MidpointRounding.AwayFromZero);
         var discount = 0m;
         Promotion? promotion = null;
 
         if (!string.IsNullOrWhiteSpace(request.VoucherCode))
         {
-            var now = DateTimeOffset.UtcNow;
             promotion = await db.Promotions
                 .Include(p => p.PromotionRules)
                 .AsNoTracking()
@@ -308,18 +355,46 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                     p.ValidFrom <= now &&
                     p.ValidTo >= now, ct);
 
-            var isVoucherInvalid = promotion is null || promotion.PromotionRules.Any(r =>
-                r.RuleType.Contains("month", StringComparison.OrdinalIgnoreCase) &&
-                int.TryParse(r.RuleValue, out var minimum) &&
-                request.DurationMonths < minimum);
-
-            if (isVoucherInvalid)
+            if (promotion is null)
             {
                 throw AppException.FromError(CatalogErrors.InvalidVoucher);
             }
 
-            discount = promotion!.DiscountType == PromotionDiscountTypeConstants.Percentage
-                ? rent * promotion.DiscountValue / 100m
+            // Quota limit check
+            if (promotion.UsageLimit.HasValue)
+            {
+                var usedCount = await db.PromotionRedemptions
+                    .CountAsync(pr => pr.PromotionId == promotion.Id && pr.Status != PromotionRedemptionStatusConstants.Released, ct);
+
+                if (usedCount >= promotion.UsageLimit.Value)
+                {
+                    throw AppException.FromError(CatalogErrors.InvalidVoucher);
+                }
+            }
+
+            // Scope checks: Facility, UnitType, MinDuration
+            var hasMismatchedFacility = promotion.PromotionRules.Any(r =>
+                r.RuleType.Contains(PromotionRuleTypeConstants.Facility, StringComparison.OrdinalIgnoreCase) &&
+                long.TryParse(r.RuleValue, out var targetFid) &&
+                targetFid != request.FacilityId);
+
+            var hasMismatchedUnitType = promotion.PromotionRules.Any(r =>
+                r.RuleType.Contains(PromotionRuleTypeConstants.UnitType, StringComparison.OrdinalIgnoreCase) &&
+                long.TryParse(r.RuleValue, out var targetUtid) &&
+                targetUtid != request.UnitTypeId);
+
+            var hasMismatchedDuration = promotion.PromotionRules.Any(r =>
+                r.RuleType.Contains(PromotionRuleTypeConstants.Month, StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(r.RuleValue, out var minimum) &&
+                request.DurationMonths < minimum);
+
+            if (hasMismatchedFacility || hasMismatchedUnitType || hasMismatchedDuration)
+            {
+                throw AppException.FromError(CatalogErrors.InvalidVoucher);
+            }
+
+            discount = promotion.DiscountType == PromotionDiscountTypeConstants.Percentage
+                ? Math.Round(rent * promotion.DiscountValue / 100m, 0, MidpointRounding.AwayFromZero)
                 : promotion.DiscountValue;
 
             if (promotion.MaxDiscountAmount.HasValue)
@@ -340,28 +415,32 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             .ToListAsync(ct);
 
         var bookingFee = feeRules
-            .Where(x => x.FeeType.Contains("booking", StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.FeeType.Contains(FeeRuleTypeConstants.Booking, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(x => x.FacilityId.HasValue)
             .Select(x => x.Amount ?? 0m)
             .FirstOrDefault();
+        bookingFee = Math.Round(bookingFee, 0, MidpointRounding.AwayFromZero);
 
-        var taxable = rent + rate.MonthlyRate + bookingFee - discount;
+        // Accounting standard: VAT Tax applies to rental fee after discount (+ booking fee if applicable).
+        // Security deposit is a refundable deposit, NOT subject to VAT.
+        var taxable = Math.Max(0m, rent - discount) + bookingFee;
 
         var taxRate = feeRules
-            .Where(x => x.FeeType.Contains("tax", StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.FeeType.Contains(FeeRuleTypeConstants.Tax, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(x => x.FacilityId.HasValue)
             .Select(x => x.RatePercent ?? 0m)
             .FirstOrDefault();
 
-        var tax = taxable * taxRate / 100m;
-        var total = rent + rate.MonthlyRate + bookingFee - discount + tax;
+        var tax = Math.Round(taxable * taxRate / 100m, 0, MidpointRounding.AwayFromZero);
+        var securityDeposit = Math.Round(rate.MonthlyRate, 0, MidpointRounding.AwayFromZero);
+        var total = Math.Round(rent - discount + bookingFee + securityDeposit + tax, 0, MidpointRounding.AwayFromZero);
 
         return new PricingCalculationDto
         {
             BaseMonthlyRate = rate.MonthlyRate,
             DurationMonths = request.DurationMonths,
             RentAmount = rent,
-            SecurityDeposit = rate.MonthlyRate,
+            SecurityDeposit = securityDeposit,
             BookingFee = bookingFee,
             DiscountAmount = discount,
             TaxAmount = tax,
@@ -370,18 +449,37 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
         };
     }
 
-    private static string DetermineUnitMapStatus(bool pending, string physicalStatus, bool expiredHold)
+    private static string DetermineUnitMapStatus(bool isBlockedOrConfirmed, bool pending, string physicalStatus, bool expiredHold)
     {
-        if (pending) return "pending_payment";
-        if (physicalStatus == StorageUnitStatusConstants.Reserved && expiredHold) return "available";
+        if (isBlockedOrConfirmed) return FacilityMapStatusConstants.Occupied;
+        if (pending) return FacilityMapStatusConstants.PendingPayment;
+        if (physicalStatus == StorageUnitStatusConstants.Reserved && expiredHold) return FacilityMapStatusConstants.Available;
 
         return physicalStatus switch
         {
-            StorageUnitStatusConstants.Available => "available",
-            StorageUnitStatusConstants.Occupied or StorageUnitStatusConstants.InUse => "occupied",
-            StorageUnitStatusConstants.UnderMaintenance => "maintenance",
-            _ => "reserved"
+            StorageUnitStatusConstants.Available => FacilityMapStatusConstants.Available,
+            StorageUnitStatusConstants.Occupied or StorageUnitStatusConstants.InUse => FacilityMapStatusConstants.Occupied,
+            StorageUnitStatusConstants.UnderMaintenance => FacilityMapStatusConstants.Maintenance,
+            _ => FacilityMapStatusConstants.Reserved
         };
+    }
+
+    private static DateOnly GetBusinessDate(string? timezone, DateTimeOffset utcNow)
+    {
+        if (string.IsNullOrWhiteSpace(timezone))
+        {
+            timezone = TimezoneConstants.DefaultVietnam;
+        }
+
+        try
+        {
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
+            return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(utcNow, tz).DateTime);
+        }
+        catch
+        {
+            return DateOnly.FromDateTime(utcNow.ToOffset(TimeSpan.FromHours(TimezoneConstants.VietnamUtcOffsetHours)).DateTime);
+        }
     }
 
     private IQueryable<StorageUnit> ListedUnits()
@@ -395,6 +493,7 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
     {
         return db.FacilityRates
             .AsNoTracking()
-            .Where(r => r.FacilityId == facilityId && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo >= today));
+            .Where(r => r.FacilityId == facilityId && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo >= today))
+            .OrderByDescending(r => r.ValidFrom);
     }
 }
