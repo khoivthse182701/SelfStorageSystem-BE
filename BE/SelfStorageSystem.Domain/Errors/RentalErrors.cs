@@ -27,4 +27,10 @@ public static class RentalErrors
 
     public static readonly Error HandoverNotFound =
         Error.NotFound("Rental.HandoverNotFound", "Handover record was not found for this rental agreement.");
+
+    public static readonly Error OutsideBusinessHours =
+        Error.Conflict("Rental.OutsideBusinessHours", "Access is not available outside of facility business hours.");
+
+    public static readonly Error TooManyFailedPinAttempts =
+        Error.Conflict("Rental.TooManyFailedPinAttempts", "Too many incorrect PIN attempts. PIN change is temporarily locked for 15 minutes.");
 }

@@ -63,9 +63,11 @@ public class CustomerRentalsController : ControllerBase
 
     /// <summary>
     /// Allows customer to change their storage unit keypad PIN (BR-REN-03).
+    /// Returns 202 Accepted with sync status while IoT lock synchronizes asynchronously.
     /// </summary>
     [HttpPut("{agreementId:long}/change-pin")]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<ChangePinResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<ChangePinResponseDto>), StatusCodes.Status202Accepted)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
@@ -80,8 +82,13 @@ public class CustomerRentalsController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
         }
 
-        await _rentalService.ChangePinAsync(customerId, agreementId, request, cancellationToken);
-        return Ok(ApiResponse.Ok("Keypad PIN changed successfully."));
+        var result = await _rentalService.ChangePinAsync(customerId, agreementId, request, cancellationToken);
+        if (result.SyncStatus == PinSyncStatusConstants.Pending)
+        {
+            return Accepted(ApiResponse<ChangePinResponseDto>.Ok(result, result.Message));
+        }
+
+        return Ok(ApiResponse<ChangePinResponseDto>.Ok(result, result.Message));
     }
 
     /// <summary>
