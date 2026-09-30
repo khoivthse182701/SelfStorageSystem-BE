@@ -13,15 +13,19 @@ public static class ReservationStatusConstants
 public static class AllocationStatusConstants
 {
     public const string Active = "active";
-    public const string Cancelled = "cancelled";
+    public const string Released = "released";
+    public const string Cancelled = "released";
     public const string Expired = "expired";
-    public const string Completed = "completed";
+    public const string Consumed = "consumed";
+    public const string Completed = "consumed";
 }
 
 public static class AllocationKindConstants
 {
-    public const string Reservation = "reservation";
-    public const string Agreement = "agreement";
+    public const string Reservation = "reservation_hold";
+    public const string Rental = "rental";
+    public const string Agreement = "rental";
+    public const string Transfer = "transfer";
 }
 
 public static class StorageUnitStatusConstants

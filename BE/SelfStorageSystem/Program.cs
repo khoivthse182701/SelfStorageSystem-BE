@@ -130,9 +130,17 @@ app.UseExceptionHandler(exceptionHandlerApp =>
 {
     exceptionHandlerApp.Run(async context =>
     {
+        var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
+        var ex = exceptionHandlerPathFeature?.Error;
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Unhandled exception occurred: {Message}", ex?.Message);
+
         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
         context.Response.ContentType = "application/json";
-        var response = ApiResponse.Fail("An internal system error occurred. Please contact administrator or try again later.");
+        var message = app.Environment.IsDevelopment() && ex != null
+            ? $"Internal Server Error: {ex.Message}"
+            : "An internal system error occurred. Please contact administrator or try again later.";
+        var response = ApiResponse.Fail(message);
         await context.Response.WriteAsJsonAsync(response);
     });
 });

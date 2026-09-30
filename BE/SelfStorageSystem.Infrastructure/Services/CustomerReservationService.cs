@@ -124,7 +124,7 @@ public class CustomerReservationService : ICustomerReservationService
                 if (_dbContext.Database.IsSqlServer())
                 {
                     appliedPromo = await _dbContext.Promotions
-                        .FromSqlInterpolated($"SELECT * FROM promotions WITH (UPDLOCK, ROWLOCK) WHERE code = {promoCode} AND is_active = 1")
+                        .FromSqlInterpolated($"SELECT * FROM core.promotions WITH (UPDLOCK, ROWLOCK) WHERE code = {promoCode} AND is_active = 1")
                         .Include(p => p.PromotionRules)
                         .FirstOrDefaultAsync(cancellationToken);
                 }
@@ -189,7 +189,7 @@ public class CustomerReservationService : ICustomerReservationService
                 if (_dbContext.Database.IsSqlServer())
                 {
                     selectedUnit = await _dbContext.StorageUnits
-                        .FromSqlInterpolated($"SELECT * FROM storage_units WITH (UPDLOCK, ROWLOCK) WHERE id = {request.StorageUnitId.Value}")
+                        .FromSqlInterpolated($"SELECT * FROM core.storage_units WITH (UPDLOCK, ROWLOCK) WHERE id = {request.StorageUnitId.Value}")
                         .FirstOrDefaultAsync(cancellationToken);
                 }
                 else
@@ -230,7 +230,7 @@ public class CustomerReservationService : ICustomerReservationService
                 if (_dbContext.Database.IsSqlServer())
                 {
                     selectedUnit = await _dbContext.StorageUnits
-                        .FromSqlInterpolated($"SELECT TOP 1 * FROM storage_units WITH (UPDLOCK, ROWLOCK, READPAST) WHERE facility_id = {request.FacilityId} AND unit_type_id = {request.UnitTypeId} AND physical_status = {StorageUnitStatusConstants.Available} AND is_listed = 1")
+                        .FromSqlInterpolated($"SELECT TOP 1 * FROM core.storage_units WITH (UPDLOCK, ROWLOCK, READPAST) WHERE facility_id = {request.FacilityId} AND unit_type_id = {request.UnitTypeId} AND physical_status = {StorageUnitStatusConstants.Available} AND is_listed = 1")
                         .FirstOrDefaultAsync(cancellationToken);
 
                     if (selectedUnit == null)
@@ -696,6 +696,10 @@ public class CustomerReservationService : ICustomerReservationService
                 }
 
                 using var cmd = conn.CreateCommand();
+                if (_dbContext.Database.CurrentTransaction != null)
+                {
+                    cmd.Transaction = _dbContext.Database.CurrentTransaction.GetDbTransaction();
+                }
                 cmd.CommandText = DbSequenceConstants.ReservationCodeSeqQuery;
                 var seqObj = await cmd.ExecuteScalarAsync(cancellationToken);
                 var seq = Convert.ToInt64(seqObj);
@@ -723,6 +727,10 @@ public class CustomerReservationService : ICustomerReservationService
                 }
 
                 using var cmd = conn.CreateCommand();
+                if (_dbContext.Database.CurrentTransaction != null)
+                {
+                    cmd.Transaction = _dbContext.Database.CurrentTransaction.GetDbTransaction();
+                }
                 cmd.CommandText = DbSequenceConstants.InvoiceNoSeqQuery;
                 var seqObj = await cmd.ExecuteScalarAsync(cancellationToken);
                 var seq = Convert.ToInt64(seqObj);
