@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using SelfStorageSystem.Domain.Entities;
@@ -193,7 +193,9 @@ public partial class SelfStorageDbContext : DbContext
 
             entity.ToTable("access_events", "core");
 
-            entity.HasIndex(e => e.ExternalEventId, "UQ__access_e__A0144288E5B75B80").IsUnique();
+            entity.HasIndex(e => e.ExternalEventId, "access_events_external_event_id_uidx")
+                .IsUnique()
+                .HasFilter("([external_event_id] IS NOT NULL)");
 
             entity.HasIndex(e => new { e.CredentialId, e.OccurredAt }, "access_events_credential_occurred_idx")
                 .IsDescending(false, true)
@@ -996,7 +998,9 @@ public partial class SelfStorageDbContext : DbContext
 
             entity.ToTable("invoices", "core", tb => tb.HasTrigger("trg_invoice_status_transition"));
 
-            entity.HasIndex(e => e.TicketChargeProposalId, "UQ__invoices__DABC6CDB01A88B8E").IsUnique();
+            entity.HasIndex(e => e.TicketChargeProposalId, "invoices_ticket_charge_proposal_id_uidx")
+                .IsUnique()
+                .HasFilter("([ticket_charge_proposal_id] IS NOT NULL)");
 
             entity.HasIndex(e => e.InvoiceNo, "UQ__invoices__F58CA1E2D09A819E").IsUnique();
 
@@ -1304,7 +1308,9 @@ public partial class SelfStorageDbContext : DbContext
 
             entity.ToTable("notifications", "core");
 
-            entity.HasIndex(e => e.DeduplicationKey, "UQ__notifica__336F0ABBB6A704D7").IsUnique();
+            entity.HasIndex(e => e.DeduplicationKey, "notifications_deduplication_key_uidx")
+                .IsUnique()
+                .HasFilter("([deduplication_key] IS NOT NULL)");
 
             entity.HasIndex(e => new { e.ScheduledAt, e.Id }, "notifications_delivery_queue_idx").HasFilter("([status] IN ('pending', 'failed'))");
 
