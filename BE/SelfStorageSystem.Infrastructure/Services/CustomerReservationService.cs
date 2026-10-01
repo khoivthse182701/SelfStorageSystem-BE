@@ -97,8 +97,8 @@ public class CustomerReservationService : ICustomerReservationService
         }
 
         var monthlyRate = facilityRate.MonthlyRate;
-        // BR-FIN-01: Security deposit defaults to 100% of 1 month's rental rate
-        var depositAmount = facilityRate.DepositAmount > 0 ? facilityRate.DepositAmount : monthlyRate;
+        // Security deposit strictly follows facility rate snapshot per trg_reservations_validate_rate
+        var depositAmount = facilityRate.DepositAmount;
         var bookingFee = facilityRate.BookingFee;
 
         // 5. Atomic Transaction & Concurrency Locking Execution
@@ -696,6 +696,10 @@ public class CustomerReservationService : ICustomerReservationService
                 }
 
                 using var cmd = conn.CreateCommand();
+                if (_dbContext.Database.CurrentTransaction != null)
+                {
+                    cmd.Transaction = _dbContext.Database.CurrentTransaction.GetDbTransaction();
+                }
                 cmd.CommandText = DbSequenceConstants.ReservationCodeSeqQuery;
                 var seqObj = await cmd.ExecuteScalarAsync(cancellationToken);
                 var seq = Convert.ToInt64(seqObj);
@@ -723,6 +727,10 @@ public class CustomerReservationService : ICustomerReservationService
                 }
 
                 using var cmd = conn.CreateCommand();
+                if (_dbContext.Database.CurrentTransaction != null)
+                {
+                    cmd.Transaction = _dbContext.Database.CurrentTransaction.GetDbTransaction();
+                }
                 cmd.CommandText = DbSequenceConstants.InvoiceNoSeqQuery;
                 var seqObj = await cmd.ExecuteScalarAsync(cancellationToken);
                 var seq = Convert.ToInt64(seqObj);
