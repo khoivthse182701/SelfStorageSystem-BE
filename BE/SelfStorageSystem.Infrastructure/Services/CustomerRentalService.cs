@@ -301,13 +301,12 @@ public class CustomerRentalService : ICustomerRentalService
             throw AppException.FromError(RentalErrors.AccessSuspendedDueToOverdue);
         }
 
-        // 6. Verify current PIN if credential exists
+        // 6. Verify current PIN if credential exists and current PIN is provided
         var pinCred = agreement.AccessCredentials.FirstOrDefault(c => c.CredentialType == CredentialTypeConstants.Pin);
 
-        if (pinCred != null && !string.IsNullOrWhiteSpace(pinCred.SecretDigest))
+        if (pinCred != null && !string.IsNullOrWhiteSpace(pinCred.SecretDigest) && !string.IsNullOrWhiteSpace(request.CurrentPin))
         {
-            if (string.IsNullOrWhiteSpace(request.CurrentPin) ||
-                !BCrypt.Net.BCrypt.Verify(request.CurrentPin, pinCred.SecretDigest))
+            if (!BCrypt.Net.BCrypt.Verify(request.CurrentPin, pinCred.SecretDigest))
             {
                 var newCount = failedAttempts + 1;
                 _cache.Set(lockoutKey, newCount, PinLockoutDuration);

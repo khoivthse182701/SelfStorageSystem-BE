@@ -98,19 +98,7 @@ builder.Services.AddRateLimiter(options =>
         await context.HttpContext.Response.WriteAsJsonAsync(response, cancellationToken: token);
     };
 
-    // 1. Global IP-based Fixed Window limiter
-    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
-    {
-        var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
-        return RateLimitPartition.GetFixedWindowLimiter(clientIp, _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = rateLimitSettings.GlobalPermitLimit > 0 ? rateLimitSettings.GlobalPermitLimit : 100,
-            Window = TimeSpan.FromSeconds(rateLimitSettings.GlobalWindowSeconds > 0 ? rateLimitSettings.GlobalWindowSeconds : 60),
-            QueueLimit = 0
-        });
-    });
-
-    // 2. Strict limiter specifically for Auth endpoints (Login, Register, OTP)
+    // Keep strict limiter specifically for Auth endpoints (Login, Register, OTP anti-spam)
     options.AddPolicy(RateLimitingSettings.AuthPolicyName, httpContext =>
     {
         var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";

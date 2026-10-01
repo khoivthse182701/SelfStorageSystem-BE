@@ -186,16 +186,90 @@ public class CustomerPaymentService : ICustomerPaymentService
             return false;
         }
 
-        // Extract invoice ID dynamically matching the configured prefix (allows optional spaces/dashes, e.g. DH123, DH 123, DH-123)
         var prefix = !string.IsNullOrWhiteSpace(_sePayConfig.InvoicePrefix)
             ? _sePayConfig.InvoicePrefix.Trim()
             : SePayConstants.DefaultInvoicePrefix;
-        var regexPattern = $@"{Regex.Escape(prefix)}[\s\-_]*(\d+)";
 
-        var match = Regex.Match(payload.Content, regexPattern, RegexOptions.IgnoreCase);
-        if (!match.Success || !long.TryParse(match.Groups[1].Value, out var invoiceId))
+        var contentText = $"{payload.Content} {payload.Description}";
+
+        Invoice? invoice = null;
+
+        // 1. Try extracting invoice ID via configured prefix (e.g. DH1004, DH-1004)
+        var prefixMatch = Regex.Match(contentText, $@"{Regex.Escape(prefix)}[\s\-_]*(\d+)", RegexOptions.IgnoreCase);
+        if (prefixMatch.Success && long.TryParse(prefixMatch.Groups[1].Value, out var invoiceId))
         {
-            _logger.LogInformation(PaymentLogMessages.PatternMismatch, prefix, payload.Content);
+            invoice = await _dbContext.Invoices
+                .Include(i => i.Reservation)
+                    .ThenInclude(r => r!.Facility)
+                .Include(i => i.Reservation)
+                    .ThenInclude(r => r!.UnitType)
+                .Include(i => i.Customer)
+                    .ThenInclude(c => c.User)
+                .FirstOrDefaultAsync(i => i.Id == invoiceId, cancellationToken);
+        }
+
+        // 2. Try matching invoice number pattern (e.g. INV-20261001-01002)
+        if (invoice == null)
+        {
+            var invMatch = Regex.Match(contentText, @"INV[\s\-_]*([0-9A-Za-z\-_]+)", RegexOptions.IgnoreCase);
+            if (invMatch.Success)
+            {
+                var matchedCode = invMatch.Groups[0].Value.Replace(" ", "");
+                invoice = await _dbContext.Invoices
+                    .Include(i => i.Reservation)
+                        .ThenInclude(r => r!.Facility)
+                    .Include(i => i.Reservation)
+                        .ThenInclude(r => r!.UnitType)
+                    .Include(i => i.Customer)
+                        .ThenInclude(c => c.User)
+                    .FirstOrDefaultAsync(i => i.InvoiceNo.Contains(matchedCode) || matchedCode.Contains(i.InvoiceNo), cancellationToken);
+            }
+        }
+
+        // 3. Try matching reservation code pattern (e.g. RSV-20261001-01002)
+        if (invoice == null)
+        {
+            var rsvMatch = Regex.Match(contentText, @"RSV[\s\-_]*([0-9A-Za-z\-_]+)", RegexOptions.IgnoreCase);
+            if (rsvMatch.Success)
+            {
+                var matchedRsv = rsvMatch.Groups[0].Value.Replace(" ", "");
+                invoice = await _dbContext.Invoices
+                    .Include(i => i.Reservation)
+                        .ThenInclude(r => r!.Facility)
+                    .Include(i => i.Reservation)
+                        .ThenInclude(r => r!.UnitType)
+                    .Include(i => i.Customer)
+                        .ThenInclude(c => c.User)
+                    .FirstOrDefaultAsync(i => i.Reservation != null && (i.Reservation.ReservationCode.Contains(matchedRsv) || matchedRsv.Contains(i.Reservation.ReservationCode)), cancellationToken);
+            }
+        }
+
+        // 4. Fallback: If bank memo does not contain the invoice or reservation code (e.g. Zalopay/transfer without memo),
+        // match against recent open/pending invoices with exact remaining balance equal to transfer amount.
+        if (invoice == null)
+        {
+            invoice = await _dbContext.Invoices
+                .Include(i => i.Reservation)
+                    .ThenInclude(r => r!.Facility)
+                .Include(i => i.Reservation)
+                    .ThenInclude(r => r!.UnitType)
+                .Include(i => i.Customer)
+                    .ThenInclude(c => c.User)
+                .Where(i => (i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft || i.Status == InvoiceStatusConstants.PartiallyPaid)
+                         && (i.TotalAmount - i.PaidAmount) == payload.TransferAmount)
+                .OrderByDescending(i => i.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (invoice != null)
+            {
+                _logger.LogInformation("Matched open invoice #{InvoiceId} ({InvoiceNo}) via fallback exact transfer amount {Amount:N0} VND.",
+                    invoice.Id, invoice.InvoiceNo, payload.TransferAmount);
+            }
+        }
+
+        if (invoice == null)
+        {
+            _logger.LogWarning(PaymentLogMessages.PatternMismatch, prefix, payload.Content);
             return false;
         }
 
@@ -213,24 +287,9 @@ public class CustomerPaymentService : ICustomerPaymentService
             return true;
         }
 
-        var invoice = await _dbContext.Invoices
-            .Include(i => i.Reservation)
-                .ThenInclude(r => r!.Facility)
-            .Include(i => i.Reservation)
-                .ThenInclude(r => r!.UnitType)
-            .Include(i => i.Customer)
-                .ThenInclude(c => c.User)
-            .FirstOrDefaultAsync(i => i.Id == invoiceId, cancellationToken);
-
-        if (invoice == null)
-        {
-            _logger.LogWarning(PaymentLogMessages.InvoiceNotFound, invoiceId);
-            return false;
-        }
-
         if (invoice.Status == InvoiceStatusConstants.Paid)
         {
-            _logger.LogInformation(PaymentLogMessages.InvoiceAlreadyPaid, invoiceId);
+            _logger.LogInformation(PaymentLogMessages.InvoiceAlreadyPaid, invoice.Id);
             return true;
         }
 
@@ -465,6 +524,7 @@ public class CustomerPaymentService : ICustomerPaymentService
             payment.PaidAt = now;
             payment.ProviderTransactionId = transactionNo;
             payment.UpdatedAt = now;
+            await _dbContext.SaveChangesAsync(cancellationToken);
 
             // Safe allocation amount calculation: cannot exceed remaining invoice balance (prevents SQL trigger 51011 throw)
             var remainingBalance = invoice != null ? Math.Max(0, invoice.TotalAmount - invoice.PaidAmount) : payment.Amount;
@@ -484,9 +544,10 @@ public class CustomerPaymentService : ICustomerPaymentService
                     AllocatedAt = now
                 };
                 _dbContext.PaymentAllocations.Add(allocation);
+                await _dbContext.SaveChangesAsync(cancellationToken);
             }
 
-            // Sync invoice paid amount and status
+            // Sync invoice paid amount and status in-memory / DB
             if (invoice != null)
             {
                 invoice.PaidAmount += allocatedAmount;
@@ -528,6 +589,96 @@ public class CustomerPaymentService : ICustomerPaymentService
                 foreach (var red in redemptions)
                 {
                     red.Status = PromotionRedemptionStatusConstants.Applied;
+                }
+
+                // Create active RentalAgreement and AccessCredential so the customer immediately owns and accesses their unit
+                var existingAgreement = await _dbContext.RentalAgreements
+                    .FirstOrDefaultAsync(a => a.ReservationId == reservation.Id, cancellationToken);
+
+                if (existingAgreement == null)
+                {
+                    var agreementNo = $"AGR-HCM-{now:yyyyMMdd}-{reservation.Id:D4}";
+
+                    var policyVersionId = await _dbContext.PolicyVersions
+                        .Where(p => p.PolicyType == "rental_terms")
+                        .OrderByDescending(p => p.ValidFrom)
+                        .Select(p => p.Id)
+                        .FirstOrDefaultAsync(cancellationToken);
+                    if (policyVersionId <= 0) policyVersionId = 1;
+
+                    var agreement = new RentalAgreement
+                    {
+                        AgreementNo = agreementNo,
+                        ReservationId = reservation.Id,
+                        CustomerId = reservation.CustomerId,
+                        FacilityId = reservation.FacilityId,
+                        PolicyVersionId = policyVersionId,
+                        StartDate = reservation.StartDate,
+                        EndDate = reservation.EndDate,
+                        MonthlyRateSnapshot = reservation.MonthlyRateSnapshot,
+                        DepositSnapshot = reservation.DepositSnapshot,
+                        DepositBalance = reservation.DepositSnapshot,
+                        Status = RentalAgreementStatusConstants.Active,
+                        SignedAt = now,
+                        CheckedInAt = now,
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    _dbContext.RentalAgreements.Add(agreement);
+                    await _dbContext.SaveChangesAsync(cancellationToken);
+
+                    if (invoice != null)
+                    {
+                        invoice.AgreementId = agreement.Id;
+                    }
+
+                    // Transition reservation unit allocation to rental allocation
+                    var resAllocation = await _dbContext.UnitAllocations
+                        .FirstOrDefaultAsync(ua => ua.ReservationId == reservation.Id && ua.Status == AllocationStatusConstants.Active, cancellationToken);
+
+                    if (resAllocation != null)
+                    {
+                        resAllocation.Status = "consumed";
+                        resAllocation.EndedAt = now;
+                        await _dbContext.SaveChangesAsync(cancellationToken);
+
+                        var rentalAllocation = new UnitAllocation
+                        {
+                            StorageUnitId = resAllocation.StorageUnitId,
+                            AgreementId = agreement.Id,
+                            AllocationKind = AllocationKindConstants.Rental,
+                            AllocationStartDate = reservation.StartDate,
+                            AllocationEndDate = reservation.EndDate,
+                            Status = AllocationStatusConstants.Active,
+                            CreatedAt = now
+                        };
+                        _dbContext.UnitAllocations.Add(rentalAllocation);
+                        await _dbContext.SaveChangesAsync(cancellationToken);
+
+                        // Update storage unit physical status to occupied
+                        var storageUnit = await _dbContext.StorageUnits.FindAsync(new object[] { resAllocation.StorageUnitId }, cancellationToken);
+                        if (storageUnit != null && storageUnit.PhysicalStatus == StorageUnitStatusConstants.Reserved)
+                        {
+                            storageUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
+                            storageUnit.UpdatedAt = now;
+                            await _dbContext.SaveChangesAsync(cancellationToken);
+                        }
+                    }
+
+                    // Generate secure 6-digit numeric keypad PIN
+                    var randomPin = Random.Shared.Next(100000, 999999).ToString();
+                    var pinCred = new AccessCredential
+                    {
+                        AgreementId = agreement.Id,
+                        CredentialType = CredentialTypeConstants.Pin,
+                        SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin),
+                        DisplayHint = randomPin,
+                        IssuedAt = now,
+                        ExpiresAt = now.AddYears(1),
+                        Status = CredentialStatusConstants.Active,
+                        CreatedAt = now
+                    };
+                    _dbContext.AccessCredentials.Add(pinCred);
                 }
             }
 

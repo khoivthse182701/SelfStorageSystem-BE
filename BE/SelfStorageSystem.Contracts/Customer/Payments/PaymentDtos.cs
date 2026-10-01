@@ -60,6 +60,9 @@ public class SePayWebhookPayload
     [System.Text.Json.Serialization.JsonPropertyName("content")]
     public string Content { get; set; } = string.Empty;
 
+    [System.Text.Json.Serialization.JsonPropertyName("description")]
+    public string? Description { get; set; }
+
     [System.Text.Json.Serialization.JsonPropertyName("transferType")]
     public string TransferType { get; set; } = string.Empty;
 
