@@ -20,8 +20,11 @@ public static class AllocationStatusConstants
 
 public static class AllocationKindConstants
 {
-    public const string Reservation = "reservation";
-    public const string Agreement = "agreement";
+    public const string Reservation = "reservation_hold";
+    public const string ReservationHold = "reservation_hold";
+    public const string Agreement = "rental";
+    public const string Rental = "rental";
+    public const string Transfer = "transfer";
 }
 
 public static class StorageUnitStatusConstants

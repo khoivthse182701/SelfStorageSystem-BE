@@ -594,7 +594,7 @@ public class CustomerReservationAndPaymentTests
             Id = 1,
             StorageUnitId = 601,
             ReservationId = 106,
-            AllocationKind = "reservation",
+            AllocationKind = "reservation_hold",
             AllocationStartDate = reservation.StartDate,
             AllocationEndDate = reservation.EndDate,
             Status = "active"
