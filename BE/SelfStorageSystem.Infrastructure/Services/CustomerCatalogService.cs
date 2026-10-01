@@ -233,81 +233,6 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
         }).ToList();
     }
 
-    public async Task<FacilityMapDto?> GetFacilityMapAsync(
-        long facilityId,
-        long? areaId = null,
-        string? floor = null,
-        CancellationToken ct = default)
-    {
-        var facility = await db.Facilities
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.Id == facilityId && f.Status == FacilityStatusConstants.Active, ct);
-
-        if (facility is null) return null;
-
-        var now = DateTimeOffset.UtcNow;
-
-        var data = await db.UnitMapPositions
-            .AsNoTracking()
-            .Where(p => p.Unit.FacilityId == facilityId &&
-                        (!areaId.HasValue || p.AreaId == areaId.Value) &&
-                        (string.IsNullOrWhiteSpace(floor) || p.Unit.FloorLabel == floor) &&
-                        p.Area.IsActive)
-            .Select(p => new
-            {
-                p.UnitId,
-                p.Unit.UnitCode,
-                p.Unit.UnitTypeId,
-                p.AreaId,
-                p.Area.Name,
-                p.X,
-                p.Y,
-                p.Width,
-                p.Height,
-                p.RotationDegrees,
-                p.Metadata,
-                p.Unit.PhysicalStatus,
-                IsBlockedOrConfirmed = p.Unit.UnitAllocations.Any(a =>
-                    a.Status == AllocationStatusConstants.Active &&
-                    (a.AgreementId != null ||
-                     (a.Reservation != null && (
-                         a.Reservation.Status == ReservationStatusConstants.Confirmed ||
-                         a.Reservation.Status == ReservationStatusConstants.Converted)))),
-                Pending = p.Unit.UnitAllocations.Any(a =>
-                    a.Status == AllocationStatusConstants.Active &&
-                    a.ReservationId != null &&
-                    (a.Reservation!.Status == ReservationStatusConstants.Pending ||
-                     a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
-                    a.Reservation.HoldUntil > now),
-                ExpiredHold = p.Unit.UnitAllocations.Any(a =>
-                    a.Status == AllocationStatusConstants.Active &&
-                    a.ReservationId != null &&
-                    (a.Reservation!.Status == ReservationStatusConstants.Pending ||
-                     a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
-                    a.Reservation.HoldUntil <= now)
-            })
-            .ToListAsync(ct);
-
-        return new FacilityMapDto
-        {
-            FacilityId = facilityId,
-            Units = data.Select(p => new FacilityMapUnitDto
-            {
-                UnitId = p.UnitId,
-                UnitCode = p.UnitCode,
-                UnitTypeId = p.UnitTypeId,
-                AreaId = p.AreaId,
-                Layer = p.Name,
-                X = p.X,
-                Y = p.Y,
-                Width = p.Width,
-                Height = p.Height,
-                RotationDegrees = p.RotationDegrees,
-                Status = DetermineUnitMapStatus(p.IsBlockedOrConfirmed, p.Pending, p.PhysicalStatus, p.ExpiredHold),
-                Metadata = p.Metadata
-            }).ToList()
-        };
-    }
 
     public async Task<PricingCalculationDto> CalculatePricingAsync(
         CalculatePricingRequest request,
@@ -449,20 +374,6 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
         };
     }
 
-    private static string DetermineUnitMapStatus(bool isBlockedOrConfirmed, bool pending, string physicalStatus, bool expiredHold)
-    {
-        if (isBlockedOrConfirmed) return FacilityMapStatusConstants.Occupied;
-        if (pending) return FacilityMapStatusConstants.PendingPayment;
-        if (physicalStatus == StorageUnitStatusConstants.Reserved && expiredHold) return FacilityMapStatusConstants.Available;
-
-        return physicalStatus switch
-        {
-            StorageUnitStatusConstants.Available => FacilityMapStatusConstants.Available,
-            StorageUnitStatusConstants.Occupied or StorageUnitStatusConstants.InUse => FacilityMapStatusConstants.Occupied,
-            StorageUnitStatusConstants.UnderMaintenance => FacilityMapStatusConstants.Maintenance,
-            _ => FacilityMapStatusConstants.Reserved
-        };
-    }
 
     private static DateOnly GetBusinessDate(string? timezone, DateTimeOffset utcNow)
     {
