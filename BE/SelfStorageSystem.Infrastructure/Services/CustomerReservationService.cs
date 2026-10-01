@@ -626,6 +626,7 @@ public class CustomerReservationService : ICustomerReservationService
             .Include(r => r.UnitAllocation)
                 .ThenInclude(ua => ua!.StorageUnit)
             .Include(r => r.Invoices)
+                .ThenInclude(i => i.Payments)
             .Include(r => r.PromotionRedemptions)
             .FirstOrDefaultAsync(r => r.Id == reservationId, cancellationToken);
 
@@ -665,10 +666,20 @@ public class CustomerReservationService : ICustomerReservationService
         }
 
         // Cancel associated open invoices
-        foreach (var invoice in reservation.Invoices.Where(i => i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft))
+        foreach (var invoice in reservation.Invoices)
         {
-            invoice.Status = InvoiceStatusConstants.Voided;
-            invoice.UpdatedAt = now;
+            if (invoice.Status == InvoiceStatusConstants.Open || invoice.Status == InvoiceStatusConstants.Draft)
+            {
+                invoice.Status = InvoiceStatusConstants.Voided;
+                invoice.UpdatedAt = now;
+            }
+
+            foreach (var payment in invoice.Payments.Where(p => p.Status == PaymentConstants.StatusPending))
+            {
+                payment.Status = PaymentConstants.StatusCancelled;
+                payment.FailureReason = "Reservation cancelled by customer.";
+                payment.UpdatedAt = now;
+            }
         }
 
         // Release reserved promotion redemptions

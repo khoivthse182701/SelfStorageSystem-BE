@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
    SelfStoragePRN222 - SQL Server 2019+
    Consolidated & corrected SQL Server script
    Source reviewed against:
@@ -890,7 +890,7 @@ CREATE TABLE [core].invoices (
     customer_id bigint NOT NULL REFERENCES [core].customer_profiles(user_id) ON DELETE NO ACTION,
     reservation_id bigint REFERENCES [core].reservations(id) ON DELETE NO ACTION,
     agreement_id bigint REFERENCES [core].rental_agreements(id) ON DELETE NO ACTION,
-    ticket_charge_proposal_id bigint UNIQUE REFERENCES [core].ticket_charge_proposals(id) ON DELETE NO ACTION,
+    ticket_charge_proposal_id bigint REFERENCES [core].ticket_charge_proposals(id) ON DELETE NO ACTION,
     billing_period nvarchar(64),
     issue_date date NOT NULL,
     due_date date NOT NULL,
@@ -922,6 +922,8 @@ CREATE UNIQUE INDEX invoices_agreement_billing_period_uidx
     WHERE agreement_id IS NOT NULL AND billing_period IS NOT NULL AND status <> 'voided';
 CREATE INDEX invoices_open_due_idx ON [core].invoices (due_date)
     WHERE status IN ('open', 'partially_paid', 'overdue');
+CREATE UNIQUE INDEX invoices_ticket_charge_proposal_id_uidx ON [core].invoices (ticket_charge_proposal_id)
+    WHERE ticket_charge_proposal_id IS NOT NULL;
 
 CREATE TABLE [core].invoice_lines (
     id bigint IDENTITY(1,1) PRIMARY KEY,
@@ -1168,7 +1170,7 @@ CREATE TABLE [core].access_events (
     occurred_at datetimeoffset(7) NOT NULL,
     result nvarchar(255) NOT NULL CHECK (result IN ('granted', 'denied', 'error')),
     reason nvarchar(255),
-    external_event_id nvarchar(255) UNIQUE,
+    external_event_id nvarchar(255),
     metadata nvarchar(max) NOT NULL DEFAULT N'{}' CHECK (ISJSON(metadata) = 1)
 );
 
@@ -1177,6 +1179,9 @@ CREATE INDEX access_events_credential_occurred_idx
     WHERE credential_id IS NOT NULL;
 CREATE INDEX access_events_point_occurred_idx
     ON [core].access_events (access_point_id, occurred_at DESC);
+CREATE UNIQUE INDEX access_events_external_event_id_uidx
+    ON [core].access_events (external_event_id)
+    WHERE external_event_id IS NOT NULL;
 
 CREATE TABLE [core].delinquency_cases (
     id bigint IDENTITY(1,1) PRIMARY KEY,
@@ -1229,7 +1234,7 @@ CREATE TABLE [core].notifications (
     sent_at datetimeoffset(7),
     attempts smallint NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     last_error nvarchar(255),
-    deduplication_key nvarchar(255) UNIQUE,
+    deduplication_key nvarchar(255),
     created_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
@@ -1237,6 +1242,9 @@ CREATE INDEX notifications_delivery_queue_idx
     ON [core].notifications (scheduled_at, id)
     WHERE status IN ('pending', 'failed');
 CREATE INDEX notifications_user_created_idx ON [core].notifications (user_id, created_at DESC);
+CREATE UNIQUE INDEX notifications_deduplication_key_uidx
+    ON [core].notifications (deduplication_key)
+    WHERE deduplication_key IS NOT NULL;
 
 CREATE TABLE [core].audit_logs (
     id bigint IDENTITY(1,1) PRIMARY KEY,
