@@ -46,21 +46,6 @@ public sealed class CustomerCatalogController(ICustomerCatalogService catalog) :
         return Ok(ApiResponse<IReadOnlyList<AvailableUnitDto>>.Ok(result));
     }
 
-    [HttpGet("facilities/{facilityId:long}/map")]
-    public async Task<IActionResult> GetMap(
-        long facilityId,
-        [FromQuery] long? areaId,
-        [FromQuery] string? floor,
-        CancellationToken ct)
-    {
-        var result = await catalog.GetFacilityMapAsync(facilityId, areaId, floor, ct);
-        if (result is null)
-        {
-            return NotFound(ApiResponse.Fail("Facility not found."));
-        }
-
-        return Ok(ApiResponse<FacilityMapDto>.Ok(result));
-    }
 
     [HttpPost("pricing/calculate")]
     public async Task<IActionResult> CalculatePricing(
