@@ -8,6 +8,7 @@ using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Customer.Payments;
 using SelfStorageSystem.Contracts.Customer.Reservations;
+using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
 using SelfStorageSystem.Domain.Exceptions;
 using SelfStorageSystem.Infrastructure.Persistence;
@@ -630,7 +631,7 @@ public class CustomerReservationAndPaymentTests
 
         var updatedAllocation = await dbContext.UnitAllocations.FindAsync(1L);
         Assert.NotNull(updatedAllocation);
-        Assert.Equal("cancelled", updatedAllocation.Status);
+        Assert.Equal(AllocationStatusConstants.Cancelled, updatedAllocation.Status);
     }
 
     [Fact]
