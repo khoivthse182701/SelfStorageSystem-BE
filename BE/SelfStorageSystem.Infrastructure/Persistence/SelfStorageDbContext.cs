@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using SelfStorageSystem.Domain.Entities;
@@ -136,7 +136,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__access_c__3213E83FDE7FE5B7");
 
-            entity.ToTable("access_credentials", "core");
+            entity.ToTable("access_credentials", "core", tb => tb.HasTrigger("trg_access_credentials_validate_scope"));
 
             entity.HasIndex(e => new { e.AgreementId, e.Status }, "access_credentials_agreement_idx");
 
@@ -1353,7 +1353,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__payments__3213E83F1EE84ED7");
 
-            entity.ToTable("payments", "core");
+            entity.ToTable("payments", "core", tb => tb.HasTrigger("trg_payments_refresh_invoices"));
 
             entity.HasIndex(e => e.IdempotencyKey, "UQ__payments__A7BA59F488C60FE3").IsUnique();
 
@@ -1561,7 +1561,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__promotio__3213E83F4B06451A");
 
-            entity.ToTable("promotion_redemptions", "core");
+            entity.ToTable("promotion_redemptions", "core", tb => tb.HasTrigger("trg_promotion_redemptions_validate_scope"));
 
             entity.HasIndex(e => new { e.CustomerId, e.PromotionId, e.Status }, "promotion_redemptions_customer_idx");
 
@@ -1742,7 +1742,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__rental_a__3213E83F74E7BFF0");
 
-            entity.ToTable("rental_agreements", "core");
+            entity.ToTable("rental_agreements", "core", tb => tb.HasTrigger("trg_agreement_status_transition"));
 
             entity.HasIndex(e => e.ReservationId, "UQ__rental_a__31384C28E1114D31").IsUnique();
 
@@ -2178,7 +2178,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__storage___3213E83F401545AC");
 
-            entity.ToTable("storage_units", "core");
+            entity.ToTable("storage_units", "core", tb => tb.HasTrigger("trg_storage_unit_status_transition"));
 
             entity.HasIndex(e => new { e.Id, e.FacilityId, e.UnitTypeId }, "UQ__storage___01486F6FDC4326A5").IsUnique();
 
