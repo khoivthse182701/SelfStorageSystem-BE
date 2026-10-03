@@ -162,4 +162,141 @@ public class CustomerStoredItemServiceTests
         Assert.Equal("Tài liệu kế toán", result.Items[0].ItemName);
         Assert.Equal(5, result.TotalItemsCount);
     }
+
+    [Fact]
+    public async Task DeclareStoredItems_AgreementNotActive_ThrowsAppValidationException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        db.RentalAgreements.Add(new RentalAgreement
+        {
+            Id = 200,
+            AgreementNo = "AGR-200",
+            CustomerId = 7,
+            FacilityId = 1,
+            ReservationId = 20,
+            PolicyVersionId = 1,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-60)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            MonthlyRateSnapshot = 1000000,
+            DepositSnapshot = 1000000,
+            DepositBalance = 1000000,
+            Status = "terminated",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var service = new CustomerStoredItemService(db);
+        var request = new DeclareStoredItemsRequest(new List<CreateStoredItemDto>
+        {
+            new CreateStoredItemDto("Hộp tài liệu", StoredItemCategoryConstants.Documents, null, 1, 500000m, null, null)
+        });
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppValidationException>(() => service.DeclareStoredItemsAsync(customerId: 7, agreementId: 200, request));
+    }
+
+    [Fact]
+    public async Task DeclareStoredItems_InvalidCategory_ThrowsAppValidationException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        db.RentalAgreements.Add(new RentalAgreement
+        {
+            Id = 100,
+            AgreementNo = "AGR-001",
+            CustomerId = 7,
+            FacilityId = 1,
+            ReservationId = 10,
+            PolicyVersionId = 1,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30)),
+            MonthlyRateSnapshot = 1000000,
+            DepositSnapshot = 1000000,
+            DepositBalance = 1000000,
+            Status = "active",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var service = new CustomerStoredItemService(db);
+        var request = new DeclareStoredItemsRequest(new List<CreateStoredItemDto>
+        {
+            new CreateStoredItemDto("Bàn làm việc", "invalid_category_123", null, 1, 500000m, null, null)
+        });
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppValidationException>(() => service.DeclareStoredItemsAsync(customerId: 7, agreementId: 100, request));
+    }
+
+    [Fact]
+    public async Task DeclareStoredItems_InvalidRiskClassification_ThrowsAppValidationException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        db.RentalAgreements.Add(new RentalAgreement
+        {
+            Id = 100,
+            AgreementNo = "AGR-001",
+            CustomerId = 7,
+            FacilityId = 1,
+            ReservationId = 10,
+            PolicyVersionId = 1,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30)),
+            MonthlyRateSnapshot = 1000000,
+            DepositSnapshot = 1000000,
+            DepositBalance = 1000000,
+            Status = "active",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var service = new CustomerStoredItemService(db);
+        var request = new DeclareStoredItemsRequest(new List<CreateStoredItemDto>
+        {
+            new CreateStoredItemDto("Tivi", StoredItemCategoryConstants.Electronics, null, 1, 500000m, "super_extreme_risk", null)
+        });
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppValidationException>(() => service.DeclareStoredItemsAsync(customerId: 7, agreementId: 100, request));
+    }
+
+    [Fact]
+    public async Task DeclareStoredItems_NegativeEstimatedValue_ThrowsAppValidationException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        db.RentalAgreements.Add(new RentalAgreement
+        {
+            Id = 100,
+            AgreementNo = "AGR-001",
+            CustomerId = 7,
+            FacilityId = 1,
+            ReservationId = 10,
+            PolicyVersionId = 1,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30)),
+            MonthlyRateSnapshot = 1000000,
+            DepositSnapshot = 1000000,
+            DepositBalance = 1000000,
+            Status = "active",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var service = new CustomerStoredItemService(db);
+        var request = new DeclareStoredItemsRequest(new List<CreateStoredItemDto>
+        {
+            new CreateStoredItemDto("Tivi", StoredItemCategoryConstants.Electronics, null, 1, -500000m, ItemRiskClassificationConstants.Standard, null)
+        });
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppValidationException>(() => service.DeclareStoredItemsAsync(customerId: 7, agreementId: 100, request));
+    }
 }
+

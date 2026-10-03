@@ -1,5 +1,27 @@
 namespace SelfStorageSystem.Domain.Constants;
 
+public static class TicketConstants
+{
+    public const string TicketPrefix = "TCK-";
+    public const int RandomSuffixLength = 6;
+    public const string DefaultFacilityName = "Unknown";
+    public const string DefaultCustomerResolution = "Confirmed and resolved by customer.";
+    public const string CustomerSupportTicketsRoute = "api/customer/support-tickets";
+
+    public static string GenerateTicketNo()
+    {
+        var dateStr = DateTimeOffset.UtcNow.ToString("yyyyMMdd");
+        var randomStr = Guid.NewGuid().ToString()[..RandomSuffixLength].ToUpper();
+        return $"{TicketPrefix}{dateStr}-{randomStr}";
+    }
+}
+
+public static class TicketRatingConstants
+{
+    public const int MinScore = 1;
+    public const int MaxScore = 5;
+}
+
 public static class TicketCategoryConstants
 {
     public const string Unit = "unit";
@@ -37,8 +59,11 @@ public static class TicketDisplayStatusConstants
 {
     public const string Reported = "Reported";
     public const string Investigating = "Investigating";
+    public const string WaitingForCustomer = "Waiting for customer";
+    public const string WaitingForMaintenance = "Waiting for maintenance";
     public const string Assessed = "Assessed";
     public const string Resolved = "Resolved";
     public const string Closed = "Closed";
     public const string Cancelled = "Cancelled";
 }
+
