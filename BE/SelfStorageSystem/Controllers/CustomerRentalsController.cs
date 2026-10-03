@@ -14,13 +14,16 @@ namespace SelfStorageSystem.Controllers;
 public class CustomerRentalsController : ControllerBase
 {
     private readonly ICustomerRentalService _rentalService;
+    private readonly ICustomerStoredItemService _itemService;
     private readonly ILogger<CustomerRentalsController> _logger;
 
     public CustomerRentalsController(
         ICustomerRentalService rentalService,
+        ICustomerStoredItemService itemService,
         ILogger<CustomerRentalsController> logger)
     {
         _rentalService = rentalService;
+        _itemService = itemService;
         _logger = logger;
     }
 
@@ -109,6 +112,51 @@ public class CustomerRentalsController : ControllerBase
 
         var handover = await _rentalService.GetHandoverRecordAsync(customerId, agreementId, cancellationToken);
         return Ok(ApiResponse<HandoverRecordDto>.Ok(handover, "Retrieved handover record successfully."));
+    }
+
+    /// <summary>
+    /// Declares stored items and item risk classifications in a rental storage unit.
+    /// </summary>
+    [HttpPost("{agreementId:long}/items")]
+    [ProducesResponseType(typeof(ApiResponse<RentalStoredItemsResponseDto>), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeclareStoredItems(
+        [FromRoute] long agreementId,
+        [FromBody] DeclareStoredItemsRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _itemService.DeclareStoredItemsAsync(customerId, agreementId, request, cancellationToken);
+        return CreatedAtAction(
+            nameof(GetDeclaredStoredItems), 
+            new { agreementId = result.AgreementId }, 
+            ApiResponse<RentalStoredItemsResponseDto>.Ok(result, "Declared stored items successfully."));
+    }
+
+    /// <summary>
+    /// Retrieves the list of declared stored items for a specific rental agreement.
+    /// </summary>
+    [HttpGet("{agreementId:long}/items")]
+    [ProducesResponseType(typeof(ApiResponse<RentalStoredItemsResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetDeclaredStoredItems(
+        [FromRoute] long agreementId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _itemService.GetDeclaredStoredItemsAsync(customerId, agreementId, cancellationToken);
+        return Ok(ApiResponse<RentalStoredItemsResponseDto>.Ok(result, "Retrieved declared stored items successfully."));
     }
 
     private bool TryGetCustomerId(out long customerId)
