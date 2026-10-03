@@ -2281,7 +2281,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__support___3213E83F1DA69E75");
 
-            entity.ToTable("support_tickets", "core");
+            entity.ToTable("support_tickets", "core", tb => tb.HasTrigger("trg_support_tickets_validate_scope"));
 
             entity.HasIndex(e => e.TicketNo, "UQ__support___D596C19626217F01").IsUnique();
 
@@ -2362,7 +2362,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__ticket_a__3213E83FD8FED18D");
 
-            entity.ToTable("ticket_assignments", "core");
+            entity.ToTable("ticket_assignments", "core", tb => tb.HasTrigger("trg_ticket_assignments_validate_scope"));
 
             entity.HasIndex(e => e.AssignedBy, "ticket_assignments_assigned_by_idx").HasFilter("([assigned_by] IS NOT NULL)");
 

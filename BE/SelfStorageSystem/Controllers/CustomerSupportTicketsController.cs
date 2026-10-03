@@ -9,7 +9,7 @@ using SelfStorageSystem.Domain.Constants;
 namespace SelfStorageSystem.Controllers;
 
 [ApiController]
-[Route("api/customer/support-tickets")]
+[Route(TicketConstants.CustomerSupportTicketsRoute)]
 [Authorize(Roles = RoleConstants.Customer)]
 public class CustomerSupportTicketsController : ControllerBase
 {
@@ -122,7 +122,7 @@ public class CustomerSupportTicketsController : ControllerBase
         }
 
         await _ticketService.ConfirmAndRateTicketAsync(customerId, id, request, cancellationToken);
-        return Ok(ApiResponse<object>.Ok(null, "Ticket confirmed and rated successfully."));
+        return Ok(ApiResponse.Ok("Ticket confirmed and rated successfully."));
     }
 
     private bool TryGetCustomerId(out long customerId)

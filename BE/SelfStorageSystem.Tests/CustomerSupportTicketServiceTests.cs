@@ -248,4 +248,95 @@ public class CustomerSupportTicketServiceTests
         // Act & Assert
         await Assert.ThrowsAsync<AppValidationException>(() => service.ConfirmAndRateTicketAsync(customerId: 100, ticketId: 1, request));
     }
+
+    [Fact]
+    public async Task CreateTicket_StorageUnitNotBelongToAgreement_ThrowsAppException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        db.Facilities.Add(new Facility
+        {
+            Id = 1,
+            Code = "FAC-01",
+            Name = "Facility 1",
+            AddressLine = "123 Street",
+            City = "HCM",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        db.RentalAgreements.Add(new RentalAgreement
+        {
+            Id = 10,
+            AgreementNo = "AGR-001",
+            CustomerId = 100,
+            FacilityId = 1,
+            Status = "active",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        db.StorageUnits.Add(new StorageUnit
+        {
+            Id = 20,
+            FacilityId = 1,
+            UnitCode = "U-20",
+            PhysicalStatus = "available",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        // Note: No UnitAllocation linking Agreement 10 and Unit 20
+        await db.SaveChangesAsync();
+
+        var service = new CustomerSupportTicketService(db);
+        var request = new CreateSupportTicketRequest(
+            FacilityId: 1,
+            AgreementId: 10,
+            StorageUnitId: 20,
+            Category: TicketCategoryConstants.Unit,
+            Priority: TicketPriorityConstants.Normal,
+            Subject: "Issue with unit",
+            Description: "Unit door stuck",
+            Attachments: null
+        );
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppValidationException>(() => service.CreateTicketAsync(customerId: 100, request));
+    }
+
+    [Fact]
+    public async Task ConfirmAndRateTicket_MissingResolution_SetsDefaultResolutionToPassDbConstraint()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        db.SupportTickets.Add(new SupportTicket
+        {
+            Id = 1,
+            TicketNo = "TCK-001",
+            CustomerId = 100,
+            FacilityId = 1,
+            Category = TicketCategoryConstants.Access,
+            Priority = TicketPriorityConstants.Normal,
+            Subject = "Test",
+            Description = "Initial",
+            Status = TicketStatusConstants.Resolved,
+            Resolution = null, // Resolution missing
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var service = new CustomerSupportTicketService(db);
+        var request = new ConfirmAndRateTicketRequest(Score: 5, Comment: "Resolved!");
+
+        // Act
+        await service.ConfirmAndRateTicketAsync(customerId: 100, ticketId: 1, request);
+
+        // Assert
+        var updatedTicket = await db.SupportTickets.FindAsync(1L);
+        Assert.NotNull(updatedTicket);
+        Assert.Equal(TicketStatusConstants.Closed, updatedTicket.Status);
+        Assert.NotNull(updatedTicket.Resolution);
+        Assert.Equal(TicketConstants.DefaultCustomerResolution, updatedTicket.Resolution);
+        Assert.NotNull(updatedTicket.ResolvedAt);
+    }
 }

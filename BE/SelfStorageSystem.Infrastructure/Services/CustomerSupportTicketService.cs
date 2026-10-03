@@ -40,7 +40,15 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
                 throw AppException.FromError(TicketErrors.StorageUnitNotFound);
         }
 
-        var ticketNo = $"TCK-{DateTimeOffset.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString()[..6].ToUpper()}";
+        if (request.AgreementId.HasValue && request.StorageUnitId.HasValue)
+        {
+            var unitBelongsToAgreement = await _dbContext.UnitAllocations
+                .AnyAsync(ua => ua.AgreementId == request.AgreementId.Value && ua.StorageUnitId == request.StorageUnitId.Value, cancellationToken);
+            if (!unitBelongsToAgreement)
+                throw AppException.FromError(TicketErrors.StorageUnitNotBelongToAgreement);
+        }
+
+        var ticketNo = TicketConstants.GenerateTicketNo();
 
         var ticket = new SupportTicket
         {
@@ -70,9 +78,8 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             
             foreach (var att in request.Attachments)
             {
-                initialMessage.TicketAttachmentMessages.Add(new TicketAttachment
+                var attachment = new TicketAttachment
                 {
-                    TicketId = ticket.Id,
                     UploadedBy = customerId,
                     FileName = att.FileName,
                     MimeType = att.MimeType,
@@ -80,7 +87,9 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
                     ObjectUrl = att.ObjectUrl,
                     Sha256 = att.Sha256,
                     CreatedAt = DateTimeOffset.UtcNow
-                });
+                };
+                initialMessage.TicketAttachmentMessages.Add(attachment);
+                ticket.TicketAttachments.Add(attachment);
             }
             ticket.TicketMessages.Add(initialMessage);
         }
@@ -94,7 +103,7 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             Id: ticket.Id,
             TicketNo: ticket.TicketNo,
             FacilityId: ticket.FacilityId,
-            FacilityName: facilityName ?? "Unknown",
+            FacilityName: facilityName ?? TicketConstants.DefaultFacilityName,
             Category: ticket.Category,
             Priority: ticket.Priority,
             Subject: ticket.Subject,
@@ -146,10 +155,10 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             .Include(t => t.ServiceRating)
             .Include(t => t.TicketAttachments.Where(a => a.MessageId == null))
             .Include(t => t.TicketMessages.Where(m => !m.IsInternal))
-                .ThenInclude(m => m.AuthorUser)
+                .ThenInclude(m => m.AuthorUser!)
                     .ThenInclude(u => u.CustomerProfile)
             .Include(t => t.TicketMessages.Where(m => !m.IsInternal))
-                .ThenInclude(m => m.AuthorUser)
+                .ThenInclude(m => m.AuthorUser!)
                     .ThenInclude(u => u.EmployeeProfile)
             .Include(t => t.TicketMessages.Where(m => !m.IsInternal))
                 .ThenInclude(m => m.TicketAttachmentMessages)
@@ -163,7 +172,7 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             TicketId: m.TicketId,
             AuthorUserId: m.AuthorUserId,
             AuthorName: m.AuthorUser?.CustomerProfile?.FullName ?? m.AuthorUser?.EmployeeProfile?.FullName,
-            AuthorRole: m.AuthorUser?.CustomerProfile != null ? "Customer" : m.AuthorUser?.EmployeeProfile != null ? "Staff" : null,
+            AuthorRole: m.AuthorUser?.CustomerProfile != null ? RoleConstants.CustomerDisplay : m.AuthorUser?.EmployeeProfile != null ? RoleConstants.StaffDisplay : null,
             Body: m.Body,
             CreatedAt: m.CreatedAt,
             Attachments: m.TicketAttachmentMessages.Select(a => new TicketAttachmentDto(
@@ -285,7 +294,7 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             TicketId: message.TicketId,
             AuthorUserId: message.AuthorUserId,
             AuthorName: userProfile?.FullName,
-            AuthorRole: "Customer",
+            AuthorRole: RoleConstants.CustomerDisplay,
             Body: message.Body,
             CreatedAt: message.CreatedAt,
             Attachments: message.TicketAttachmentMessages.Select(a => new TicketAttachmentDto(
@@ -304,7 +313,7 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
 
     public async Task ConfirmAndRateTicketAsync(long customerId, long ticketId, ConfirmAndRateTicketRequest request, CancellationToken cancellationToken = default)
     {
-        if (request.Score < 1 || request.Score > 5)
+        if (request.Score < TicketRatingConstants.MinScore || request.Score > TicketRatingConstants.MaxScore)
             throw AppException.FromError(TicketErrors.InvalidRatingScore);
 
         var ticket = await _dbContext.SupportTickets
@@ -326,6 +335,10 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
         {
              ticket.ResolvedAt = DateTimeOffset.UtcNow;
         }
+        if (string.IsNullOrWhiteSpace(ticket.Resolution))
+        {
+             ticket.Resolution = TicketConstants.DefaultCustomerResolution;
+        }
 
         var rating = new ServiceRating
         {
@@ -344,8 +357,8 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
     {
         TicketStatusConstants.Open => TicketDisplayStatusConstants.Reported,
         TicketStatusConstants.InProgress => TicketDisplayStatusConstants.Investigating,
-        TicketStatusConstants.WaitingForCustomer => TicketDisplayStatusConstants.Investigating,
-        TicketStatusConstants.WaitingForMaintenance => TicketDisplayStatusConstants.Investigating,
+        TicketStatusConstants.WaitingForCustomer => TicketDisplayStatusConstants.WaitingForCustomer,
+        TicketStatusConstants.WaitingForMaintenance => TicketDisplayStatusConstants.WaitingForMaintenance,
         TicketStatusConstants.Resolved => TicketDisplayStatusConstants.Resolved,
         TicketStatusConstants.Closed => TicketDisplayStatusConstants.Closed,
         TicketStatusConstants.Cancelled => TicketDisplayStatusConstants.Cancelled,
