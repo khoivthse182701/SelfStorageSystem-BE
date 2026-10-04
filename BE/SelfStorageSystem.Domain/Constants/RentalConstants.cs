@@ -64,6 +64,40 @@ public static class AuthorizedMemberStatusConstants
     public const string Revoked = "revoked";
 }
 
+public static class InspectionStatusConstants
+{
+    public const string Passed = "passed";
+    public const string Completed = "completed";
+    public const string Failed = "failed";
+}
+
+public static class MaintenanceWorkOrderStatusConstants
+{
+    public const string Open = "open";
+    public const string InProgress = "in_progress";
+    public const string Completed = "completed";
+    public const string Cancelled = "cancelled";
+}
+
+public static class ProposalStatusConstants
+{
+    public const string Pending = "pending";
+    public const string Approved = "approved";
+    public const string Rejected = "rejected";
+}
+
+public static class StaffConstants
+{
+    public const string AgreementPrefix = "AGR-";
+    public const string WorkOrderPrefix = "MWO-";
+    public const string DefaultCheckInCondition = "Good / Ready for Move-In";
+    public const string DefaultCheckInSummary = "Check-in inspection completed by staff.";
+    public const string DefaultMoveOutSummary = "Check-out return inspection performed by staff.";
+    public const string DefaultNotApplicable = "N/A";
+    public const string DefaultCustomerName = "Customer";
+    public const string DefaultCredentialStatusNone = "none";
+}
+
 public static class RentalSuspensionReasons
 {
     public const string OverdueDebtExceeded = "Access is currently suspended due to overdue payment exceeding 1 day (BR-REN-03). Please settle your overdue invoices.";

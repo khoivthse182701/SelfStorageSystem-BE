@@ -265,7 +265,7 @@ public class FacilityStaffService : IFacilityStaffService
         var now = DateTimeOffset.UtcNow;
         if (agreement == null)
         {
-            var agreementNo = $"AGR-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString()[..6].ToUpper()}";
+            var agreementNo = $"{StaffConstants.AgreementPrefix}{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString()[..6].ToUpper()}";
             agreement = new RentalAgreement
             {
                 AgreementNo = agreementNo,
@@ -306,9 +306,9 @@ public class FacilityStaffService : IFacilityStaffService
             AgreementId = agreement.Id,
             InspectedBy = employee.UserId,
             InspectionType = request.HandoverType ?? HandoverTypeConstants.CheckIn,
-            Status = "passed",
-            OverallCondition = request.OverallCondition ?? "Good / Ready for Move-In",
-            Summary = request.InspectionSummary ?? "Check-in inspection completed by staff.",
+            Status = InspectionStatusConstants.Passed,
+            OverallCondition = request.OverallCondition ?? StaffConstants.DefaultCheckInCondition,
+            Summary = request.InspectionSummary ?? StaffConstants.DefaultCheckInSummary,
             InspectedAt = now,
             CreatedAt = now
         };
@@ -402,14 +402,14 @@ public class FacilityStaffService : IFacilityStaffService
         return list.Select(m =>
         {
             var unitCode = m.Agreement.UnitAllocations
-                .FirstOrDefault(u => u.Status == AllocationStatusConstants.Active)?.StorageUnit?.UnitCode ?? "N/A";
+                .FirstOrDefault(u => u.Status == AllocationStatusConstants.Active)?.StorageUnit?.UnitCode ?? StaffConstants.DefaultNotApplicable;
 
             return new StaffMoveOutSummaryDto(
                 Id: m.Id,
                 AgreementId: m.AgreementId,
                 AgreementNo: m.Agreement.AgreementNo,
                 CustomerId: m.RequestedBy,
-                CustomerName: m.Agreement.Customer?.FullName ?? "Customer",
+                CustomerName: m.Agreement.Customer?.FullName ?? StaffConstants.DefaultCustomerName,
                 FacilityId: m.Agreement.FacilityId,
                 UnitCode: unitCode,
                 RequestedMoveOutDate: m.RequestedMoveOutDate,
@@ -451,9 +451,9 @@ public class FacilityStaffService : IFacilityStaffService
             AgreementId = agreement.Id,
             InspectedBy = employee.UserId,
             InspectionType = HandoverTypeConstants.CheckOut,
-            Status = "completed",
+            Status = InspectionStatusConstants.Completed,
             OverallCondition = request.OverallCondition,
-            Summary = request.Summary ?? "Check-out return inspection performed by staff.",
+            Summary = request.Summary ?? StaffConstants.DefaultMoveOutSummary,
             InspectedAt = now,
             CreatedAt = now
         };
@@ -657,7 +657,7 @@ public class FacilityStaffService : IFacilityStaffService
             ProposedBy = employee.UserId,
             Description = request.Description.Trim(),
             Amount = request.Amount,
-            Status = "pending",
+            Status = ProposalStatusConstants.Pending,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
@@ -767,7 +767,7 @@ public class FacilityStaffService : IFacilityStaffService
         if (unit == null)
             throw AppException.FromError(StaffErrors.UnitNotFound);
 
-        var workOrderNo = $"MWO-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString()[..6].ToUpper()}";
+        var workOrderNo = $"{StaffConstants.WorkOrderPrefix}{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString()[..6].ToUpper()}";
 
         var order = new MaintenanceWorkOrder
         {
@@ -780,7 +780,7 @@ public class FacilityStaffService : IFacilityStaffService
             Description = request.Description.Trim(),
             Priority = request.Priority.ToLowerInvariant(),
             BlocksBooking = request.BlocksBooking,
-            Status = "open",
+            Status = MaintenanceWorkOrderStatusConstants.Open,
             EstimatedCost = request.EstimatedCost,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
@@ -844,16 +844,16 @@ public class FacilityStaffService : IFacilityStaffService
             .Select(g =>
             {
                 var ag = g.Key;
-                var unitCode = ag.UnitAllocations.FirstOrDefault(u => u.Status == AllocationStatusConstants.Active)?.StorageUnit?.UnitCode ?? "N/A";
+                var unitCode = ag.UnitAllocations.FirstOrDefault(u => u.Status == AllocationStatusConstants.Active)?.StorageUnit?.UnitCode ?? StaffConstants.DefaultNotApplicable;
                 var storageUnitId = ag.UnitAllocations.FirstOrDefault(u => u.Status == AllocationStatusConstants.Active)?.StorageUnitId ?? 0;
                 var totalBalance = g.Sum(inv => inv.TotalAmount - inv.PaidAmount);
-                var credStatus = ag.AccessCredentials.FirstOrDefault(c => c.CredentialType == CredentialTypeConstants.Pin)?.Status ?? "none";
+                var credStatus = ag.AccessCredentials.FirstOrDefault(c => c.CredentialType == CredentialTypeConstants.Pin)?.Status ?? StaffConstants.DefaultCredentialStatusNone;
 
                 return new OverdueAgreementDto(
                     AgreementId: ag.Id,
                     AgreementNo: ag.AgreementNo,
                     CustomerId: ag.CustomerId,
-                    CustomerName: ag.Customer?.FullName ?? "Customer",
+                    CustomerName: ag.Customer?.FullName ?? StaffConstants.DefaultCustomerName,
                     CustomerPhone: ag.Customer?.User.PhoneNumber,
                     StorageUnitId: storageUnitId,
                     UnitCode: unitCode,
