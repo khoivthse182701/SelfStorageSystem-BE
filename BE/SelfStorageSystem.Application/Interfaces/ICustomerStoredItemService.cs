@@ -14,4 +14,17 @@ public interface ICustomerStoredItemService
         long customerId,
         long agreementId,
         CancellationToken cancellationToken = default);
+
+    Task<StoredItemDto> UpdateStoredItemAsync(
+        long customerId,
+        long agreementId,
+        long itemId,
+        UpdateStoredItemRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteStoredItemAsync(
+        long customerId,
+        long agreementId,
+        long itemId,
+        CancellationToken cancellationToken = default);
 }

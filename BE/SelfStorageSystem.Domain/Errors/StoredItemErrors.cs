@@ -31,4 +31,16 @@ public static class StoredItemErrors
     public static readonly Error ProhibitedItem = Error.Validation(
         "StoredItem.ProhibitedItem",
         "Hazardous, flammable, explosive, or illegal items are strictly prohibited from storage.");
+
+    public static readonly Error AgreementNotActive = Error.Validation(
+        "StoredItem.AgreementNotActive",
+        "Stored items can only be declared for active rental agreements.");
+
+    public static readonly Error ItemNotFound = Error.NotFound(
+        "StoredItem.NotFound",
+        "Stored item was not found or does not belong to this agreement.");
+
+    public static readonly Error InvalidEstimatedValue = Error.Validation(
+        "StoredItem.InvalidEstimatedValue",
+        "Estimated value cannot be negative.");
 }

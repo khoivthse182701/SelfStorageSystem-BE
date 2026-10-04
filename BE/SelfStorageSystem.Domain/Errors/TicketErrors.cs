@@ -19,6 +19,11 @@ public static class TicketErrors
     public static readonly Error StorageUnitNotBelongToAgreement =
         Error.Validation("Ticket.StorageUnitNotBelongToAgreement", "Storage unit does not belong to the specified rental agreement.");
 
+    public static readonly Error InvalidCategory =
+        Error.Validation("Ticket.InvalidCategory", "Invalid ticket category specified.");
+
+    public static readonly Error InvalidPriority =
+        Error.Validation("Ticket.InvalidPriority", "Invalid ticket priority specified.");
 
     public static readonly Error TicketClosed =
         Error.Validation("Ticket.TicketClosed", "Cannot perform this action on a ticket that is closed or cancelled.");

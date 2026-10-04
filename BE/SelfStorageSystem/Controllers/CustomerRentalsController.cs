@@ -159,6 +159,50 @@ public class CustomerRentalsController : ControllerBase
         return Ok(ApiResponse<RentalStoredItemsResponseDto>.Ok(result, "Retrieved declared stored items successfully."));
     }
 
+    /// <summary>
+    /// Updates an existing stored item in a rental storage unit.
+    /// </summary>
+    [HttpPut("{agreementId:long}/items/{itemId:long}")]
+    [ProducesResponseType(typeof(ApiResponse<StoredItemDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateStoredItem(
+        [FromRoute] long agreementId,
+        [FromRoute] long itemId,
+        [FromBody] UpdateStoredItemRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _itemService.UpdateStoredItemAsync(customerId, agreementId, itemId, request, cancellationToken);
+        return Ok(ApiResponse<StoredItemDto>.Ok(result, "Stored item updated successfully."));
+    }
+
+    /// <summary>
+    /// Deletes a stored item from a rental storage unit.
+    /// </summary>
+    [HttpDelete("{agreementId:long}/items/{itemId:long}")]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteStoredItem(
+        [FromRoute] long agreementId,
+        [FromRoute] long itemId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        await _itemService.DeleteStoredItemAsync(customerId, agreementId, itemId, cancellationToken);
+        return Ok(ApiResponse.Ok("Stored item deleted successfully."));
+    }
+
     private bool TryGetCustomerId(out long customerId)
     {
         customerId = 0;

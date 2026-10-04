@@ -50,6 +50,7 @@ public static class TicketStatusConstants
     public const string InProgress = "in_progress";
     public const string WaitingForCustomer = "waiting_for_customer";
     public const string WaitingForMaintenance = "waiting_for_maintenance";
+    public const string Assessed = "assessed";
     public const string Resolved = "resolved";
     public const string Closed = "closed";
     public const string Cancelled = "cancelled";

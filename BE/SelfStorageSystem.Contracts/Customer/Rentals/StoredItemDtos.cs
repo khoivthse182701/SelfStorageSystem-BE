@@ -14,6 +14,16 @@ public record DeclareStoredItemsRequest(
     List<CreateStoredItemDto> Items
 );
 
+public record UpdateStoredItemRequest(
+    string ItemName,
+    string Category,
+    string? Description,
+    int Quantity,
+    decimal? EstimatedValue,
+    string? RiskClassification,
+    string? PhotoUrl
+);
+
 public record StoredItemDto(
     long Id,
     long AgreementId,

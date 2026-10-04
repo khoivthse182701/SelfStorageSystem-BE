@@ -30,11 +30,14 @@ public class CustomerStoredItemService : ICustomerStoredItemService
         DeclareStoredItemsRequest request,
         CancellationToken cancellationToken = default)
     {
-        var agreementExists = await _dbContext.RentalAgreements
-            .AnyAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+        var agreement = await _dbContext.RentalAgreements
+            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
 
-        if (!agreementExists)
+        if (agreement == null)
             throw AppException.FromError(StoredItemErrors.AgreementNotFound);
+
+        if (!string.Equals(agreement.Status, RentalAgreementStatusConstants.Active, StringComparison.OrdinalIgnoreCase))
+            throw AppException.FromError(StoredItemErrors.AgreementNotActive);
 
         if (request.Items == null || !request.Items.Any())
             throw AppException.FromError(StoredItemErrors.EmptyItemsList);
@@ -50,15 +53,24 @@ public class CustomerStoredItemService : ICustomerStoredItemService
             if (itemDto.Quantity <= 0)
                 throw AppException.FromError(StoredItemErrors.InvalidQuantity);
 
+            if (itemDto.EstimatedValue.HasValue && itemDto.EstimatedValue < 0)
+                throw AppException.FromError(StoredItemErrors.InvalidEstimatedValue);
+
             CheckProhibitedContent(itemDto.ItemName, itemDto.Description);
 
             var category = string.IsNullOrWhiteSpace(itemDto.Category) 
                 ? StoredItemCategoryConstants.Other 
                 : itemDto.Category.ToLowerInvariant();
 
+            if (!StoredItemCategoryConstants.All.Contains(category))
+                throw AppException.FromError(StoredItemErrors.InvalidCategory);
+
             var riskClassification = string.IsNullOrWhiteSpace(itemDto.RiskClassification)
                 ? ItemRiskClassificationConstants.Standard
                 : itemDto.RiskClassification.ToLowerInvariant();
+
+            if (!ItemRiskClassificationConstants.All.Contains(riskClassification))
+                throw AppException.FromError(StoredItemErrors.InvalidRiskClassification);
 
             itemsToAdd.Add(new StoredItem
             {
@@ -121,6 +133,104 @@ public class CustomerStoredItemService : ICustomerStoredItemService
             TotalEstimatedValue: totalValue,
             Items: itemDtos
         );
+    }
+
+    public async Task<StoredItemDto> UpdateStoredItemAsync(
+        long customerId,
+        long agreementId,
+        long itemId,
+        UpdateStoredItemRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var agreement = await _dbContext.RentalAgreements
+            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (agreement == null)
+            throw AppException.FromError(StoredItemErrors.AgreementNotFound);
+
+        if (!string.Equals(agreement.Status, RentalAgreementStatusConstants.Active, StringComparison.OrdinalIgnoreCase))
+            throw AppException.FromError(StoredItemErrors.AgreementNotActive);
+
+        var item = await _dbContext.StoredItems
+            .FirstOrDefaultAsync(i => i.Id == itemId && i.AgreementId == agreementId, cancellationToken);
+
+        if (item == null)
+            throw AppException.FromError(StoredItemErrors.ItemNotFound);
+
+        if (string.IsNullOrWhiteSpace(request.ItemName))
+            throw AppException.FromError(StoredItemErrors.EmptyItemName);
+
+        if (request.Quantity <= 0)
+            throw AppException.FromError(StoredItemErrors.InvalidQuantity);
+
+        if (request.EstimatedValue.HasValue && request.EstimatedValue < 0)
+            throw AppException.FromError(StoredItemErrors.InvalidEstimatedValue);
+
+        CheckProhibitedContent(request.ItemName, request.Description);
+
+        var category = string.IsNullOrWhiteSpace(request.Category)
+            ? StoredItemCategoryConstants.Other
+            : request.Category.ToLowerInvariant();
+
+        if (!StoredItemCategoryConstants.All.Contains(category))
+            throw AppException.FromError(StoredItemErrors.InvalidCategory);
+
+        var riskClassification = string.IsNullOrWhiteSpace(request.RiskClassification)
+            ? ItemRiskClassificationConstants.Standard
+            : request.RiskClassification.ToLowerInvariant();
+
+        if (!ItemRiskClassificationConstants.All.Contains(riskClassification))
+            throw AppException.FromError(StoredItemErrors.InvalidRiskClassification);
+
+        item.ItemName = request.ItemName.Trim();
+        item.Category = category;
+        item.Description = request.Description?.Trim();
+        item.Quantity = request.Quantity;
+        item.EstimatedValue = request.EstimatedValue;
+        item.RiskClassification = riskClassification;
+        item.PhotoUrl = request.PhotoUrl?.Trim();
+        item.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new StoredItemDto(
+            Id: item.Id,
+            AgreementId: item.AgreementId,
+            ItemName: item.ItemName,
+            Category: item.Category,
+            Description: item.Description,
+            Quantity: item.Quantity,
+            EstimatedValue: item.EstimatedValue,
+            RiskClassification: item.RiskClassification,
+            PhotoUrl: item.PhotoUrl,
+            DeclaredAt: item.DeclaredAt,
+            UpdatedAt: item.UpdatedAt
+        );
+    }
+
+    public async Task DeleteStoredItemAsync(
+        long customerId,
+        long agreementId,
+        long itemId,
+        CancellationToken cancellationToken = default)
+    {
+        var agreement = await _dbContext.RentalAgreements
+            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (agreement == null)
+            throw AppException.FromError(StoredItemErrors.AgreementNotFound);
+
+        if (!string.Equals(agreement.Status, RentalAgreementStatusConstants.Active, StringComparison.OrdinalIgnoreCase))
+            throw AppException.FromError(StoredItemErrors.AgreementNotActive);
+
+        var item = await _dbContext.StoredItems
+            .FirstOrDefaultAsync(i => i.Id == itemId && i.AgreementId == agreementId, cancellationToken);
+
+        if (item == null)
+            throw AppException.FromError(StoredItemErrors.ItemNotFound);
+
+        _dbContext.StoredItems.Remove(item);
+        await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
     private static void CheckProhibitedContent(string name, string? description)

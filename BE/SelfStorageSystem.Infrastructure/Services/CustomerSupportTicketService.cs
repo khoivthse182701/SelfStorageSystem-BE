@@ -48,6 +48,17 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
                 throw AppException.FromError(TicketErrors.StorageUnitNotBelongToAgreement);
         }
 
+        var category = request.Category?.ToLowerInvariant() ?? string.Empty;
+        if (!TicketCategoryConstants.All.Contains(category))
+            throw AppException.FromError(TicketErrors.InvalidCategory);
+
+        var priority = string.IsNullOrWhiteSpace(request.Priority)
+            ? TicketPriorityConstants.Normal
+            : request.Priority.ToLowerInvariant();
+
+        if (!TicketPriorityConstants.All.Contains(priority))
+            throw AppException.FromError(TicketErrors.InvalidPriority);
+
         var ticketNo = TicketConstants.GenerateTicketNo();
 
         var ticket = new SupportTicket
@@ -57,8 +68,8 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             FacilityId = request.FacilityId,
             AgreementId = request.AgreementId,
             StorageUnitId = request.StorageUnitId,
-            Category = request.Category,
-            Priority = request.Priority ?? TicketPriorityConstants.Normal,
+            Category = category,
+            Priority = priority,
             Subject = request.Subject,
             Description = request.Description,
             Status = TicketStatusConstants.Open,
@@ -68,14 +79,6 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
 
         if (request.Attachments != null && request.Attachments.Any())
         {
-            var initialMessage = new TicketMessage
-            {
-                AuthorUserId = customerId,
-                Body = request.Description,
-                IsInternal = false,
-                CreatedAt = DateTimeOffset.UtcNow
-            };
-            
             foreach (var att in request.Attachments)
             {
                 var attachment = new TicketAttachment
@@ -88,10 +91,8 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
                     Sha256 = att.Sha256,
                     CreatedAt = DateTimeOffset.UtcNow
                 };
-                initialMessage.TicketAttachmentMessages.Add(attachment);
                 ticket.TicketAttachments.Add(attachment);
             }
-            ticket.TicketMessages.Add(initialMessage);
         }
 
         _dbContext.SupportTickets.Add(ticket);
@@ -359,6 +360,7 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
         TicketStatusConstants.InProgress => TicketDisplayStatusConstants.Investigating,
         TicketStatusConstants.WaitingForCustomer => TicketDisplayStatusConstants.WaitingForCustomer,
         TicketStatusConstants.WaitingForMaintenance => TicketDisplayStatusConstants.WaitingForMaintenance,
+        TicketStatusConstants.Assessed => TicketDisplayStatusConstants.Assessed,
         TicketStatusConstants.Resolved => TicketDisplayStatusConstants.Resolved,
         TicketStatusConstants.Closed => TicketDisplayStatusConstants.Closed,
         TicketStatusConstants.Cancelled => TicketDisplayStatusConstants.Cancelled,
