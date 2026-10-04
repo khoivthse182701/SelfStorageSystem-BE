@@ -456,4 +456,306 @@ public class CustomerRentalService : ICustomerRentalService
             }
         }
     }
+
+    public async Task<MoveOutResponseDto> RequestMoveOutAsync(
+        long customerId,
+        long agreementId,
+        RequestMoveOutRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var agreement = await _dbContext.RentalAgreements
+            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (agreement == null)
+            throw AppException.FromError(RentalErrors.AgreementNotFound);
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (request.RequestedMoveOutDate < today)
+            throw AppException.FromError(RentalErrors.InvalidMoveOutDate);
+
+        var existingPendingMoveOut = await _dbContext.MoveOutRequests
+            .AnyAsync(m => m.AgreementId == agreementId && 
+                           (m.Status == MoveOutStatusConstants.Requested || m.Status == MoveOutStatusConstants.Scheduled), 
+                      cancellationToken);
+
+        if (existingPendingMoveOut)
+            throw AppException.FromError(RentalErrors.MoveOutAlreadyRequested);
+
+        var moveOut = new MoveOutRequest
+        {
+            AgreementId = agreementId,
+            RequestedBy = customerId,
+            RequestedMoveOutDate = request.RequestedMoveOutDate,
+            Reason = request.Reason?.Trim(),
+            Status = MoveOutStatusConstants.Requested,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        _dbContext.MoveOutRequests.Add(moveOut);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new MoveOutResponseDto(
+            Id: moveOut.Id,
+            AgreementId: moveOut.AgreementId,
+            RequestedMoveOutDate: moveOut.RequestedMoveOutDate,
+            Status: moveOut.Status,
+            Reason: moveOut.Reason,
+            CreatedAt: moveOut.CreatedAt
+        );
+    }
+
+    public async Task<RefundPreviewDto> GetRefundPreviewAsync(
+        long customerId,
+        long agreementId,
+        CancellationToken cancellationToken = default)
+    {
+        var agreement = await _dbContext.RentalAgreements
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (agreement == null)
+            throw AppException.FromError(RentalErrors.AgreementNotFound);
+
+        var deposit = agreement.DepositBalance;
+        var estimatedCleaning = 0m;
+        var estimatedRepair = 0m;
+        var estimatedOverdue = 0m;
+
+        // Check if there are overdue invoices
+        var unpaidInvoices = await _dbContext.Invoices
+            .AsNoTracking()
+            .Where(i => i.AgreementId == agreementId && i.Status == InvoiceStatusConstants.Overdue)
+            .ToListAsync(cancellationToken);
+
+        if (unpaidInvoices.Any())
+        {
+            estimatedOverdue = unpaidInvoices.Sum(i => i.TotalAmount - i.PaidAmount);
+        }
+
+        var estimatedNetRefund = Math.Max(0m, deposit - (estimatedCleaning + estimatedRepair + estimatedOverdue));
+
+        return new RefundPreviewDto(
+            AgreementId: agreement.Id,
+            AgreementNo: agreement.AgreementNo,
+            DepositBalance: deposit,
+            EstimatedCleaningFee: estimatedCleaning,
+            EstimatedRepairFee: estimatedRepair,
+            EstimatedOverdueCharges: estimatedOverdue,
+            EstimatedNetRefund: estimatedNetRefund,
+            Note: "Estimated net refund is subject to staff final on-site inspection and deduction of any pending damages/overdue balances per BR-FIN-02."
+        );
+    }
+
+    public async Task<RenewAgreementResponseDto> RenewAgreementAsync(
+        long customerId,
+        long agreementId,
+        RenewAgreementRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.RenewalMonths < 1 || request.RenewalMonths > 12)
+            throw AppException.FromError(RentalErrors.InvalidRenewalMonths);
+
+        var agreement = await _dbContext.RentalAgreements
+            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (agreement == null)
+            throw AppException.FromError(RentalErrors.AgreementNotFound);
+
+        var pendingRenewal = await _dbContext.RentalRenewals
+            .AnyAsync(r => r.AgreementId == agreementId && r.Status == RenewalStatusConstants.Requested, cancellationToken);
+
+        if (pendingRenewal)
+            throw AppException.FromError(RentalErrors.RenewalAlreadyPending);
+
+        var newEndDate = agreement.EndDate.AddMonths(request.RenewalMonths);
+        var totalAmount = agreement.MonthlyRateSnapshot * request.RenewalMonths;
+
+        var renewal = new RentalRenewal
+        {
+            AgreementId = agreement.Id,
+            RequestedBy = customerId,
+            OldEndDate = agreement.EndDate,
+            RequestedEndDate = newEndDate,
+            OldMonthlyRate = agreement.MonthlyRateSnapshot,
+            NewMonthlyRate = agreement.MonthlyRateSnapshot,
+            Status = RenewalStatusConstants.Requested,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        _dbContext.RentalRenewals.Add(renewal);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new RenewAgreementResponseDto(
+            RenewalId: renewal.Id,
+            AgreementId: agreement.Id,
+            OldEndDate: renewal.OldEndDate,
+            NewEndDate: renewal.RequestedEndDate,
+            MonthlyRate: agreement.MonthlyRateSnapshot,
+            TotalRenewalAmount: totalAmount,
+            Status: renewal.Status,
+            CreatedAt: renewal.CreatedAt
+        );
+    }
+
+    public async Task<IReadOnlyList<AuthorizedMemberDto>> GetAuthorizedMembersAsync(
+        long customerId,
+        long agreementId,
+        CancellationToken cancellationToken = default)
+    {
+        var agreementExists = await _dbContext.RentalAgreements
+            .AnyAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (!agreementExists)
+            throw AppException.FromError(RentalErrors.AgreementNotFound);
+
+        var members = await _dbContext.AuthorizedAccessMembers
+            .AsNoTracking()
+            .Where(m => m.AgreementId == agreementId && m.Status == AuthorizedMemberStatusConstants.Active)
+            .OrderByDescending(m => m.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        return members.Select(m => new AuthorizedMemberDto(
+            Id: m.Id,
+            AgreementId: m.AgreementId,
+            FullName: m.FullName,
+            IdentityFingerprint: m.IdentityFingerprint,
+            RelationshipToCustomer: m.RelationshipToCustomer,
+            ValidFrom: m.ValidFrom,
+            ValidTo: m.ValidTo,
+            Status: m.Status,
+            CreatedAt: m.CreatedAt
+        )).ToList();
+    }
+
+    public async Task<AuthorizedMemberDto> AddAuthorizedMemberAsync(
+        long customerId,
+        long agreementId,
+        CreateAuthorizedMemberRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var agreementExists = await _dbContext.RentalAgreements
+            .AnyAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (!agreementExists)
+            throw AppException.FromError(RentalErrors.AgreementNotFound);
+
+        if (string.IsNullOrWhiteSpace(request.FullName))
+            throw AppException.FromError(RentalErrors.EmptyMemberName);
+
+        var now = DateTimeOffset.UtcNow;
+        var member = new AuthorizedAccessMember
+        {
+            AgreementId = agreementId,
+            FullName = request.FullName.Trim(),
+            IdentityFingerprint = request.IdentityFingerprint?.Trim(),
+            RelationshipToCustomer = request.RelationshipToCustomer?.Trim(),
+            ValidFrom = now,
+            ValidTo = request.ValidTo,
+            Status = AuthorizedMemberStatusConstants.Active,
+            CreatedBy = customerId,
+            CreatedAt = now
+        };
+
+        _dbContext.AuthorizedAccessMembers.Add(member);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new AuthorizedMemberDto(
+            Id: member.Id,
+            AgreementId: member.AgreementId,
+            FullName: member.FullName,
+            IdentityFingerprint: member.IdentityFingerprint,
+            RelationshipToCustomer: member.RelationshipToCustomer,
+            ValidFrom: member.ValidFrom,
+            ValidTo: member.ValidTo,
+            Status: member.Status,
+            CreatedAt: member.CreatedAt
+        );
+    }
+
+    public async Task RevokeAuthorizedMemberAsync(
+        long customerId,
+        long agreementId,
+        long memberId,
+        CancellationToken cancellationToken = default)
+    {
+        var agreementExists = await _dbContext.RentalAgreements
+            .AnyAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (!agreementExists)
+            throw AppException.FromError(RentalErrors.AgreementNotFound);
+
+        var member = await _dbContext.AuthorizedAccessMembers
+            .FirstOrDefaultAsync(m => m.Id == memberId && m.AgreementId == agreementId, cancellationToken);
+
+        if (member == null || member.Status != AuthorizedMemberStatusConstants.Active)
+            throw AppException.FromError(RentalErrors.MemberNotFound);
+
+        member.Status = AuthorizedMemberStatusConstants.Revoked;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<UnitTransferRequestDto> RequestUnitTransferAsync(
+        long customerId,
+        long agreementId,
+        CreateTransferRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var agreement = await _dbContext.RentalAgreements
+            .Include(a => a.UnitAllocations)
+            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (agreement == null)
+            throw AppException.FromError(RentalErrors.AgreementNotFound);
+
+        var activeAllocation = agreement.UnitAllocations.FirstOrDefault(u => u.Status == AllocationStatusConstants.Active);
+        if (activeAllocation == null)
+            throw AppException.FromError(RentalErrors.AgreementNotCheckedIn);
+
+        var targetType = await _dbContext.UnitTypes
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == request.RequestedUnitTypeId, cancellationToken);
+
+        if (targetType == null)
+            throw AppException.FromError(RentalErrors.TargetUnitTypeNotFound);
+
+        if (string.IsNullOrWhiteSpace(request.Reason))
+            throw AppException.FromError(RentalErrors.EmptyTransferReason);
+
+        var pendingTransfer = await _dbContext.UnitTransferRequests
+            .AnyAsync(t => t.AgreementId == agreementId && t.Status == TransferRequestStatusConstants.Requested, cancellationToken);
+
+        if (pendingTransfer)
+            throw AppException.FromError(RentalErrors.TransferRequestAlreadyPending);
+
+        var transfer = new UnitTransferRequest
+        {
+            AgreementId = agreementId,
+            RequestedUnitTypeId = request.RequestedUnitTypeId,
+            FromUnitId = activeAllocation.StorageUnitId,
+            RequestedEffectiveDate = request.RequestedEffectiveDate,
+            Reason = request.Reason.Trim(),
+            Status = TransferRequestStatusConstants.Requested,
+            RequestedBy = customerId,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        _dbContext.UnitTransferRequests.Add(transfer);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        var fromUnit = await _dbContext.StorageUnits.AsNoTracking().FirstOrDefaultAsync(u => u.Id == transfer.FromUnitId, cancellationToken);
+
+        return new UnitTransferRequestDto(
+            Id: transfer.Id,
+            AgreementId: transfer.AgreementId,
+            FromUnitId: transfer.FromUnitId,
+            FromUnitCode: fromUnit?.UnitCode,
+            RequestedUnitTypeId: transfer.RequestedUnitTypeId,
+            RequestedUnitTypeName: targetType.Name,
+            RequestedEffectiveDate: transfer.RequestedEffectiveDate,
+            Reason: transfer.Reason,
+            Status: transfer.Status,
+            CreatedAt: transfer.CreatedAt
+        );
+    }
 }

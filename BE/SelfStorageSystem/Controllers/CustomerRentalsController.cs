@@ -203,6 +203,161 @@ public class CustomerRentalsController : ControllerBase
         return Ok(ApiResponse.Ok("Stored item deleted successfully."));
     }
 
+    /// <summary>
+    /// Requests move-out and return inspection for a rental agreement (Flow 6 & BR-FIN-02).
+    /// </summary>
+    [HttpPost("{agreementId:long}/move-out")]
+    [ProducesResponseType(typeof(ApiResponse<MoveOutResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RequestMoveOut(
+        [FromRoute] long agreementId,
+        [FromBody] RequestMoveOutRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.RequestMoveOutAsync(customerId, agreementId, request, cancellationToken);
+        return Ok(ApiResponse<MoveOutResponseDto>.Ok(result, "Move-out request submitted successfully."));
+    }
+
+    /// <summary>
+    /// Previews estimated deposit refund before move-out (BR-FIN-02).
+    /// </summary>
+    [HttpGet("{agreementId:long}/refund-preview")]
+    [ProducesResponseType(typeof(ApiResponse<RefundPreviewDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetRefundPreview(
+        [FromRoute] long agreementId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.GetRefundPreviewAsync(customerId, agreementId, cancellationToken);
+        return Ok(ApiResponse<RefundPreviewDto>.Ok(result, "Estimated refund preview retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Requests manual agreement renewal (Flow 6).
+    /// </summary>
+    [HttpPost("{agreementId:long}/renew")]
+    [ProducesResponseType(typeof(ApiResponse<RenewAgreementResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RenewAgreement(
+        [FromRoute] long agreementId,
+        [FromBody] RenewAgreementRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.RenewAgreementAsync(customerId, agreementId, request, cancellationToken);
+        return Ok(ApiResponse<RenewAgreementResponseDto>.Ok(result, "Agreement renewal requested successfully."));
+    }
+
+    /// <summary>
+    /// Gets authorized access members for a rental agreement (Flow 3).
+    /// </summary>
+    [HttpGet("{agreementId:long}/authorized-members")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<AuthorizedMemberDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetAuthorizedMembers(
+        [FromRoute] long agreementId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.GetAuthorizedMembersAsync(customerId, agreementId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<AuthorizedMemberDto>>.Ok(result, "Retrieved authorized access members successfully."));
+    }
+
+    /// <summary>
+    /// Adds a new authorized access member to a rental agreement (Flow 3).
+    /// </summary>
+    [HttpPost("{agreementId:long}/authorized-members")]
+    [ProducesResponseType(typeof(ApiResponse<AuthorizedMemberDto>), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AddAuthorizedMember(
+        [FromRoute] long agreementId,
+        [FromBody] CreateAuthorizedMemberRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.AddAuthorizedMemberAsync(customerId, agreementId, request, cancellationToken);
+        return CreatedAtAction(
+            nameof(GetAuthorizedMembers),
+            new { agreementId },
+            ApiResponse<AuthorizedMemberDto>.Ok(result, "Authorized member added successfully."));
+    }
+
+    /// <summary>
+    /// Revokes an authorized access member (Flow 3).
+    /// </summary>
+    [HttpDelete("{agreementId:long}/authorized-members/{memberId:long}")]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RevokeAuthorizedMember(
+        [FromRoute] long agreementId,
+        [FromRoute] long memberId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        await _rentalService.RevokeAuthorizedMemberAsync(customerId, agreementId, memberId, cancellationToken);
+        return Ok(ApiResponse.Ok("Authorized member revoked successfully."));
+    }
+
+    /// <summary>
+    /// Requests unit transfer or size upgrade (Flow 3 & BR-RSV-04).
+    /// </summary>
+    [HttpPost("{agreementId:long}/transfer-request")]
+    [ProducesResponseType(typeof(ApiResponse<UnitTransferRequestDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RequestUnitTransfer(
+        [FromRoute] long agreementId,
+        [FromBody] CreateTransferRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.RequestUnitTransferAsync(customerId, agreementId, request, cancellationToken);
+        return Ok(ApiResponse<UnitTransferRequestDto>.Ok(result, "Unit transfer requested successfully."));
+    }
+
     private bool TryGetCustomerId(out long customerId)
     {
         customerId = 0;

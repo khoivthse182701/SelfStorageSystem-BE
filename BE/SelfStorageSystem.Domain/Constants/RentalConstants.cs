@@ -31,6 +31,39 @@ public static class HandoverTypeConstants
     public const string Transfer = "transfer";
 }
 
+public static class MoveOutStatusConstants
+{
+    public const string Requested = "requested";
+    public const string Scheduled = "scheduled";
+    public const string Inspected = "inspected";
+    public const string Completed = "completed";
+    public const string Cancelled = "cancelled";
+}
+
+public static class RenewalStatusConstants
+{
+    public const string Requested = "requested";
+    public const string Approved = "approved";
+    public const string Rejected = "rejected";
+    public const string Paid = "paid";
+    public const string Cancelled = "cancelled";
+}
+
+public static class TransferRequestStatusConstants
+{
+    public const string Requested = "requested";
+    public const string Approved = "approved";
+    public const string Rejected = "rejected";
+    public const string Completed = "completed";
+    public const string Cancelled = "cancelled";
+}
+
+public static class AuthorizedMemberStatusConstants
+{
+    public const string Active = "active";
+    public const string Revoked = "revoked";
+}
+
 public static class RentalSuspensionReasons
 {
     public const string OverdueDebtExceeded = "Access is currently suspended due to overdue payment exceeding 1 day (BR-REN-03). Please settle your overdue invoices.";

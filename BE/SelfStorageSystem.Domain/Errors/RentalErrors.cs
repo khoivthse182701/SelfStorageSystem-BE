@@ -33,4 +33,34 @@ public static class RentalErrors
 
     public static readonly Error TooManyFailedPinAttempts =
         Error.Conflict("Rental.TooManyFailedPinAttempts", "Too many incorrect PIN attempts. PIN change is temporarily locked for 15 minutes.");
+
+    public static readonly Error MoveOutAlreadyRequested =
+        Error.Conflict("Rental.MoveOutAlreadyRequested", "A move-out request is already pending or processed for this rental agreement.");
+
+    public static readonly Error InvalidMoveOutDate =
+        Error.Validation("Rental.InvalidMoveOutDate", "Requested move-out date cannot be earlier than today.");
+
+    public static readonly Error MoveOutNotFound =
+        Error.NotFound("Rental.MoveOutNotFound", "Move-out request was not found.");
+
+    public static readonly Error InvalidRenewalMonths =
+        Error.Validation("Rental.InvalidRenewalMonths", "Renewal months must be between 1 and 12.");
+
+    public static readonly Error RenewalAlreadyPending =
+        Error.Conflict("Rental.RenewalAlreadyPending", "A renewal request is already pending for this rental agreement.");
+
+    public static readonly Error MemberNotFound =
+        Error.NotFound("Rental.MemberNotFound", "Authorized access member was not found or has been revoked.");
+
+    public static readonly Error EmptyMemberName =
+        Error.Validation("Rental.EmptyMemberName", "Member full name is required.");
+
+    public static readonly Error TransferRequestAlreadyPending =
+        Error.Conflict("Rental.TransferAlreadyPending", "A unit transfer request is already pending for this rental agreement.");
+
+    public static readonly Error TargetUnitTypeNotFound =
+        Error.NotFound("Rental.TargetUnitTypeNotFound", "Requested unit type was not found.");
+
+    public static readonly Error EmptyTransferReason =
+        Error.Validation("Rental.EmptyTransferReason", "Transfer reason is required.");
 }
