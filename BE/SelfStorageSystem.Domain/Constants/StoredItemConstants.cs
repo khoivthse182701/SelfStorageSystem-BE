@@ -23,3 +23,12 @@ public static class ItemRiskClassificationConstants
 
     public static readonly string[] All = { Standard, Fragile, HighValue, SpecialCare };
 }
+
+public static class StoredItemRulesConstants
+{
+    public static readonly string[] ProhibitedKeywords =
+    {
+        "explosive", "flammable", "weapon", "gun", "drug", "illegal", "chemical", "poison",
+        "chất nổ", "chất dễ cháy", "vũ khí", "ma túy", "hàng cấm", "hóa chất độc hại", "súng"
+    };
+}

@@ -13,12 +13,6 @@ public class CustomerStoredItemService : ICustomerStoredItemService
 {
     private readonly SelfStorageDbContext _dbContext;
 
-    private static readonly string[] ProhibitedKeywords = new[]
-    {
-        "explosive", "flammable", "weapon", "gun", "drug", "illegal", "chemical", "poison",
-        "chất nổ", "chất dễ cháy", "vũ khí", "ma túy", "hàng cấm", "hóa chất độc hại", "súng"
-    };
-
     public CustomerStoredItemService(SelfStorageDbContext dbContext)
     {
         _dbContext = dbContext;
@@ -236,7 +230,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
     private static void CheckProhibitedContent(string name, string? description)
     {
         var combinedText = $"{name} {description}".ToLowerInvariant();
-        foreach (var keyword in ProhibitedKeywords)
+        foreach (var keyword in StoredItemRulesConstants.ProhibitedKeywords)
         {
             if (combinedText.Contains(keyword))
             {
