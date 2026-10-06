@@ -32,6 +32,5 @@ bld/
 .env.local
 *.env
 *.secrets.json
-appsettings*.Local.json
-appsettings.local.json
-appsettings.Production.json
+appsettings*.json
+appsettings.json

@@ -50,8 +50,7 @@ Dự án Hệ thống Quản lý và Cho thuê Kho Lưu Trữ Tự Phục Vụ (
   - Trả về mã lỗi HTTP `429 Too Many Requests` với format chuẩn `ApiResponse.Fail(...)`.
 
 ### 3. Tiêu chuẩn An toàn Thông tin (Information Disclosure Hardening)
-- **Không hardcode**: Toàn bộ cấu hình (Chuỗi kết nối, JWT Secret, MailKit SMTP, Google ClientId, Rate Limiting, OTP Settings, CORS) được quản lý qua `IOptions<T>` và `appsettings.json`.
-- **Bảo vệ Secret Keys**: Hỗ trợ `appsettings.Local.json` (được đưa vào `.gitignore`) để lưu mật khẩu email thật và Google Client Secret cục bộ, tránh rò rỉ lên GitHub.
+- **Bảo vệ Secret Keys**: File `appsettings.json` được đưa vào `.gitignore` để tránh rò rỉ thông tin nhạy cảm lên GitHub.
 - **Chống rò rỉ mã lỗi 500**: Các ngoại lệ nội bộ của hệ thống (SQL, SMTP) chỉ ghi log tại máy chủ; client chỉ nhận thông báo thân thiện chuẩn hóa, không lộ chuỗi kết nối hay chi tiết CSDL.
 - **Chống dò quét tài khoản (User Enumeration)**: Đồng nhất mã lỗi `401 Unauthorized` cho cả trường hợp sai email lẫn sai mật khẩu khi đăng nhập.
 - **Security Response Headers**: Tích hợp middleware tự động bổ sung `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: strict-origin-when-cross-origin` và ẩn server banner `Server: Kestrel`.
@@ -80,7 +79,7 @@ File SQL duy nhất chứa toàn bộ 58 bảng, triggers và dữ liệu mẫu 
 - [SQL Server](https://www.microsoft.com/sql-server) (2019 hoặc mới hơn)
 
 ### 2. Cấu hình
-Mở file `BE/SelfStorageSystem/appsettings.json` (hoặc tạo `BE/SelfStorageSystem/appsettings.Local.json` để chạy local):
+Mở file `BE/SelfStorageSystem/appsettings.json`:
 ```json
 {
   "ConnectionStrings": {

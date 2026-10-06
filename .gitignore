@@ -31,12 +31,8 @@ bld/
 .env.local
 *.env
 *.secrets.json
-appsettings*.Local.json
-appsettings.local.json
-appsettings.Production.json
+appsettings*.json
 appsettings.json
-appsettings.Development.json
-!appsettings.example.json
 
 # Frontend folder (managed in a separate repo)
 FE/
