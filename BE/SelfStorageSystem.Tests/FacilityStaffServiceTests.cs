@@ -107,6 +107,14 @@ public class FacilityStaffServiceTests
 
         var updatedUnit = await db.StorageUnits.FindAsync(101L);
         Assert.Equal(StorageUnitStatusConstants.Occupied, updatedUnit!.PhysicalStatus);
+
+        var handover = await db.HandoverRecords.FindAsync(result.HandoverId);
+        Assert.NotNull(handover);
+
+        var inspection = await db.Inspections.FindAsync(handover.InspectionId);
+        Assert.NotNull(inspection);
+        Assert.Equal(InspectionStatusConstants.Completed, inspection.Status);
+        Assert.Equal(OverallConditionConstants.Good, inspection.OverallCondition);
     }
 
     [Fact]

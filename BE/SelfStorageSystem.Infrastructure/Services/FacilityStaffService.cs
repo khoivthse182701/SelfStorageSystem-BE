@@ -306,8 +306,8 @@ public class FacilityStaffService : IFacilityStaffService
             AgreementId = agreement.Id,
             InspectedBy = employee.UserId,
             InspectionType = request.HandoverType ?? HandoverTypeConstants.CheckIn,
-            Status = InspectionStatusConstants.Passed,
-            OverallCondition = request.OverallCondition ?? StaffConstants.DefaultCheckInCondition,
+            Status = InspectionStatusConstants.Completed,
+            OverallCondition = NormalizeOverallCondition(request.OverallCondition),
             Summary = request.InspectionSummary ?? StaffConstants.DefaultCheckInSummary,
             InspectedAt = now,
             CreatedAt = now
@@ -320,7 +320,7 @@ public class FacilityStaffService : IFacilityStaffService
                 inspection.InspectionItems.Add(new InspectionItem
                 {
                     ItemName = it.ItemName,
-                    Condition = it.Condition,
+                    Condition = NormalizeItemCondition(it.Condition),
                     Notes = it.Notes,
                     PhotoUrl = it.PhotoUrl,
                     ChargeAmount = it.ChargeAmount
@@ -452,7 +452,7 @@ public class FacilityStaffService : IFacilityStaffService
             InspectedBy = employee.UserId,
             InspectionType = HandoverTypeConstants.CheckOut,
             Status = InspectionStatusConstants.Completed,
-            OverallCondition = request.OverallCondition,
+            OverallCondition = NormalizeOverallCondition(request.OverallCondition),
             Summary = request.Summary ?? StaffConstants.DefaultMoveOutSummary,
             InspectedAt = now,
             CreatedAt = now
@@ -466,7 +466,7 @@ public class FacilityStaffService : IFacilityStaffService
                 inspection.InspectionItems.Add(new InspectionItem
                 {
                     ItemName = it.ItemName,
-                    Condition = it.Condition,
+                    Condition = NormalizeItemCondition(it.Condition),
                     Notes = it.Notes,
                     PhotoUrl = it.PhotoUrl,
                     ChargeAmount = it.ChargeAmount
@@ -489,8 +489,8 @@ public class FacilityStaffService : IFacilityStaffService
 
         if (unit != null)
         {
-            unit.PhysicalStatus = request.NextUnitStatus == StorageUnitStatusConstants.UnderMaintenance
-                ? StorageUnitStatusConstants.UnderMaintenance
+            unit.PhysicalStatus = (request.NextUnitStatus == StorageUnitStatusConstants.UnderMaintenance || request.NextUnitStatus == StorageUnitStatusConstants.Maintenance)
+                ? StorageUnitStatusConstants.Maintenance
                 : StorageUnitStatusConstants.Available;
             unit.UpdatedAt = now;
         }
@@ -788,7 +788,7 @@ public class FacilityStaffService : IFacilityStaffService
 
         if (request.BlocksBooking)
         {
-            unit.PhysicalStatus = StorageUnitStatusConstants.UnderMaintenance;
+            unit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
             unit.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
@@ -901,5 +901,27 @@ public class FacilityStaffService : IFacilityStaffService
             throw AppException.FromError(StaffErrors.EmployeeProfileNotFound);
 
         return employee;
+    }
+
+    private static string NormalizeOverallCondition(string? condition)
+    {
+        if (string.IsNullOrWhiteSpace(condition))
+            return OverallConditionConstants.Good;
+
+        var normalized = condition.Trim().ToLowerInvariant();
+        return OverallConditionConstants.All.Contains(normalized)
+            ? normalized
+            : OverallConditionConstants.Good;
+    }
+
+    private static string NormalizeItemCondition(string? condition)
+    {
+        if (string.IsNullOrWhiteSpace(condition))
+            return InspectionItemConditionConstants.Good;
+
+        var normalized = condition.Trim().ToLowerInvariant();
+        return InspectionItemConditionConstants.All.Contains(normalized)
+            ? normalized
+            : InspectionItemConditionConstants.Good;
     }
 }

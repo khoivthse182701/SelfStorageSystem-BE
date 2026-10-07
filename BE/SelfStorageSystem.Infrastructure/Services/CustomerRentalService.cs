@@ -20,31 +20,25 @@ namespace SelfStorageSystem.Infrastructure.Services;
 
 public class CustomerRentalService : ICustomerRentalService
 {
-    private static readonly HashSet<string> WeakPins = new(StringComparer.Ordinal)
-    {
-        "012345", "123456", "234567", "345678", "456789", "567890",
-        "987654", "876543", "765432", "654321", "543210", "098765"
-    };
-
-    private const int MaxFailedPinAttempts = 5;
-    private static readonly TimeSpan PinLockoutDuration = TimeSpan.FromMinutes(15);
-    private const int QrTtlSeconds = 120; // 2 minutes to provide adequate scan time and clock skew buffer
-    private const int ClockSkewLeewaySeconds = 30;
+    private static readonly Regex PinFormatRegex = new(@"^\d{6}$", RegexOptions.Compiled);
 
     private readonly SelfStorageDbContext _dbContext;
     private readonly IMemoryCache _cache;
     private readonly JwtSettings _jwtSettings;
+    private readonly RentalSettings _rentalSettings;
     private readonly ILogger<CustomerRentalService> _logger;
 
     public CustomerRentalService(
         SelfStorageDbContext dbContext,
         IMemoryCache cache,
         IOptions<JwtSettings> jwtOptions,
-        ILogger<CustomerRentalService> logger)
+        ILogger<CustomerRentalService> logger,
+        IOptions<RentalSettings>? rentalOptions = null)
     {
         _dbContext = dbContext;
         _cache = cache;
         _jwtSettings = jwtOptions.Value;
+        _rentalSettings = rentalOptions?.Value ?? new RentalSettings();
         _logger = logger;
     }
 
@@ -142,7 +136,7 @@ public class CustomerRentalService : ICustomerRentalService
         // Check Facility Business Hours (OpeningTime and ClosingTime)
         if (agreement.Facility?.OpeningTime != null && agreement.Facility?.ClosingTime != null)
         {
-            var tzId = string.IsNullOrWhiteSpace(agreement.Facility.Timezone) ? "Asia/Ho_Chi_Minh" : agreement.Facility.Timezone;
+            var tzId = string.IsNullOrWhiteSpace(agreement.Facility.Timezone) ? _rentalSettings.DefaultTimezone : agreement.Facility.Timezone;
             TimeZoneInfo tz;
             try
             {
@@ -150,8 +144,8 @@ public class CustomerRentalService : ICustomerRentalService
             }
             catch
             {
-                tz = tzId.Equals("Asia/Ho_Chi_Minh", StringComparison.OrdinalIgnoreCase)
-                    ? TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time")
+                tz = tzId.Equals(_rentalSettings.DefaultTimezone, StringComparison.OrdinalIgnoreCase)
+                    ? TimeZoneInfo.FindSystemTimeZoneById(RentalDefaults.FallbackWindowsTimezone)
                     : TimeZoneInfo.Utc;
             }
 
@@ -166,7 +160,7 @@ public class CustomerRentalService : ICustomerRentalService
 
             if (!isWithinHours)
             {
-                _logger.LogWarning("Access credential request rejected for agreement {AgreementId}. Outside business hours ({Opening}-{Closing}). Current facility time: {CurrentTime}",
+                _logger.LogWarning(RentalLogMessages.OutsideBusinessHours,
                     agreementId, opening, closing, currentTime);
                 throw AppException.FromError(RentalErrors.OutsideBusinessHours);
             }
@@ -234,8 +228,8 @@ public class CustomerRentalService : ICustomerRentalService
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
-        // Generate Time-based JWT Gate QR Token with 120 seconds TTL and 30s clock skew leeway
-        var qrExpiresAt = now.AddSeconds(QrTtlSeconds);
+        // Generate Time-based JWT Gate QR Token with configurable TTL
+        var qrExpiresAt = now.AddSeconds(_rentalSettings.QrTtlSeconds);
         var gateQrToken = GenerateGateAccessJwt(agreement, activeAlloc?.StorageUnitId ?? 0, qrExpiresAt);
 
         _logger.LogInformation(RentalLogMessages.AccessCredentialsRetrieved, customerId, agreementId, CredentialStatusConstants.Active);
@@ -249,7 +243,7 @@ public class CustomerRentalService : ICustomerRentalService
             Status = CredentialStatusConstants.Active,
             KeypadPin = pinCred.DisplayHint,
             GateQrToken = gateQrToken,
-            QrExpiresInSeconds = QrTtlSeconds,
+            QrExpiresInSeconds = _rentalSettings.QrTtlSeconds,
             QrExpiresAt = qrExpiresAt,
             SuspendedReason = null
         };
@@ -258,21 +252,21 @@ public class CustomerRentalService : ICustomerRentalService
     public async Task<ChangePinResponseDto> ChangePinAsync(long customerId, long agreementId, ChangePinRequest request, CancellationToken cancellationToken = default)
     {
         // 1. Anti-brute force check on failed attempts per agreement
-        var lockoutKey = $"pin_change_failed_attempts:{agreementId}";
-        if (_cache.TryGetValue(lockoutKey, out int failedAttempts) && failedAttempts >= MaxFailedPinAttempts)
+        var lockoutKey = $"{RentalDefaults.PinLockoutCacheKeyPrefix}{agreementId}";
+        if (_cache.TryGetValue(lockoutKey, out int failedAttempts) && failedAttempts >= _rentalSettings.MaxFailedPinAttempts)
         {
-            _logger.LogWarning("Agreement {AgreementId} locked out from changing PIN due to too many failed attempts.", agreementId);
+            _logger.LogWarning(RentalLogMessages.PinLockout, agreementId);
             throw AppException.FromError(RentalErrors.TooManyFailedPinAttempts);
         }
 
         // 2. Validate PIN format: exactly 6 digits
-        if (string.IsNullOrWhiteSpace(request.NewPin) || !Regex.IsMatch(request.NewPin, @"^\d{6}$"))
+        if (string.IsNullOrWhiteSpace(request.NewPin) || !PinFormatRegex.IsMatch(request.NewPin))
         {
             throw AppException.FromError(RentalErrors.InvalidPinFormat);
         }
 
         // 3. Prevent weak PINs: all same digits or simple ascending/descending sequences
-        if (request.NewPin.Distinct().Count() == 1 || WeakPins.Contains(request.NewPin))
+        if (request.NewPin.Distinct().Count() == 1 || RentalSecurityConstants.WeakPins.Contains(request.NewPin))
         {
             throw AppException.FromError(RentalErrors.PinTooSimple);
         }
@@ -309,9 +303,9 @@ public class CustomerRentalService : ICustomerRentalService
             if (!BCrypt.Net.BCrypt.Verify(request.CurrentPin, pinCred.SecretDigest))
             {
                 var newCount = failedAttempts + 1;
-                _cache.Set(lockoutKey, newCount, PinLockoutDuration);
-                _logger.LogWarning("Failed current PIN verification for agreement {AgreementId}. Attempt {AttemptCount}/{MaxAttempts}",
-                    agreementId, newCount, MaxFailedPinAttempts);
+                _cache.Set(lockoutKey, newCount, TimeSpan.FromMinutes(_rentalSettings.PinLockoutDurationMinutes));
+                _logger.LogWarning(RentalLogMessages.FailedPinVerification,
+                    agreementId, newCount, _rentalSettings.MaxFailedPinAttempts);
                 throw AppException.FromError(RentalErrors.IncorrectCurrentPin);
             }
         }
@@ -349,7 +343,7 @@ public class CustomerRentalService : ICustomerRentalService
             Success = true,
             SyncStatus = PinSyncStatusConstants.Pending,
             Message = RentalPinMessages.PinSyncPending,
-            EstimatedSyncSeconds = 60
+            EstimatedSyncSeconds = _rentalSettings.EstimatedPinSyncSeconds
         };
     }
 
@@ -420,17 +414,17 @@ public class CustomerRentalService : ICustomerRentalService
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, agreement.Id.ToString()),
-            new Claim("agreementId", agreement.Id.ToString()),
-            new Claim("customerId", agreement.CustomerId.ToString()),
-            new Claim("facilityId", agreement.FacilityId.ToString()),
-            new Claim("unitId", unitId.ToString()),
-            new Claim("agreementNo", agreement.AgreementNo),
-            new Claim("type", "GATE_ACCESS"),
+            new Claim(RentalClaimTypes.AgreementId, agreement.Id.ToString()),
+            new Claim(RentalClaimTypes.CustomerId, agreement.CustomerId.ToString()),
+            new Claim(RentalClaimTypes.FacilityId, agreement.FacilityId.ToString()),
+            new Claim(RentalClaimTypes.UnitId, unitId.ToString()),
+            new Claim(RentalClaimTypes.AgreementNo, agreement.AgreementNo),
+            new Claim(RentalClaimTypes.Type, RentalDefaults.GateAccessClaimType),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
         };
 
-        // Leeway time of ClockSkewLeewaySeconds (30s) prevents premature expiration due to clock drift between server and IoT scanners
-        var notBefore = DateTime.UtcNow.AddSeconds(-ClockSkewLeewaySeconds);
+        // Leeway time prevents premature expiration due to clock drift between server and IoT scanners
+        var notBefore = DateTime.UtcNow.AddSeconds(-_rentalSettings.ClockSkewLeewaySeconds);
 
         var token = new JwtSecurityToken(
             issuer: _jwtSettings.Issuer,
@@ -450,7 +444,7 @@ public class CustomerRentalService : ICustomerRentalService
         {
             var number = System.Security.Cryptography.RandomNumberGenerator.GetInt32(100000, 1000000);
             var pin = number.ToString("D6");
-            if (pin.Distinct().Count() > 1 && !WeakPins.Contains(pin))
+            if (pin.Distinct().Count() > 1 && !RentalSecurityConstants.WeakPins.Contains(pin))
             {
                 return pin;
             }
@@ -543,7 +537,7 @@ public class CustomerRentalService : ICustomerRentalService
             EstimatedRepairFee: estimatedRepair,
             EstimatedOverdueCharges: estimatedOverdue,
             EstimatedNetRefund: estimatedNetRefund,
-            Note: "Estimated net refund is subject to staff final on-site inspection and deduction of any pending damages/overdue balances per BR-FIN-02."
+            Note: _rentalSettings.DefaultRefundPreviewNote
         );
     }
 
@@ -553,7 +547,7 @@ public class CustomerRentalService : ICustomerRentalService
         RenewAgreementRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request.RenewalMonths < 1 || request.RenewalMonths > 12)
+        if (request.RenewalMonths < _rentalSettings.MinRenewalMonths || request.RenewalMonths > _rentalSettings.MaxRenewalMonths)
             throw AppException.FromError(RentalErrors.InvalidRenewalMonths);
 
         var agreement = await _dbContext.RentalAgreements
@@ -563,7 +557,7 @@ public class CustomerRentalService : ICustomerRentalService
             throw AppException.FromError(RentalErrors.AgreementNotFound);
 
         var pendingRenewal = await _dbContext.RentalRenewals
-            .AnyAsync(r => r.AgreementId == agreementId && r.Status == RenewalStatusConstants.Requested, cancellationToken);
+            .AnyAsync(r => r.AgreementId == agreementId && (r.Status == RenewalStatusConstants.PendingPayment || r.Status == RenewalStatusConstants.Paid), cancellationToken);
 
         if (pendingRenewal)
             throw AppException.FromError(RentalErrors.RenewalAlreadyPending);
@@ -579,7 +573,7 @@ public class CustomerRentalService : ICustomerRentalService
             RequestedEndDate = newEndDate,
             OldMonthlyRate = agreement.MonthlyRateSnapshot,
             NewMonthlyRate = agreement.MonthlyRateSnapshot,
-            Status = RenewalStatusConstants.Requested,
+            Status = RenewalStatusConstants.PendingPayment,
             CreatedAt = DateTimeOffset.UtcNow
         };
 
@@ -723,7 +717,7 @@ public class CustomerRentalService : ICustomerRentalService
             throw AppException.FromError(RentalErrors.EmptyTransferReason);
 
         var pendingTransfer = await _dbContext.UnitTransferRequests
-            .AnyAsync(t => t.AgreementId == agreementId && t.Status == TransferRequestStatusConstants.Requested, cancellationToken);
+            .AnyAsync(t => t.AgreementId == agreementId && (t.Status == TransferRequestStatusConstants.Pending || t.Status == TransferRequestStatusConstants.Approved || t.Status == TransferRequestStatusConstants.Scheduled), cancellationToken);
 
         if (pendingTransfer)
             throw AppException.FromError(RentalErrors.TransferRequestAlreadyPending);
@@ -735,7 +729,7 @@ public class CustomerRentalService : ICustomerRentalService
             FromUnitId = activeAllocation.StorageUnitId,
             RequestedEffectiveDate = request.RequestedEffectiveDate,
             Reason = request.Reason.Trim(),
-            Status = TransferRequestStatusConstants.Requested,
+            Status = TransferRequestStatusConstants.Pending,
             RequestedBy = customerId,
             CreatedAt = DateTimeOffset.UtcNow
         };

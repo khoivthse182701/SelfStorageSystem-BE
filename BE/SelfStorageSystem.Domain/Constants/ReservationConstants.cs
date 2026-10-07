@@ -34,6 +34,10 @@ public static class StorageUnitStatusConstants
     public const string Available = "available";
     public const string Reserved = "reserved";
     public const string Occupied = "occupied";
-    public const string UnderMaintenance = "under_maintenance";
-    public const string InUse = "in_use";
+    public const string PendingInspection = "pending_inspection";
+    public const string Maintenance = "maintenance";
+    public const string UnderMaintenance = "maintenance";
+    public const string OutOfService = "out_of_service";
+    public const string InUse = "occupied";
 }
+

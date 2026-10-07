@@ -41,8 +41,9 @@ public static class DependencyInjection
         services.Configure<CorsSettings>(configuration.GetSection(CorsSettings.SectionName));
         services.Configure<ReservationSettings>(configuration.GetSection(ReservationSettings.SectionName));
         services.Configure<PaymentSettings>(configuration.GetSection(PaymentSettings.SectionName));
+        services.Configure<RentalSettings>(configuration.GetSection(RentalSettings.SectionName));
 
-        // 4. Domain & Application Services
+        services.AddHttpContextAccessor();
         services.AddScoped<IJwtTokenService, JwtTokenService>();
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IOtpService, OtpService>();
@@ -55,6 +56,7 @@ public static class DependencyInjection
         services.AddScoped<ICustomerSupportTicketService, CustomerSupportTicketService>();
         services.AddScoped<ICustomerStoredItemService, CustomerStoredItemService>();
         services.AddScoped<IFacilityStaffService, FacilityStaffService>();
+        services.AddScoped<IMediaService, MediaService>();
 
         // 4.1. Background Hosted Workers
         services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.ReservationHoldExpiryWorker>();
