@@ -15,4 +15,10 @@ public class RentalSettings
     public int MaxRenewalMonths { get; set; } = RentalPolicyConstants.MaxRenewalMonths;
     public string DefaultTimezone { get; set; } = RentalDefaults.DefaultTimezone;
     public string DefaultRefundPreviewNote { get; set; } = RentalDefaults.DefaultRefundPreviewNote;
+
+    /// <summary>
+    /// When true, rejects access credential requests outside facility business hours (07:00 - 21:00).
+    /// Default is false to allow 24/7 credential retrieval and smooth testing at night.
+    /// </summary>
+    public bool EnforceOperatingHours { get; set; } = false;
 }

@@ -25,6 +25,9 @@ public static class RentalErrors
     public static readonly Error IncorrectCurrentPin =
         Error.Validation("Rental.IncorrectCurrentPin", "The current PIN entered is incorrect.");
 
+    public static readonly Error IncorrectPin =
+        Error.Validation("Rental.IncorrectPin", "Mã PIN mở khóa không chính xác. Vui lòng kiểm tra lại.");
+
     public static readonly Error HandoverNotFound =
         Error.NotFound("Rental.HandoverNotFound", "Handover record was not found for this rental agreement.");
 

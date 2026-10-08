@@ -269,6 +269,45 @@ public class CustomerPaymentService : ICustomerPaymentService
 
         if (invoice == null)
         {
+            // Check if bank memo / content matches a rental renewal (e.g. RNW-1, DH1)
+            RentalRenewal? renewal = null;
+            var rnwMatch = Regex.Match(contentText, @"RNW[\s\-_]*(\d+)", RegexOptions.IgnoreCase);
+            if (rnwMatch.Success && long.TryParse(rnwMatch.Groups[1].Value, out var parsedRnwId))
+            {
+                renewal = await _dbContext.RentalRenewals
+                    .Include(r => r.Agreement)
+                    .FirstOrDefaultAsync(r => r.Id == parsedRnwId, cancellationToken);
+            }
+
+            if (renewal == null && prefixMatch.Success && long.TryParse(prefixMatch.Groups[1].Value, out var prefixNum))
+            {
+                renewal = await _dbContext.RentalRenewals
+                    .Include(r => r.Agreement)
+                    .FirstOrDefaultAsync(r => r.Id == prefixNum, cancellationToken);
+            }
+
+            if (renewal != null)
+            {
+                var months = (renewal.RequestedEndDate.Year - renewal.OldEndDate.Year) * 12 + renewal.RequestedEndDate.Month - renewal.OldEndDate.Month;
+                if (months <= 0) months = 1;
+                var renewalAmount = (renewal.NewMonthlyRate ?? renewal.OldMonthlyRate) * months;
+
+                var nowTime = DateTimeOffset.UtcNow;
+                renewal.Status = RenewalStatusConstants.Paid;
+                renewal.ApprovedEndDate = renewal.RequestedEndDate;
+                renewal.ReviewedAt = nowTime;
+
+                if (renewal.Agreement != null)
+                {
+                    renewal.Agreement.EndDate = renewal.RequestedEndDate;
+                    renewal.Agreement.UpdatedAt = nowTime;
+                }
+
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                _logger.LogInformation("Renewal #{RenewalId} marked as paid via SePay webhook.", renewal.Id);
+                return true;
+            }
+
             _logger.LogWarning(PaymentLogMessages.PatternMismatch, prefix, payload.Content);
             return false;
         }
@@ -392,7 +431,7 @@ public class CustomerPaymentService : ICustomerPaymentService
             .OrderByDescending(p => p.CreatedAt)
             .ToListAsync(cancellationToken);
 
-        return list.Select(p => new PaymentHistoryDto
+        var history = list.Select(p => new PaymentHistoryDto
         {
             PaymentId = p.Id,
             InvoiceId = p.TargetInvoiceId,
@@ -409,6 +448,73 @@ public class CustomerPaymentService : ICustomerPaymentService
             CreatedAt = p.CreatedAt,
             FailureReason = p.FailureReason
         }).ToList();
+
+        // Include customer's agreement renewals
+        var renewals = await _dbContext.RentalRenewals
+            .AsNoTracking()
+            .Include(r => r.Agreement)
+            .Where(r => r.RequestedBy == customerId || (r.Agreement != null && r.Agreement.CustomerId == customerId))
+            .OrderByDescending(r => r.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var r in renewals)
+        {
+            var months = (r.RequestedEndDate.Year - r.OldEndDate.Year) * 12 + r.RequestedEndDate.Month - r.OldEndDate.Month;
+            if (months <= 0) months = 1;
+            var amount = (r.NewMonthlyRate ?? r.OldMonthlyRate) * months;
+
+            string status = r.Status;
+            if (string.Equals(r.Status, RenewalStatusConstants.PendingPayment, StringComparison.OrdinalIgnoreCase))
+            {
+                // 15-minute countdown hold check
+                if (now - r.CreatedAt > TimeSpan.FromMinutes(15))
+                {
+                    status = "expired";
+                }
+                else
+                {
+                    status = PaymentConstants.StatusPending;
+                }
+            }
+            else if (string.Equals(r.Status, RenewalStatusConstants.Paid, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(r.Status, RenewalStatusConstants.Approved, StringComparison.OrdinalIgnoreCase))
+            {
+                status = PaymentConstants.StatusSucceeded;
+            }
+            else if (string.Equals(r.Status, RenewalStatusConstants.Cancelled, StringComparison.OrdinalIgnoreCase))
+            {
+                status = PaymentConstants.StatusCancelled;
+            }
+            else if (string.Equals(r.Status, RenewalStatusConstants.Rejected, StringComparison.OrdinalIgnoreCase))
+            {
+                status = PaymentConstants.StatusFailed;
+            }
+
+            history.Add(new PaymentHistoryDto
+            {
+                PaymentId = 0,
+                InvoiceId = 0,
+                InvoiceNo = $"RNW-{r.Id}",
+                ReservationId = null,
+                ReservationCode = !string.IsNullOrWhiteSpace(r.Agreement?.AgreementNo) 
+                    ? $"RNW-{r.Agreement.AgreementNo}" 
+                    : $"RNW-{r.Id}",
+                Amount = amount,
+                Currency = PaymentConstants.CurrencyVnd,
+                Method = PaymentConstants.MethodBankTransfer,
+                Provider = PaymentConstants.ProviderSePay,
+                ProviderTransactionId = null,
+                Status = status,
+                PaidAt = r.ReviewedAt,
+                CreatedAt = r.CreatedAt,
+                FailureReason = null,
+                RenewalId = r.Id,
+                AgreementNo = r.Agreement?.AgreementNo
+            });
+        }
+
+        return history.OrderByDescending(h => h.CreatedAt).ToList();
     }
 
     private async Task CompletePaymentAsync(

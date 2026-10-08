@@ -95,6 +95,29 @@ public class CustomerRentalsController : ControllerBase
     }
 
     /// <summary>
+    /// Verifies customer PIN and triggers remote unlock for the assigned storage unit door.
+    /// </summary>
+    [HttpPost("{agreementId:long}/unlock")]
+    [ProducesResponseType(typeof(ApiResponse<UnlockStorageUnitResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UnlockUnit(
+        [FromRoute] long agreementId,
+        [FromBody] UnlockStorageUnitRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.UnlockUnitAsync(customerId, agreementId, request, cancellationToken);
+        return Ok(ApiResponse<UnlockStorageUnitResponseDto>.Ok(result, result.Message));
+    }
+
+    /// <summary>
     /// Retrieves check-in handover record, inspection condition, and photos (BR-FIN-02, BR-OPS-02).
     /// </summary>
     [HttpGet("{agreementId:long}/handover")]

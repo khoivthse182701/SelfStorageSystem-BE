@@ -133,8 +133,10 @@ public class CustomerRentalService : ICustomerRentalService
         var now = DateTimeOffset.UtcNow;
         var today = DateOnly.FromDateTime(now.DateTime);
 
-        // Check Facility Business Hours (OpeningTime and ClosingTime)
-        if (agreement.Facility?.OpeningTime != null && agreement.Facility?.ClosingTime != null)
+        // Check Facility Business Hours (OpeningTime and ClosingTime) if enforced
+        if (_rentalSettings.EnforceOperatingHours &&
+            agreement.Facility?.OpeningTime != null &&
+            agreement.Facility?.ClosingTime != null)
         {
             var tzId = string.IsNullOrWhiteSpace(agreement.Facility.Timezone) ? _rentalSettings.DefaultTimezone : agreement.Facility.Timezone;
             TimeZoneInfo tz;
@@ -347,6 +349,139 @@ public class CustomerRentalService : ICustomerRentalService
         };
     }
 
+    public async Task<UnlockStorageUnitResponseDto> UnlockUnitAsync(long customerId, long agreementId, UnlockStorageUnitRequest request, CancellationToken cancellationToken = default)
+    {
+        // 1. Anti-brute force check on failed unlock attempts per agreement
+        var lockoutKey = $"{RentalDefaults.PinLockoutCacheKeyPrefix}unlock:{agreementId}";
+        if (_cache.TryGetValue(lockoutKey, out int failedAttempts) && failedAttempts >= _rentalSettings.MaxFailedPinAttempts)
+        {
+            _logger.LogWarning("Agreement {AgreementId} locked out from unlocking unit due to too many failed PIN attempts.", agreementId);
+            throw AppException.FromError(RentalErrors.TooManyFailedPinAttempts);
+        }
+
+        // 2. Validate PIN format: exactly 6 digits
+        if (string.IsNullOrWhiteSpace(request.Pin) || !PinFormatRegex.IsMatch(request.Pin))
+        {
+            throw AppException.FromError(RentalErrors.InvalidPinFormat);
+        }
+
+        // 3. Verify agreement ownership & include necessary relations
+        var agreement = await _dbContext.RentalAgreements
+            .Include(a => a.Facility)
+            .Include(a => a.UnitAllocations.Where(ua => ua.Status == AllocationStatusConstants.Active))
+                .ThenInclude(ua => ua.StorageUnit)
+            .Include(a => a.AccessCredentials)
+            .Include(a => a.Invoices)
+            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
+
+        if (agreement is null)
+        {
+            throw AppException.FromError(RentalErrors.AgreementNotFound);
+        }
+
+        // 4. Must be checked in
+        if (agreement.CheckedInAt == null)
+        {
+            throw AppException.FromError(RentalErrors.AgreementNotCheckedIn);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var today = DateOnly.FromDateTime(now.DateTime);
+
+        // 5. Check Facility Business Hours if enforced
+        if (_rentalSettings.EnforceOperatingHours &&
+            agreement.Facility?.OpeningTime != null &&
+            agreement.Facility?.ClosingTime != null)
+        {
+            var tzId = string.IsNullOrWhiteSpace(agreement.Facility.Timezone) ? _rentalSettings.DefaultTimezone : agreement.Facility.Timezone;
+            TimeZoneInfo tz;
+            try
+            {
+                tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
+            }
+            catch
+            {
+                tz = tzId.Equals(_rentalSettings.DefaultTimezone, StringComparison.OrdinalIgnoreCase)
+                    ? TimeZoneInfo.FindSystemTimeZoneById(RentalDefaults.FallbackWindowsTimezone)
+                    : TimeZoneInfo.Utc;
+            }
+
+            var localNow = TimeZoneInfo.ConvertTime(now, tz);
+            var currentTime = TimeOnly.FromTimeSpan(localNow.TimeOfDay);
+            var opening = agreement.Facility.OpeningTime.Value;
+            var closing = agreement.Facility.ClosingTime.Value;
+
+            bool isWithinHours = opening <= closing
+                ? (currentTime >= opening && currentTime <= closing)
+                : (currentTime >= opening || currentTime <= closing);
+
+            if (!isWithinHours)
+            {
+                _logger.LogWarning(RentalLogMessages.OutsideBusinessHours,
+                    agreementId, opening, closing, currentTime);
+                throw AppException.FromError(RentalErrors.OutsideBusinessHours);
+            }
+        }
+
+        // 6. BR-REN-03: Real-time debt check
+        var isOverdue = agreement.Invoices.Any(i =>
+            i.DueDate < today.AddDays(-1) &&
+            i.Status != InvoiceStatusConstants.Paid &&
+            (i.TotalAmount - i.PaidAmount) > 0);
+
+        if (isOverdue)
+        {
+            throw AppException.FromError(RentalErrors.AccessSuspendedDueToOverdue);
+        }
+
+        // 7. Verify PIN credential
+        var pinCred = agreement.AccessCredentials.FirstOrDefault(c => c.CredentialType == CredentialTypeConstants.Pin);
+        if (pinCred == null || pinCred.Status == CredentialStatusConstants.Suspended)
+        {
+            throw AppException.FromError(RentalErrors.AccessSuspendedDueToOverdue);
+        }
+
+        bool isPinValid = false;
+        if (!string.IsNullOrWhiteSpace(pinCred.SecretDigest))
+        {
+            isPinValid = BCrypt.Net.BCrypt.Verify(request.Pin, pinCred.SecretDigest);
+        }
+        else if (!string.IsNullOrWhiteSpace(pinCred.DisplayHint))
+        {
+            isPinValid = request.Pin == pinCred.DisplayHint;
+        }
+
+        if (!isPinValid)
+        {
+            var newCount = failedAttempts + 1;
+            _cache.Set(lockoutKey, newCount, TimeSpan.FromMinutes(_rentalSettings.PinLockoutDurationMinutes));
+            _logger.LogWarning("Failed PIN unlock verification for agreement {AgreementId}. Attempt {AttemptCount}/{MaxAttempts}",
+                agreementId, newCount, _rentalSettings.MaxFailedPinAttempts);
+            throw AppException.FromError(RentalErrors.IncorrectPin);
+        }
+
+        // Reset lockout count on success
+        _cache.Remove(lockoutKey);
+
+        var activeAlloc = agreement.UnitAllocations.FirstOrDefault(a => a.Status == AllocationStatusConstants.Active);
+        var unitCode = activeAlloc?.StorageUnit?.UnitCode ?? string.Empty;
+        var facilityName = agreement.Facility?.Name ?? string.Empty;
+
+        _logger.LogInformation("Customer {CustomerId} successfully unlocked storage unit {UnitCode} for agreement {AgreementId}.",
+            customerId, unitCode, agreementId);
+
+        return new UnlockStorageUnitResponseDto
+        {
+            Success = true,
+            AgreementId = agreement.Id,
+            UnitCode = unitCode,
+            FacilityName = facilityName,
+            UnlockedAt = now,
+            RelockAfterSeconds = 30,
+            Message = $"Kho {unitCode} tại {facilityName} đã được mở khóa thành công. Cửa sẽ tự động khóa lại sau 30 giây."
+        };
+    }
+
     public async Task<HandoverRecordDto> GetHandoverRecordAsync(long customerId, long agreementId, CancellationToken cancellationToken = default)
     {
         var agreementExists = await _dbContext.RentalAgreements
@@ -556,11 +691,28 @@ public class CustomerRentalService : ICustomerRentalService
         if (agreement == null)
             throw AppException.FromError(RentalErrors.AgreementNotFound);
 
-        var pendingRenewal = await _dbContext.RentalRenewals
-            .AnyAsync(r => r.AgreementId == agreementId && (r.Status == RenewalStatusConstants.PendingPayment || r.Status == RenewalStatusConstants.Paid), cancellationToken);
+        var existingRenewals = await _dbContext.RentalRenewals
+            .Where(r => r.AgreementId == agreementId && (r.Status == RenewalStatusConstants.PendingPayment || r.Status == RenewalStatusConstants.Paid))
+            .ToListAsync(cancellationToken);
 
-        if (pendingRenewal)
+        var activePending = existingRenewals.FirstOrDefault(r => r.Status == RenewalStatusConstants.PendingPayment);
+        if (activePending != null)
+        {
+            if (DateTimeOffset.UtcNow - activePending.CreatedAt > TimeSpan.FromMinutes(15))
+            {
+                // Expired after 15 minutes hold window
+                activePending.Status = RenewalStatusConstants.Cancelled;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            else
+            {
+                throw AppException.FromError(RentalErrors.RenewalAlreadyPending);
+            }
+        }
+        else if (existingRenewals.Any(r => r.Status == RenewalStatusConstants.Paid))
+        {
             throw AppException.FromError(RentalErrors.RenewalAlreadyPending);
+        }
 
         var newEndDate = agreement.EndDate.AddMonths(request.RenewalMonths);
         var totalAmount = agreement.MonthlyRateSnapshot * request.RenewalMonths;
