@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
    SelfStoragePRN222 - SQL Server 2019+
    Consolidated & corrected SQL Server script
    Source reviewed against:

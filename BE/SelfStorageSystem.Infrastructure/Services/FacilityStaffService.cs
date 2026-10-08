@@ -575,6 +575,28 @@ public class FacilityStaffService : IFacilityStaffService
         if (ticket == null)
             throw AppException.FromError(TicketErrors.TicketNotFound);
 
+        if (string.Equals(ticket.Status, TicketStatusConstants.Closed, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(ticket.Status, TicketStatusConstants.Cancelled, StringComparison.OrdinalIgnoreCase))
+        {
+            throw AppException.FromError(TicketErrors.TicketClosed);
+        }
+
+        var activeAssignment = await _dbContext.TicketAssignments
+            .FirstOrDefaultAsync(a => a.TicketId == ticket.Id && a.EndedAt == null, cancellationToken);
+
+        if (activeAssignment != null)
+        {
+            if (activeAssignment.EmployeeId == employee.UserId)
+            {
+                // Already assigned to this staff member
+                return;
+            }
+
+            // Conclude previous assignment
+            activeAssignment.EndedAt = DateTimeOffset.UtcNow;
+            activeAssignment.EndReason = "Reassigned to another staff member";
+        }
+
         var assignment = new TicketAssignment
         {
             TicketId = ticket.Id,
@@ -584,7 +606,10 @@ public class FacilityStaffService : IFacilityStaffService
         };
         _dbContext.TicketAssignments.Add(assignment);
 
-        ticket.Status = TicketStatusConstants.InProgress;
+        if (string.Equals(ticket.Status, TicketStatusConstants.Open, StringComparison.OrdinalIgnoreCase))
+        {
+            ticket.Status = TicketStatusConstants.InProgress;
+        }
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
 
         await _dbContext.SaveChangesAsync(cancellationToken);

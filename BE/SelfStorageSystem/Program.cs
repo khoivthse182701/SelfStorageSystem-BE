@@ -14,6 +14,14 @@ builder.WebHost.ConfigureKestrel(options =>
     options.AddServerHeader = false;
 });
 
+// Ensure wwwroot directory exists so StaticFiles and WebRootPath are properly initialized
+var wwwRootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
+if (!Directory.Exists(wwwRootPath))
+{
+    Directory.CreateDirectory(wwwRootPath);
+}
+builder.Environment.WebRootPath = wwwRootPath;
+
 
 // Add services to the container.
 builder.Services.AddControllers();
@@ -147,8 +155,8 @@ if (app.Environment.IsDevelopment())
     app.MapGet("/", () => Results.Redirect("/swagger"));
 }
 
-app.UseStaticFiles();
 app.UseCors(CorsSettings.PolicyName);
+app.UseStaticFiles();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();

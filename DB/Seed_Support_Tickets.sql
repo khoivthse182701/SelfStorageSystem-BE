@@ -148,8 +148,8 @@ BEGIN TRY
         id, ticket_id, message_id, uploaded_by, file_name, mime_type, file_size_bytes, object_url, sha256, created_at
     )
     VALUES
-        (9001, 9001, 9001, @CustomerId, N'lock_low_battery.jpg', N'image/jpeg', 245120, N'https://storage.selfstorage.vn/attachments/lock_low_battery.jpg', NULL, @OneDayAgo),
-        (9002, 9002, 9002, @CustomerId, N'gate_keypad_error.png', N'image/png', 512000, N'https://storage.selfstorage.vn/attachments/gate_keypad_error.png', NULL, @TwoDaysAgo);
+        (9001, 9001, 9001, @CustomerId, N'lock_low_battery.jpg', N'image/jpeg', 245120, N'https://images.unsplash.com/photo-1558002038-1055907df827?auto=format&fit=crop&w=600&q=80', NULL, @OneDayAgo),
+        (9002, 9002, 9002, @CustomerId, N'gate_keypad_error.png', N'image/png', 512000, N'https://images.unsplash.com/photo-1508873696983-2df570464756?auto=format&fit=crop&w=600&q=80', NULL, @TwoDaysAgo);
     SET IDENTITY_INSERT [core].[ticket_attachments] OFF;
 
     -- 6. ĐÁNH GIÁ DỊCH VỤ (SERVICE RATING CHO TICKET 9004 ĐÃ CLOSED)
