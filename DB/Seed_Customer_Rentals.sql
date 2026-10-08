@@ -1,4 +1,4 @@
-﻿USE [SelfStoragePRN222];
+USE [SelfStoragePRN222];
 GO
 
 SET ANSI_NULLS ON;
@@ -40,7 +40,7 @@ DELETE FROM [core].[reservations] WHERE customer_id = @CustomerId;
 UPDATE [core].[storage_units] SET physical_status = 'occupied' WHERE id IN (1, 6);
 
 -- ----------------------------------------------------------------------------
--- 1. TẠO RESERVATION 1 & AGREEMENT 1 CHO KHO A-101 (Unit ID 1, Small 3m2)
+-- 1. TẠO RESERVATION 1 & AGREEMENT 1 CHO KHO A-101 (Unit ID 1, Small Dry Goods Storage 3m2)
 -- ----------------------------------------------------------------------------
 -- 1.1 Reservation 1
 SET IDENTITY_INSERT [core].[reservations] ON;
@@ -104,7 +104,7 @@ VALUES (
 );
 
 -- ----------------------------------------------------------------------------
--- 2. TẠO RESERVATION 2 & AGREEMENT 2 CHO KHO A-106 (Unit ID 6, Máy Lạnh 6m2)
+-- 2. TẠO RESERVATION 2 & AGREEMENT 2 CHO KHO A-106 (Unit ID 6, Medium Seafood & Deep Freeze Storage 6m2)
 -- ----------------------------------------------------------------------------
 -- 2.1 Reservation 2
 SET IDENTITY_INSERT [core].[reservations] ON;

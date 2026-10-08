@@ -588,13 +588,22 @@ public class FacilityStaffService : IFacilityStaffService
         {
             if (activeAssignment.EmployeeId == employee.UserId)
             {
-                // Already assigned to this staff member
+                // Already assigned to this staff member. Ensure ticket status is in-progress.
+                if (string.Equals(ticket.Status, TicketStatusConstants.Open, StringComparison.OrdinalIgnoreCase))
+                {
+                    ticket.Status = TicketStatusConstants.InProgress;
+                    ticket.UpdatedAt = DateTimeOffset.UtcNow;
+                    await _dbContext.SaveChangesAsync(cancellationToken);
+                }
                 return;
             }
 
-            // Conclude previous assignment
+            // Conclude previous assignment and persist to DB FIRST
+            // because EF Core executes INSERTs before UPDATEs, which violates
+            // the filtered unique index 'ticket_assignments_one_active_uidx' (ticket_id WHERE ended_at IS NULL).
             activeAssignment.EndedAt = DateTimeOffset.UtcNow;
             activeAssignment.EndReason = "Reassigned to another staff member";
+            await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
         var assignment = new TicketAssignment
@@ -612,7 +621,14 @@ public class FacilityStaffService : IFacilityStaffService
         }
         ticket.UpdatedAt = DateTimeOffset.UtcNow;
 
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException sqlEx && sqlEx.Number == 2601)
+        {
+            // Ticket is already actively assigned; treat as successful assignment idempotently
+        }
     }
 
     public async Task<StaffTicketMessageDto> AddStaffTicketMessageAsync(

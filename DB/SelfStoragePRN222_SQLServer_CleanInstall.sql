@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
    SelfStoragePRN222 - SQL Server 2019+
    Consolidated & corrected SQL Server script
    Source reviewed against:
@@ -2544,9 +2544,14 @@ INSERT INTO [core].unit_types (
 )
 
 VALUES
-    (1, 'S', 'Small 3 m2', 1.50, 2.00, 2.50, 0, 600, 'Documents and small household items'),
-    (2, 'M', 'Medium 6 m2', 2.00, 3.00, 2.50, 0, 1200, 'Apartment furniture and business stock'),
-    (3, 'M-CC', 'Medium 6 m2 Climate Controlled', 2.00, 3.00, 2.50, 1, 1000, 'Humidity and temperature controlled');
+    (1, 'S-DRY', 'Small Dry Goods Storage 3 m2', 1.50, 2.00, 2.50, 0, 600, 'Ambient dry storage optimal for non-perishable food, grains, boxes, and documents'),
+    (2, 'M-DRY', 'Medium Dry Goods Storage 6 m2', 2.00, 3.00, 2.50, 0, 1200, 'Spacious ambient dry storage room for packaged inventory, textiles, and household furniture'),
+    (3, 'M-SEAFOOD', 'Medium Seafood & Deep Freeze Storage 6 m2', 2.00, 3.00, 2.50, 1, 1000, 'Sub-zero cold storage specially calibrated for seafood preservation, frozen fish, and perishables'),
+    (4, 'L-WARM', 'Large Heated Warm Storage 10 m2', 2.50, 4.00, 2.80, 1, 2000, 'Warmed temperature-regulated storage (22C to 26C) for musical instruments, delicate crafts, and audio gear'),
+    (5, 'XL-CLIMATE', 'Extra Large Climate-Controlled Storage 16 m2', 4.00, 4.00, 3.00, 1, 3500, 'High-capacity dual climate and humidity controlled storage for commercial enterprise logistics'),
+    (6, 'MINI-DRY', 'Mini Smart Dry Locker 1 m2', 1.00, 1.00, 1.20, 0, 200, 'High-security compact dry locker for personal gadgets, travel luggage, and confidential papers'),
+    (7, 'S-SEAFOOD', 'Small Seafood Cold Storage 3 m2', 1.50, 2.00, 2.50, 1, 600, 'Compact chilled cold room for seafood samples, fishery batches, and frozen food containers'),
+    (8, 'M-WARM', 'Medium Heated Warm Storage 6 m2', 2.00, 3.00, 2.50, 1, 1200, 'Medium heated constant-temperature unit designed for wooden instruments, vintage art, and dry electronics');
 
 SET IDENTITY_INSERT [core].[unit_types] OFF;
 

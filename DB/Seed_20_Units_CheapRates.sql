@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
    Seed Script: 20 Storage Units & Cheap Pricing (<= 10,000 VND)
    Purpose:
      1. Seed đúng 20 kho (Storage Units) cho 2 cơ sở (HCM & Hà Nội) với đầy đủ
@@ -39,12 +39,14 @@ SET IDENTITY_INSERT [core].[unit_types] ON;
 
 MERGE [core].[unit_types] AS target
 USING (VALUES
-    (1, 'S', 'Small 3 m2', 1.50, 2.00, 2.50, 0, 600.00, 'Tủ nhỏ chứa tài liệu, vali, đồ đạc cá nhân', 1),
-    (2, 'M', 'Medium 6 m2', 2.00, 3.00, 2.50, 0, 1200.00, 'Kho vừa cho nội thất phòng trọ, đồ gia đình', 1),
-    (3, 'M-CC', 'Medium 6 m2 Máy Lạnh', 2.00, 3.00, 2.50, 1, 1000.00, 'Kho máy lạnh kiểm soát nhiệt độ & độ ẩm', 1),
-    (4, 'L', 'Large 10 m2', 2.50, 4.00, 2.80, 0, 2000.00, 'Kho lớn cho thiết bị, nội thất căn hộ 2 phòng', 1),
-    (5, 'XL', 'Extra Large 16 m2', 4.00, 4.00, 3.00, 1, 3500.00, 'Kho siêu rộng cho doanh nghiệp, lưu kho hàng hóa', 1),
-    (6, 'MINI', 'Mini Locker 1 m2', 1.00, 1.00, 1.20, 0, 200.00, 'Ngăn tủ mini gửi balo, túi xách, hồ sơ nhỏ', 1)
+    (1, 'S-DRY', 'Small Dry Goods Storage 3 m2', 1.50, 2.00, 2.50, 0, 600.00, 'Ambient dry storage optimal for non-perishable food, grains, boxes, and documents', 1),
+    (2, 'M-DRY', 'Medium Dry Goods Storage 6 m2', 2.00, 3.00, 2.50, 0, 1200.00, 'Spacious ambient dry storage room for packaged inventory, textiles, and household furniture', 1),
+    (3, 'M-SEAFOOD', 'Medium Seafood & Deep Freeze Storage 6 m2', 2.00, 3.00, 2.50, 1, 1000.00, 'Sub-zero cold storage specially calibrated for seafood preservation, frozen fish, and perishables', 1),
+    (4, 'L-WARM', 'Large Heated Warm Storage 10 m2', 2.50, 4.00, 2.80, 1, 2000.00, 'Warmed temperature-regulated storage (22C to 26C) for musical instruments, delicate crafts, and audio gear', 1),
+    (5, 'XL-CLIMATE', 'Extra Large Climate-Controlled Storage 16 m2', 4.00, 4.00, 3.00, 1, 3500.00, 'High-capacity dual climate and humidity controlled storage for commercial enterprise logistics', 1),
+    (6, 'MINI-DRY', 'Mini Smart Dry Locker 1 m2', 1.00, 1.00, 1.20, 0, 200.00, 'High-security compact dry locker for personal gadgets, travel luggage, and confidential papers', 1),
+    (7, 'S-SEAFOOD', 'Small Seafood Cold Storage 3 m2', 1.50, 2.00, 2.50, 1, 600.00, 'Compact chilled cold room for seafood samples, fishery batches, and frozen food containers', 1),
+    (8, 'M-WARM', 'Medium Heated Warm Storage 6 m2', 2.00, 3.00, 2.50, 1, 1200.00, 'Medium heated constant-temperature unit designed for wooden instruments, vintage art, and dry electronics', 1)
 ) AS source (id, code, name, width_m, length_m, height_m, climate_controlled, max_weight_kg, description, is_active)
 ON (target.id = source.id)
 WHEN MATCHED THEN
@@ -100,6 +102,7 @@ WHEN NOT MATCHED THEN
 SET IDENTITY_INSERT [core].[facility_areas] OFF;
 
 -- ----------------------------------------------------------------------------
+-- ----------------------------------------------------------------------------
 -- 4. KHUNG GIÁ TẬP ĐOÀN (PRICE RANGES) - ĐỀU <= 10.000 VNĐ
 -- ----------------------------------------------------------------------------
 SET IDENTITY_INSERT [core].[price_ranges] ON;
@@ -111,7 +114,9 @@ USING (VALUES
     (3, 3, 2000.00, 8000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 5),
     (4, 4, 3000.00, 9000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 5),
     (5, 5, 4000.00, 10000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 5),
-    (6, 6, 500.00, 2000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 5)
+    (6, 6, 500.00, 2000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 5),
+    (7, 7, 1500.00, 6000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 5),
+    (8, 8, 2500.00, 8000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 5)
 ) AS source (id, unit_type_id, min_monthly_rate, max_monthly_rate, valid_from, valid_to, created_by)
 ON (target.id = source.id)
 WHEN MATCHED THEN
@@ -135,20 +140,24 @@ SET IDENTITY_INSERT [core].[facility_rates] ON;
 MERGE [core].[facility_rates] AS target
 USING (VALUES
     -- Facility 1: HCM (Thu Duc)
-    (1, 1, 1, 2000.00, 2000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
-    (2, 1, 2, 4000.00, 4000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
-    (3, 1, 3, 5000.00, 5000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
-    (6, 1, 4, 7000.00, 7000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
-    (7, 1, 5, 10000.00, 10000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
-    (8, 1, 6, 1000.00, 1000.00, 0.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (1,  1, 1, 2000.00, 2000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (2,  1, 2, 4000.00, 4000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (3,  1, 3, 5000.00, 5000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (6,  1, 4, 7000.00, 7000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (7,  1, 5, 10000.00, 10000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (8,  1, 6, 1000.00, 1000.00, 0.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (13, 1, 7, 3000.00, 3000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (14, 1, 8, 5000.00, 5000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
 
     -- Facility 2: HN (Cau Giay)
-    (4, 2, 1, 2000.00, 2000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
-    (5, 2, 2, 4000.00, 4000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
-    (9, 2, 3, 5000.00, 5000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (4,  2, 1, 2000.00, 2000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (5,  2, 2, 4000.00, 4000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (9,  2, 3, 5000.00, 5000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
     (10, 2, 4, 7000.00, 7000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
     (11, 2, 5, 9000.00, 9000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
-    (12, 2, 6, 1000.00, 1000.00, 0.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4)
+    (12, 2, 6, 1000.00, 1000.00, 0.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (15, 2, 7, 3000.00, 3000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4),
+    (16, 2, 8, 5000.00, 5000.00, 1000.00, CONVERT(date, '2026-01-01', 23), CAST(NULL AS date), 4)
 ) AS source (id, facility_id, unit_type_id, monthly_rate, deposit_amount, booking_fee, valid_from, valid_to, created_by)
 ON (target.id = source.id)
 WHEN MATCHED THEN
@@ -203,6 +212,9 @@ END;
 -- Xóa unit_map_positions cũ nếu cần để đồng bộ
 DELETE FROM [core].[unit_map_positions] WHERE unit_id BETWEEN 1 AND 20;
 
+-- Tạm tắt trigger kiểm tra chuyển trạng thái để merge mượt mà
+ALTER TABLE [core].[storage_units] DISABLE TRIGGER [trg_storage_unit_status_transition];
+
 -- Cập nhật hoặc chèn 20 kho
 SET IDENTITY_INSERT [core].[storage_units] ON;
 
@@ -210,30 +222,30 @@ MERGE [core].[storage_units] AS target
 USING (VALUES
     -- Cơ sở 1: Thu Duc Self Storage (14 kho)
     -- Tầng 1 - Zone A
-    (1,  1, 1, 3, 'A-101', '1', 'A', 'available', 1, N'Kho nhỏ 3m2 gần cửa ra vào'),
-    (2,  1, 1, 3, 'A-102', '1', 'A', 'available', 1, N'Kho nhỏ 3m2 tiêu chuẩn'),
-    (3,  1, 1, 3, 'A-103', '1', 'A', 'available', 1, N'Kho nhỏ 3m2 góc hành lang'),
-    (4,  1, 2, 3, 'A-104', '1', 'A', 'available', 1, N'Kho vừa 6m2 đồ nội thất'),
-    (5,  1, 2, 3, 'A-105', '1', 'A', 'available', 1, N'Kho vừa 6m2 rộng rãi'),
-    (6,  1, 3, 3, 'A-106', '1', 'A', 'available', 1, N'Kho máy lạnh 6m2 bảo quản đồ điện tử'),
-    (7,  1, 3, 3, 'A-107', '1', 'A', 'available', 1, N'Kho máy lạnh 6m2 cao cấp'),
-    (8,  1, 4, 3, 'A-108', '1', 'A', 'available', 1, N'Kho lớn 10m2 sức chứa 2 tấn'),
-    (9,  1, 5, 3, 'A-109', '1', 'A', 'available', 1, N'Kho siêu lớn 16m2 cho doanh nghiệp'),
-    (10, 1, 6, 3, 'A-110', '1', 'A', 'available', 1, N'Locker mini 1m2 để tài liệu'),
+    (1,  1, 1, 3, 'A-101', '1', 'A', 'available', 1, 'Small ambient dry storage near entrance (non-perishables, dry goods)'),
+    (2,  1, 1, 3, 'A-102', '1', 'A', 'available', 1, 'Standard small ambient dry storage unit'),
+    (3,  1, 1, 3, 'A-103', '1', 'A', 'available', 1, 'Corner ambient dry storage unit for household boxes'),
+    (4,  1, 2, 3, 'A-104', '1', 'A', 'available', 1, 'Medium dry goods storage for packaged stock and furniture'),
+    (5,  1, 2, 3, 'A-105', '1', 'A', 'available', 1, 'Spacious ambient dry storage room'),
+    (6,  1, 3, 3, 'A-106', '1', 'A', 'available', 1, 'Seafood & deep freeze cold room (-18°C sub-zero chilled)'),
+    (7,  1, 7, 3, 'A-107', '1', 'A', 'available', 1, 'Small chilled seafood & perishable food storage unit'),
+    (8,  1, 4, 3, 'A-108', '1', 'A', 'available', 1, 'Large heated warm storage (24°C) for acoustic instruments & electronics'),
+    (9,  1, 5, 3, 'A-109', '1', 'A', 'available', 1, 'Enterprise dual climate-controlled warehouse unit'),
+    (10, 1, 6, 3, 'A-110', '1', 'A', 'available', 1, 'Smart dry locker for personal gadgets and documents'),
 
     -- Tầng 1 - Zone B
-    (11, 1, 1, 6, 'B-101', '1', 'B', 'available', 1, N'Kho nhỏ 3m2 Khu B'),
-    (12, 1, 2, 6, 'B-102', '1', 'B', 'available', 1, N'Kho vừa 6m2 Khu B'),
-    (13, 1, 3, 6, 'B-103', '1', 'B', 'available', 1, N'Kho máy lạnh 6m2 Khu B'),
-    (14, 1, 4, 6, 'B-104', '1', 'B', 'available', 1, N'Kho lớn 10m2 Khu B'),
+    (11, 1, 7, 6, 'B-101', '1', 'B', 'available', 1, 'Small chilled cold room for seafood & fishery goods in Zone B'),
+    (12, 1, 8, 6, 'B-102', '1', 'B', 'available', 1, 'Medium heated room for warmth-sensitive equipment & art in Zone B'),
+    (13, 1, 3, 6, 'B-103', '1', 'B', 'available', 1, 'Seafood & deep freeze cold room in Zone B'),
+    (14, 1, 4, 6, 'B-104', '1', 'B', 'available', 1, 'Large heated warm storage room in Zone B'),
 
     -- Cơ sở 2: Cau Giay Self Storage (6 kho)
-    (15, 2, 1, 5, 'HN-101', '1', 'A', 'available', 1, N'Kho nhỏ Hà Nội 3m2'),
-    (16, 2, 1, 5, 'HN-102', '1', 'A', 'available', 1, N'Kho nhỏ Hà Nội 3m2'),
-    (17, 2, 2, 5, 'HN-103', '1', 'A', 'available', 1, N'Kho vừa Hà Nội 6m2'),
-    (18, 2, 3, 5, 'HN-104', '1', 'A', 'available', 1, N'Kho máy lạnh Hà Nội 6m2'),
-    (19, 2, 4, 5, 'HN-105', '1', 'A', 'available', 1, N'Kho lớn Hà Nội 10m2'),
-    (20, 2, 5, 5, 'HN-106', '1', 'A', 'available', 1, N'Kho siêu lớn Hà Nội 16m2')
+    (15, 2, 1, 5, 'HN-101', '1', 'A', 'available', 1, 'Hanoi dry storage unit for apparel & records'),
+    (16, 2, 7, 5, 'HN-102', '1', 'A', 'available', 1, 'Hanoi cold storage for seafood and chilled freight'),
+    (17, 2, 8, 5, 'HN-103', '1', 'A', 'available', 1, 'Hanoi heated warm storage for delicate winter cargo'),
+    (18, 2, 3, 5, 'HN-104', '1', 'A', 'available', 1, 'Hanoi commercial seafood deep freeze unit'),
+    (19, 2, 4, 5, 'HN-105', '1', 'A', 'available', 1, 'Hanoi large heated storage unit'),
+    (20, 2, 5, 5, 'HN-106', '1', 'A', 'available', 1, 'Hanoi extra large climate-controlled logistics space')
 ) AS source (id, facility_id, unit_type_id, area_id, unit_code, floor_label, zone_label, physical_status, is_listed, notes)
 ON (target.id = source.id)
 WHEN MATCHED THEN
@@ -244,7 +256,10 @@ WHEN MATCHED THEN
         target.unit_code = source.unit_code,
         target.floor_label = source.floor_label,
         target.zone_label = source.zone_label,
-        target.physical_status = source.physical_status,
+        target.physical_status = CASE 
+            WHEN target.physical_status IN ('occupied', 'reserved') THEN target.physical_status 
+            ELSE source.physical_status 
+        END,
         target.is_listed = source.is_listed,
         target.notes = source.notes
 WHEN NOT MATCHED THEN
@@ -252,6 +267,8 @@ WHEN NOT MATCHED THEN
     VALUES (source.id, source.facility_id, source.unit_type_id, source.area_id, source.unit_code, source.floor_label, source.zone_label, source.physical_status, source.is_listed, source.notes);
 
 SET IDENTITY_INSERT [core].[storage_units] OFF;
+
+ALTER TABLE [core].[storage_units] ENABLE TRIGGER [trg_storage_unit_status_transition];
 
 -- ----------------------------------------------------------------------------
 -- 8. TỌA ĐỘ BẢN ĐỒ 2D CHO CẢ 20 KHO (UNIT MAP POSITIONS)

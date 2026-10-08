@@ -41,3 +41,6 @@ fe/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Backup bundles
+*.bundle
