@@ -111,6 +111,15 @@ public class FacilityStaffServiceTests
         var handover = await db.HandoverRecords.FindAsync(result.HandoverId);
         Assert.NotNull(handover);
 
+        var updatedAgreement = await db.RentalAgreements.FindAsync(result.AgreementId);
+        Assert.NotNull(updatedAgreement);
+        Assert.NotNull(updatedAgreement.CheckedInAt);
+
+        var pinCred = await db.AccessCredentials.FirstOrDefaultAsync(c => c.AgreementId == result.AgreementId && c.CredentialType == CredentialTypeConstants.Pin);
+        Assert.NotNull(pinCred);
+        Assert.Equal(CredentialStatusConstants.Active, pinCred.Status);
+        Assert.NotNull(pinCred.DisplayHint);
+
         var inspection = await db.Inspections.FindAsync(handover.InspectionId);
         Assert.NotNull(inspection);
         Assert.Equal(InspectionStatusConstants.Completed, inspection.Status);
@@ -241,5 +250,154 @@ public class FacilityStaffServiceTests
         Assert.Equal(TicketStatusConstants.Resolved, updated!.Status);
         Assert.Equal("Resynced PIN on keypad controller.", updated.Resolution);
         Assert.NotNull(updated.ResolvedAt);
+    }
+
+    [Fact]
+    public async Task CreateHandover_WhenReservationNotConfirmed_ThrowsAppException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+
+        var employeeUser = new User { Id = 3, Email = "staff@system.local", PasswordHash = "hash", Status = "active" };
+        var employee = new EmployeeProfile { UserId = 3, EmployeeCode = "EMP-003", FullName = "Staff Nguyen", HireDate = new DateOnly(2025, 1, 1), EmploymentStatus = "active" };
+        var customerUser = new User { Id = 10, Email = "customer@system.local", PasswordHash = "hash", Status = "active" };
+        var customer = new CustomerProfile { UserId = 10, FullName = "Tran Customer", IdentityNumber = "123456789" };
+
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "District 7 Facility", AddressLine = "123 Street", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var unitType = new UnitType { Id = 1, Code = "SM", Name = "Small Locker", WidthM = 1, LengthM = 1, HeightM = 1, IsActive = true };
+        var unit = new StorageUnit { Id = 101, FacilityId = 1, UnitTypeId = 1, UnitCode = "U-101", PhysicalStatus = StorageUnitStatusConstants.Reserved, IsListed = true };
+
+        var reservation = new Reservation
+        {
+            Id = 51,
+            ReservationCode = "RSV-5151",
+            CustomerId = 10,
+            FacilityId = 1,
+            UnitTypeId = 1,
+            FacilityRateId = 1,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(1)),
+            MonthlyRateSnapshot = 1000000m,
+            DepositSnapshot = 1000000m,
+            BookingFeeSnapshot = 50000m,
+            DiscountSnapshot = 0m,
+            QuotedTotal = 1050000m,
+            HoldUntil = DateTimeOffset.UtcNow.AddHours(2),
+            Status = ReservationStatusConstants.Pending, // Unpaid/Pending
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        var allocation = new UnitAllocation
+        {
+            Id = 2,
+            StorageUnitId = 101,
+            ReservationId = 51,
+            AllocationKind = AllocationKindConstants.ReservationHold,
+            AllocationStartDate = reservation.StartDate,
+            AllocationEndDate = reservation.EndDate,
+            Status = AllocationStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        db.Users.AddRange(employeeUser, customerUser);
+        db.EmployeeProfiles.Add(employee);
+        db.CustomerProfiles.Add(customer);
+        db.Facilities.Add(facility);
+        db.UnitTypes.Add(unitType);
+        db.StorageUnits.Add(unit);
+        db.Reservations.Add(reservation);
+        db.UnitAllocations.Add(allocation);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityStaffService(db);
+        var request = new CreateStaffHandoverRequest(
+            ReservationId: 51,
+            HandoverType: HandoverTypeConstants.CheckIn,
+            CustomerSignatureRef: "sig-cust-123",
+            StaffSignatureRef: "sig-staff-456",
+            Notes: "Attempting handover on unpaid reservation",
+            OverallCondition: "Clean",
+            InspectionSummary: null,
+            InspectionItems: null
+        );
+
+        // Act & Assert (BR-RSV-04)
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => service.CreateHandoverAsync(employeeUserId: 3, request));
+        var hasError = Assert.IsAssignableFrom<IHasAppError>(ex);
+        Assert.Equal("Staff.ReservationNotConfirmed", hasError.Error.Code);
+    }
+
+    [Fact]
+    public async Task AssignUnitToReservation_WhenReassigned_FreesOldUnitToAvailable()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+
+        var employeeUser = new User { Id = 3, Email = "staff@system.local", PasswordHash = "hash", Status = "active" };
+        var employee = new EmployeeProfile { UserId = 3, EmployeeCode = "EMP-003", FullName = "Staff Nguyen", HireDate = new DateOnly(2025, 1, 1), EmploymentStatus = "active" };
+
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "District 7 Facility", AddressLine = "123 Street", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var unitType = new UnitType { Id = 1, Code = "SM", Name = "Small Locker", WidthM = 1, LengthM = 1, HeightM = 1, IsActive = true };
+
+        var oldUnit = new StorageUnit { Id = 101, FacilityId = 1, UnitTypeId = 1, UnitCode = "U-101", PhysicalStatus = StorageUnitStatusConstants.Reserved, IsListed = true };
+        var newUnit = new StorageUnit { Id = 102, FacilityId = 1, UnitTypeId = 1, UnitCode = "U-102", PhysicalStatus = StorageUnitStatusConstants.Available, IsListed = true };
+
+        var reservation = new Reservation
+        {
+            Id = 52,
+            ReservationCode = "RSV-5252",
+            CustomerId = 10,
+            FacilityId = 1,
+            UnitTypeId = 1,
+            FacilityRateId = 1,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(1)),
+            MonthlyRateSnapshot = 1000000m,
+            DepositSnapshot = 1000000m,
+            BookingFeeSnapshot = 50000m,
+            DiscountSnapshot = 0m,
+            QuotedTotal = 1050000m,
+            HoldUntil = DateTimeOffset.UtcNow.AddHours(2),
+            Status = ReservationStatusConstants.Confirmed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        var allocation = new UnitAllocation
+        {
+            Id = 3,
+            StorageUnitId = 101, // Initially assigned to U-101
+            ReservationId = 52,
+            AllocationKind = AllocationKindConstants.ReservationHold,
+            AllocationStartDate = reservation.StartDate,
+            AllocationEndDate = reservation.EndDate,
+            Status = AllocationStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        db.Users.Add(employeeUser);
+        db.EmployeeProfiles.Add(employee);
+        db.Facilities.Add(facility);
+        db.UnitTypes.Add(unitType);
+        db.StorageUnits.AddRange(oldUnit, newUnit);
+        db.Reservations.Add(reservation);
+        db.UnitAllocations.Add(allocation);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityStaffService(db);
+        var request = new AssignUnitToReservationRequest(StorageUnitId: 102);
+
+        // Act: Reassign reservation to U-102
+        await service.AssignUnitToReservationAsync(employeeUserId: 3, reservationId: 52, request);
+
+        // Assert: Old unit U-101 is freed back to Available, New unit U-102 is Reserved
+        var refreshedOldUnit = await db.StorageUnits.FindAsync(101L);
+        Assert.NotNull(refreshedOldUnit);
+        Assert.Equal(StorageUnitStatusConstants.Available, refreshedOldUnit.PhysicalStatus);
+
+        var refreshedNewUnit = await db.StorageUnits.FindAsync(102L);
+        Assert.NotNull(refreshedNewUnit);
+        Assert.Equal(StorageUnitStatusConstants.Reserved, refreshedNewUnit.PhysicalStatus);
     }
 }

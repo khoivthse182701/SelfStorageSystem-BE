@@ -212,6 +212,17 @@ public class FacilityStaffService : IFacilityStaffService
 
         if (reservation.UnitAllocation != null)
         {
+            if (reservation.UnitAllocation.StorageUnitId != unit.Id)
+            {
+                var oldUnit = await _dbContext.StorageUnits
+                    .FirstOrDefaultAsync(u => u.Id == reservation.UnitAllocation.StorageUnitId, cancellationToken);
+                if (oldUnit != null && oldUnit.PhysicalStatus == StorageUnitStatusConstants.Reserved)
+                {
+                    oldUnit.PhysicalStatus = StorageUnitStatusConstants.Available;
+                    oldUnit.UpdatedAt = DateTimeOffset.UtcNow;
+                }
+            }
+
             reservation.UnitAllocation.StorageUnitId = unit.Id;
             reservation.UnitAllocation.Status = AllocationStatusConstants.Active;
             reservation.UnitAllocation.AssignedBy = employee.UserId;
@@ -255,6 +266,10 @@ public class FacilityStaffService : IFacilityStaffService
         if (reservation == null)
             throw AppException.FromError(StaffErrors.ReservationNotFound);
 
+        // BR-RSV-04: Only confirmed (fully paid) reservations can be handed over
+        if (reservation.Status != ReservationStatusConstants.Confirmed)
+            throw AppException.FromError(StaffErrors.ReservationNotConfirmed);
+
         if (reservation.UnitAllocation == null)
             throw AppException.FromError(StaffErrors.UnitNotFound);
 
@@ -280,6 +295,7 @@ public class FacilityStaffService : IFacilityStaffService
                 DepositBalance = reservation.DepositSnapshot,
                 Status = RentalAgreementStatusConstants.Active,
                 SignedAt = now,
+                CheckedInAt = now,
                 CreatedAt = now,
                 UpdatedAt = now
             };
@@ -289,7 +305,33 @@ public class FacilityStaffService : IFacilityStaffService
         else
         {
             agreement.Status = RentalAgreementStatusConstants.Active;
+            agreement.CheckedInAt = now;
+            if (agreement.SignedAt == null) agreement.SignedAt = now;
             agreement.UpdatedAt = now;
+        }
+
+        // Issue keypad PIN access credential for customer upon check-in per BR-RSV-04
+        var pinCredential = await _dbContext.AccessCredentials
+            .FirstOrDefaultAsync(c => c.AgreementId == agreement.Id && c.CredentialType == CredentialTypeConstants.Pin, cancellationToken);
+        if (pinCredential == null)
+        {
+            var randomPin = Random.Shared.Next(100000, 999999).ToString("D6");
+            var pinCred = new AccessCredential
+            {
+                AgreementId = agreement.Id,
+                CredentialType = CredentialTypeConstants.Pin,
+                SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin),
+                DisplayHint = randomPin,
+                IssuedAt = now,
+                ExpiresAt = now.AddYears(1),
+                Status = CredentialStatusConstants.Active,
+                CreatedAt = now
+            };
+            _dbContext.AccessCredentials.Add(pinCred);
+        }
+        else if (pinCredential.Status != CredentialStatusConstants.Active)
+        {
+            pinCredential.Status = CredentialStatusConstants.Active;
         }
 
         // Link unit allocation to agreement

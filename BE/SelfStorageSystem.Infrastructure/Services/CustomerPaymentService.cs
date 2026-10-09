@@ -697,7 +697,8 @@ public class CustomerPaymentService : ICustomerPaymentService
                     red.Status = PromotionRedemptionStatusConstants.Applied;
                 }
 
-                // Create active RentalAgreement and AccessCredential so the customer immediately owns and accesses their unit
+                // Create draft RentalAgreement linked to invoice and reservation (Flow 1).
+                // Per BR-RSV-04, unit remains Reserved and agreement awaits on-site Staff Check-in & Handover (Flow 2) to become Active with Issued PIN.
                 var existingAgreement = await _dbContext.RentalAgreements
                     .FirstOrDefaultAsync(a => a.ReservationId == reservation.Id, cancellationToken);
 
@@ -724,9 +725,9 @@ public class CustomerPaymentService : ICustomerPaymentService
                         MonthlyRateSnapshot = reservation.MonthlyRateSnapshot,
                         DepositSnapshot = reservation.DepositSnapshot,
                         DepositBalance = reservation.DepositSnapshot,
-                        Status = RentalAgreementStatusConstants.Active,
-                        SignedAt = now,
-                        CheckedInAt = now,
+                        Status = RentalAgreementStatusConstants.Draft,
+                        SignedAt = null,
+                        CheckedInAt = null,
                         CreatedAt = now,
                         UpdatedAt = now
                     };
@@ -737,54 +738,6 @@ public class CustomerPaymentService : ICustomerPaymentService
                     {
                         invoice.AgreementId = agreement.Id;
                     }
-
-                    // Transition reservation unit allocation to rental allocation
-                    var resAllocation = await _dbContext.UnitAllocations
-                        .FirstOrDefaultAsync(ua => ua.ReservationId == reservation.Id && ua.Status == AllocationStatusConstants.Active, cancellationToken);
-
-                    if (resAllocation != null)
-                    {
-                        resAllocation.Status = "consumed";
-                        resAllocation.EndedAt = now;
-                        await _dbContext.SaveChangesAsync(cancellationToken);
-
-                        var rentalAllocation = new UnitAllocation
-                        {
-                            StorageUnitId = resAllocation.StorageUnitId,
-                            AgreementId = agreement.Id,
-                            AllocationKind = AllocationKindConstants.Rental,
-                            AllocationStartDate = reservation.StartDate,
-                            AllocationEndDate = reservation.EndDate,
-                            Status = AllocationStatusConstants.Active,
-                            CreatedAt = now
-                        };
-                        _dbContext.UnitAllocations.Add(rentalAllocation);
-                        await _dbContext.SaveChangesAsync(cancellationToken);
-
-                        // Update storage unit physical status to occupied
-                        var storageUnit = await _dbContext.StorageUnits.FindAsync(new object[] { resAllocation.StorageUnitId }, cancellationToken);
-                        if (storageUnit != null && storageUnit.PhysicalStatus == StorageUnitStatusConstants.Reserved)
-                        {
-                            storageUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
-                            storageUnit.UpdatedAt = now;
-                            await _dbContext.SaveChangesAsync(cancellationToken);
-                        }
-                    }
-
-                    // Generate secure 6-digit numeric keypad PIN
-                    var randomPin = Random.Shared.Next(100000, 999999).ToString();
-                    var pinCred = new AccessCredential
-                    {
-                        AgreementId = agreement.Id,
-                        CredentialType = CredentialTypeConstants.Pin,
-                        SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin),
-                        DisplayHint = randomPin,
-                        IssuedAt = now,
-                        ExpiresAt = now.AddYears(1),
-                        Status = CredentialStatusConstants.Active,
-                        CreatedAt = now
-                    };
-                    _dbContext.AccessCredentials.Add(pinCred);
                 }
             }
 
