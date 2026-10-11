@@ -50,7 +50,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
             if (itemDto.EstimatedValue.HasValue && itemDto.EstimatedValue < 0)
                 throw AppException.FromError(StoredItemErrors.InvalidEstimatedValue);
 
-            CheckProhibitedContent(itemDto.ItemName, itemDto.Description);
+            CheckProhibitedContent(itemDto.ItemName, $"{itemDto.Description} {itemDto.LocationNote}");
 
             var category = string.IsNullOrWhiteSpace(itemDto.Category) 
                 ? StoredItemCategoryConstants.Other 
@@ -72,6 +72,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
                 ItemName = itemDto.ItemName.Trim(),
                 Category = category,
                 Description = itemDto.Description?.Trim(),
+                LocationNote = itemDto.LocationNote?.Trim(),
                 Quantity = itemDto.Quantity,
                 EstimatedValue = itemDto.EstimatedValue,
                 RiskClassification = riskClassification,
@@ -84,12 +85,14 @@ public class CustomerStoredItemService : ICustomerStoredItemService
         _dbContext.StoredItems.AddRange(itemsToAdd);
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        return await GetDeclaredStoredItemsAsync(customerId, agreementId, cancellationToken);
+        return await GetDeclaredStoredItemsAsync(customerId, agreementId, cancellationToken: cancellationToken);
     }
 
     public async Task<RentalStoredItemsResponseDto> GetDeclaredStoredItemsAsync(
         long customerId,
         long agreementId,
+        string? search = null,
+        string? category = null,
         CancellationToken cancellationToken = default)
     {
         var agreementExists = await _dbContext.RentalAgreements
@@ -98,9 +101,26 @@ public class CustomerStoredItemService : ICustomerStoredItemService
         if (!agreementExists)
             throw AppException.FromError(StoredItemErrors.AgreementNotFound);
 
-        var items = await _dbContext.StoredItems
+        var query = _dbContext.StoredItems
             .AsNoTracking()
-            .Where(i => i.AgreementId == agreementId)
+            .Where(i => i.AgreementId == agreementId);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var searchKeyword = search.Trim().ToLower();
+            query = query.Where(i =>
+                i.ItemName.ToLower().Contains(searchKeyword) ||
+                (i.Description != null && i.Description.ToLower().Contains(searchKeyword)) ||
+                (i.LocationNote != null && i.LocationNote.ToLower().Contains(searchKeyword)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            var categoryLower = category.Trim().ToLower();
+            query = query.Where(i => i.Category.ToLower() == categoryLower);
+        }
+
+        var items = await query
             .OrderByDescending(i => i.DeclaredAt)
             .ToListAsync(cancellationToken);
 
@@ -115,7 +135,8 @@ public class CustomerStoredItemService : ICustomerStoredItemService
             RiskClassification: i.RiskClassification,
             PhotoUrl: i.PhotoUrl,
             DeclaredAt: i.DeclaredAt,
-            UpdatedAt: i.UpdatedAt
+            UpdatedAt: i.UpdatedAt,
+            LocationNote: i.LocationNote
         )).ToList();
 
         var totalCount = itemDtos.Sum(i => i.Quantity);
@@ -160,7 +181,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
         if (request.EstimatedValue.HasValue && request.EstimatedValue < 0)
             throw AppException.FromError(StoredItemErrors.InvalidEstimatedValue);
 
-        CheckProhibitedContent(request.ItemName, request.Description);
+        CheckProhibitedContent(request.ItemName, $"{request.Description} {request.LocationNote}");
 
         var category = string.IsNullOrWhiteSpace(request.Category)
             ? StoredItemCategoryConstants.Other
@@ -179,6 +200,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
         item.ItemName = request.ItemName.Trim();
         item.Category = category;
         item.Description = request.Description?.Trim();
+        item.LocationNote = request.LocationNote?.Trim();
         item.Quantity = request.Quantity;
         item.EstimatedValue = request.EstimatedValue;
         item.RiskClassification = riskClassification;
@@ -198,7 +220,8 @@ public class CustomerStoredItemService : ICustomerStoredItemService
             RiskClassification: item.RiskClassification,
             PhotoUrl: item.PhotoUrl,
             DeclaredAt: item.DeclaredAt,
-            UpdatedAt: item.UpdatedAt
+            UpdatedAt: item.UpdatedAt,
+            LocationNote: item.LocationNote
         );
     }
 

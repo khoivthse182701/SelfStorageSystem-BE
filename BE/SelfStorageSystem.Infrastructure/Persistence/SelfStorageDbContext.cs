@@ -2933,6 +2933,7 @@ public partial class SelfStorageDbContext : DbContext
             entity.Property(e => e.EstimatedValue).HasColumnType("decimal(18, 2)").HasColumnName("estimated_value");
             entity.Property(e => e.RiskClassification).HasMaxLength(50).HasDefaultValue("standard").HasColumnName("risk_classification");
             entity.Property(e => e.PhotoUrl).HasMaxLength(500).HasColumnName("photo_url");
+            entity.Property(e => e.LocationNote).HasMaxLength(255).HasColumnName("location_note");
             entity.Property(e => e.DeclaredAt).HasDefaultValueSql("(sysutcdatetime())").HasColumnName("declared_at");
             entity.Property(e => e.UpdatedAt).HasDefaultValueSql("(sysutcdatetime())").HasColumnName("updated_at");
 

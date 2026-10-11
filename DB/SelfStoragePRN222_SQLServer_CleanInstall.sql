@@ -476,6 +476,24 @@ CREATE INDEX rental_agreements_facility_status_idx
 CREATE INDEX rental_agreements_policy_version_id_idx
     ON [core].rental_agreements (policy_version_id);
 
+CREATE TABLE [core].stored_items (
+    id bigint IDENTITY(1,1) PRIMARY KEY,
+    agreement_id bigint NOT NULL REFERENCES [core].rental_agreements(id) ON DELETE CASCADE,
+    item_name nvarchar(255) NOT NULL,
+    category nvarchar(100),
+    description nvarchar(max),
+    quantity int NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    estimated_value numeric(14, 2) CHECK (estimated_value IS NULL OR estimated_value >= 0),
+    risk_classification nvarchar(50) NOT NULL DEFAULT 'standard',
+    photo_url nvarchar(500),
+    location_note nvarchar(255),
+    declared_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME()
+);
+
+CREATE INDEX stored_items_agreement_id_idx
+    ON [core].stored_items (agreement_id, category);
+
 CREATE TABLE [core].unit_allocations (
     id bigint IDENTITY(1,1) PRIMARY KEY,
     storage_unit_id bigint NOT NULL REFERENCES [core].storage_units(id) ON DELETE NO ACTION,

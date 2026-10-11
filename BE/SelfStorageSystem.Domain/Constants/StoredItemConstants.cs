@@ -32,3 +32,11 @@ public static class StoredItemRulesConstants
         "chất nổ", "chất dễ cháy", "vũ khí", "ma túy", "hàng cấm", "hóa chất độc hại", "súng"
     };
 }
+
+public static class StoredItemMessages
+{
+    public const string DeclaredSuccess = "Declared stored items successfully.";
+    public const string RetrievedSuccess = "Retrieved declared stored items successfully.";
+    public const string UpdatedSuccess = "Stored item updated successfully.";
+    public const string DeletedSuccess = "Stored item deleted successfully.";
+}

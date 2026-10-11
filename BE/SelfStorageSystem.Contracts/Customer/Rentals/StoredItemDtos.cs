@@ -7,7 +7,8 @@ public record CreateStoredItemDto(
     int Quantity = 1,
     decimal? EstimatedValue = null,
     string? RiskClassification = null,
-    string? PhotoUrl = null
+    string? PhotoUrl = null,
+    string? LocationNote = null
 );
 
 public record DeclareStoredItemsRequest(
@@ -21,7 +22,8 @@ public record UpdateStoredItemRequest(
     int Quantity,
     decimal? EstimatedValue,
     string? RiskClassification,
-    string? PhotoUrl
+    string? PhotoUrl,
+    string? LocationNote = null
 );
 
 public record StoredItemDto(
@@ -35,7 +37,8 @@ public record StoredItemDto(
     string RiskClassification,
     string? PhotoUrl,
     DateTimeOffset DeclaredAt,
-    DateTimeOffset UpdatedAt
+    DateTimeOffset UpdatedAt,
+    string? LocationNote = null
 );
 
 public record RentalStoredItemsResponseDto(

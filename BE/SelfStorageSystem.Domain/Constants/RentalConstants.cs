@@ -161,6 +161,15 @@ public static class RentalLogMessages
     public const string OutsideBusinessHours = "Access credential request rejected for agreement {AgreementId}. Outside business hours ({Opening}-{Closing}). Current facility time: {CurrentTime}";
     public const string PinLockout = "Agreement {AgreementId} locked out from changing PIN due to too many failed attempts.";
     public const string FailedPinVerification = "Failed current PIN verification for agreement {AgreementId}. Attempt {AttemptCount}/{MaxAttempts}";
+    public const string UnlockLockout = "Agreement {AgreementId} locked out from unlocking unit due to too many failed PIN attempts.";
+    public const string FailedUnlockVerification = "Failed PIN unlock verification for agreement {AgreementId}. Attempt {AttemptCount}/{MaxAttempts}";
+    public const string UnitUnlockedSuccess = "Customer {CustomerId} successfully unlocked storage unit {UnitCode} for agreement {AgreementId}.";
+}
+
+public static class RentalUnlockMessages
+{
+    public const int DefaultRelockAfterSeconds = 30;
+    public const string UnitUnlockedFormat = "Kho {0} tại {1} đã được mở khóa thành công. Cửa sẽ tự động khóa lại sau {2} giây.";
 }
 
 public static class RentalDefaults

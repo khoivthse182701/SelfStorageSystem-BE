@@ -355,7 +355,7 @@ public class CustomerRentalService : ICustomerRentalService
         var lockoutKey = $"{RentalDefaults.PinLockoutCacheKeyPrefix}unlock:{agreementId}";
         if (_cache.TryGetValue(lockoutKey, out int failedAttempts) && failedAttempts >= _rentalSettings.MaxFailedPinAttempts)
         {
-            _logger.LogWarning("Agreement {AgreementId} locked out from unlocking unit due to too many failed PIN attempts.", agreementId);
+            _logger.LogWarning(RentalLogMessages.UnlockLockout, agreementId);
             throw AppException.FromError(RentalErrors.TooManyFailedPinAttempts);
         }
 
@@ -455,7 +455,7 @@ public class CustomerRentalService : ICustomerRentalService
         {
             var newCount = failedAttempts + 1;
             _cache.Set(lockoutKey, newCount, TimeSpan.FromMinutes(_rentalSettings.PinLockoutDurationMinutes));
-            _logger.LogWarning("Failed PIN unlock verification for agreement {AgreementId}. Attempt {AttemptCount}/{MaxAttempts}",
+            _logger.LogWarning(RentalLogMessages.FailedUnlockVerification,
                 agreementId, newCount, _rentalSettings.MaxFailedPinAttempts);
             throw AppException.FromError(RentalErrors.IncorrectPin);
         }
@@ -467,7 +467,7 @@ public class CustomerRentalService : ICustomerRentalService
         var unitCode = activeAlloc?.StorageUnit?.UnitCode ?? string.Empty;
         var facilityName = agreement.Facility?.Name ?? string.Empty;
 
-        _logger.LogInformation("Customer {CustomerId} successfully unlocked storage unit {UnitCode} for agreement {AgreementId}.",
+        _logger.LogInformation(RentalLogMessages.UnitUnlockedSuccess,
             customerId, unitCode, agreementId);
 
         return new UnlockStorageUnitResponseDto
@@ -477,8 +477,8 @@ public class CustomerRentalService : ICustomerRentalService
             UnitCode = unitCode,
             FacilityName = facilityName,
             UnlockedAt = now,
-            RelockAfterSeconds = 30,
-            Message = $"Kho {unitCode} tại {facilityName} đã được mở khóa thành công. Cửa sẽ tự động khóa lại sau 30 giây."
+            RelockAfterSeconds = RentalUnlockMessages.DefaultRelockAfterSeconds,
+            Message = string.Format(RentalUnlockMessages.UnitUnlockedFormat, unitCode, facilityName, RentalUnlockMessages.DefaultRelockAfterSeconds)
         };
     }
 

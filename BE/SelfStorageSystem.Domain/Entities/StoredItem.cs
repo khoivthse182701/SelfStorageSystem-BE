@@ -22,6 +22,8 @@ public partial class StoredItem
 
     public string? PhotoUrl { get; set; }
 
+    public string? LocationNote { get; set; }
+
     public DateTimeOffset DeclaredAt { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

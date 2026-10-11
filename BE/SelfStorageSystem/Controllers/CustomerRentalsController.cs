@@ -159,11 +159,11 @@ public class CustomerRentalsController : ControllerBase
         return CreatedAtAction(
             nameof(GetDeclaredStoredItems), 
             new { agreementId = result.AgreementId }, 
-            ApiResponse<RentalStoredItemsResponseDto>.Ok(result, "Declared stored items successfully."));
+            ApiResponse<RentalStoredItemsResponseDto>.Ok(result, StoredItemMessages.DeclaredSuccess));
     }
 
     /// <summary>
-    /// Retrieves the list of declared stored items for a specific rental agreement.
+    /// Retrieves the list of declared stored items for a specific rental agreement, with optional search and category filters.
     /// </summary>
     [HttpGet("{agreementId:long}/items")]
     [ProducesResponseType(typeof(ApiResponse<RentalStoredItemsResponseDto>), StatusCodes.Status200OK)]
@@ -171,6 +171,8 @@ public class CustomerRentalsController : ControllerBase
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetDeclaredStoredItems(
         [FromRoute] long agreementId,
+        [FromQuery] string? search,
+        [FromQuery] string? category,
         CancellationToken cancellationToken)
     {
         if (!TryGetCustomerId(out var customerId))
@@ -178,8 +180,8 @@ public class CustomerRentalsController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
         }
 
-        var result = await _itemService.GetDeclaredStoredItemsAsync(customerId, agreementId, cancellationToken);
-        return Ok(ApiResponse<RentalStoredItemsResponseDto>.Ok(result, "Retrieved declared stored items successfully."));
+        var result = await _itemService.GetDeclaredStoredItemsAsync(customerId, agreementId, search, category, cancellationToken);
+        return Ok(ApiResponse<RentalStoredItemsResponseDto>.Ok(result, StoredItemMessages.RetrievedSuccess));
     }
 
     /// <summary>
@@ -202,7 +204,7 @@ public class CustomerRentalsController : ControllerBase
         }
 
         var result = await _itemService.UpdateStoredItemAsync(customerId, agreementId, itemId, request, cancellationToken);
-        return Ok(ApiResponse<StoredItemDto>.Ok(result, "Stored item updated successfully."));
+        return Ok(ApiResponse<StoredItemDto>.Ok(result, StoredItemMessages.UpdatedSuccess));
     }
 
     /// <summary>
@@ -223,7 +225,7 @@ public class CustomerRentalsController : ControllerBase
         }
 
         await _itemService.DeleteStoredItemAsync(customerId, agreementId, itemId, cancellationToken);
-        return Ok(ApiResponse.Ok("Stored item deleted successfully."));
+        return Ok(ApiResponse.Ok(StoredItemMessages.DeletedSuccess));
     }
 
     /// <summary>

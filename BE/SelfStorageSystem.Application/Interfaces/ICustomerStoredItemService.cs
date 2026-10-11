@@ -13,6 +13,8 @@ public interface ICustomerStoredItemService
     Task<RentalStoredItemsResponseDto> GetDeclaredStoredItemsAsync(
         long customerId,
         long agreementId,
+        string? search = null,
+        string? category = null,
         CancellationToken cancellationToken = default);
 
     Task<StoredItemDto> UpdateStoredItemAsync(
