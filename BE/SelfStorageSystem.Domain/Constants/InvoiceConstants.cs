@@ -18,4 +18,5 @@ public static class InvoiceLineTypeConstants
     public const string Discount = "discount";
     public const string Penalty = "penalty";
     public const string Service = "service";
+    public const string Damage = "damage";
 }
