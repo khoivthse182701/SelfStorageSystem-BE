@@ -12,6 +12,12 @@ public static class AdminConstants
     public const int ConsecutiveFailedThreshold = 3;
     public const int SuspiciousWindowMinutes = 60;
 
+    public const int MinPasswordLength = 6;
+    public const int RecentLoginsTake = 20;
+    public const string DefaultNotApplicable = "N/A";
+    public const string RevokedStatus = "REVOKED";
+    public const int AutoEmployeeCodeModulo = 1000000;
+
     public const string SuspiciousMultipleFailedReason = "Nhiều lần đăng nhập thất bại liên tiếp (>= 3 lần trong 60 phút)";
     public const string SuspiciousLockedAttemptReason = "Nỗ lực đăng nhập vào tài khoản đang bị khóa";
     public const string SuspiciousBlockedAttemptReason = "Đăng nhập bị chặn bởi hệ thống bảo mật";

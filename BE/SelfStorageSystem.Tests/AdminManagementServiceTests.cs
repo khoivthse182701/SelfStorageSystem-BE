@@ -372,4 +372,122 @@ public class AdminManagementServiceTests
         Assert.Single(overview.FacilityBreakdown);
         Assert.Equal(75.0, overview.FacilityBreakdown[0].OccupancyRate);
     }
+
+    [Fact]
+    public async Task CreateInternalUserAsync_DuplicateEmployeeCode_ThrowsConflictException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var staffRole = new Role { Id = 1, Code = RoleConstants.FacilityStaff, DisplayName = "Staff" };
+        db.Roles.Add(staffRole);
+        var existingUser = new User { Id = 1, Email = "staff1@storage.local", Status = UserStatusConstants.Active, PasswordHash = "hash" };
+        var existingEmp = new EmployeeProfile { UserId = 1, EmployeeCode = "EMP-999", FullName = "Existing", HireDate = new DateOnly(2025, 1, 1), EmploymentStatus = "active" };
+        db.Users.Add(existingUser);
+        db.EmployeeProfiles.Add(existingEmp);
+        await db.SaveChangesAsync();
+
+        var request = new AdminCreateUserRequest
+        {
+            Email = "staff2@storage.local",
+            Password = "Password123!",
+            FullName = "New Staff",
+            Role = RoleConstants.FacilityStaff,
+            EmployeeCode = "EMP-999" // Colliding code
+        };
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppConflictException>(() =>
+            adminService.CreateInternalUserAsync(request, adminUserId: 99));
+    }
+
+    [Fact]
+    public async Task CreateInternalUserAsync_NonStaffRoleWithInitialFacility_ThrowsValidationException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var adminRole = new Role { Id = 1, Code = RoleConstants.SystemAdministrator, DisplayName = "Admin" };
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "Facility", AddressLine = "Address", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        db.Roles.Add(adminRole);
+        db.Facilities.Add(facility);
+        await db.SaveChangesAsync();
+
+        var request = new AdminCreateUserRequest
+        {
+            Email = "newadmin@storage.local",
+            Password = "Password123!",
+            FullName = "New Admin",
+            Role = RoleConstants.SystemAdministrator,
+            InitialFacilityId = 1 // Not allowed for Admin
+        };
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppValidationException>(() =>
+            adminService.CreateInternalUserAsync(request, adminUserId: 99));
+    }
+
+    [Fact]
+    public async Task AssignStaffToFacility_TerminatedEmployee_ThrowsValidationException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var user = new User { Id = 5, Email = "terminated@storage.local", Status = UserStatusConstants.Active, PasswordHash = "hash" };
+        var employee = new EmployeeProfile { UserId = 5, EmployeeCode = "EMP-005", FullName = "Terminated Staff", HireDate = new DateOnly(2025, 1, 1), EmploymentStatus = EmploymentStatusConstants.Terminated };
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "Facility", AddressLine = "Address", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        db.Users.Add(user);
+        db.EmployeeProfiles.Add(employee);
+        db.Facilities.Add(facility);
+        await db.SaveChangesAsync();
+
+        var request = new AdminCreateStaffAssignmentRequest
+        {
+            EmployeeId = 5,
+            FacilityId = 1,
+            AssignmentRole = StaffAssignmentRoles.FacilityStaff
+        };
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppValidationException>(() =>
+            adminService.AssignStaffToFacilityAsync(request, adminUserId: 99));
+    }
+
+    [Fact]
+    public async Task UpdateUserRolesAsync_PromoteToStaff_AutoInitializesEmployeeProfile()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var customerRole = new Role { Id = 1, Code = RoleConstants.Customer, DisplayName = "Customer" };
+        var staffRole = new Role { Id = 2, Code = RoleConstants.FacilityStaff, DisplayName = "Staff" };
+        db.Roles.AddRange(customerRole, staffRole);
+
+        var user = new User { Id = 20, Email = "customer20@storage.local", Status = UserStatusConstants.Active, PasswordHash = "hash" };
+        user.CustomerProfile = new CustomerProfile { UserId = 20, FullName = "Customer Promoted" };
+        user.UserRoleUsers.Add(new UserRole { UserId = 20, RoleId = 1, Role = customerRole });
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        var request = new AdminUpdateUserRolesRequest
+        {
+            Roles = new List<string> { RoleConstants.FacilityStaff }
+        };
+
+        // Act
+        var resultRoles = await adminService.UpdateUserRolesAsync(id: 20, request, adminUserId: 1);
+
+        // Assert
+        Assert.Single(resultRoles);
+        Assert.Equal(RoleConstants.FacilityStaff, resultRoles[0]);
+
+        var updatedUser = await db.Users.Include(u => u.EmployeeProfile).FirstOrDefaultAsync(u => u.Id == 20);
+        Assert.NotNull(updatedUser!.EmployeeProfile);
+        Assert.Equal("Customer Promoted", updatedUser.EmployeeProfile.FullName);
+        Assert.StartsWith("EMP-", updatedUser.EmployeeProfile.EmployeeCode);
+    }
 }

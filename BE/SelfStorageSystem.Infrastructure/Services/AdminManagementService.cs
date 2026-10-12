@@ -149,7 +149,7 @@ public class AdminManagementService : IAdminManagementService
             .AsNoTracking()
             .Where(lh => lh.UserId == id || lh.AttemptedEmail == user.Email)
             .OrderByDescending(lh => lh.OccurredAt)
-            .Take(20)
+            .Take(AdminConstants.RecentLoginsTake)
             .ToListAsync(cancellationToken);
 
         var roleDtos = user.UserRoleUsers.Select(ur => new AdminUserRoleDto
@@ -255,7 +255,7 @@ public class AdminManagementService : IAdminManagementService
         }
 
         // 2. Validate password
-        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 6)
+        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < AdminConstants.MinPasswordLength)
         {
             throw AppException.FromError(AdminErrors.PasswordRequired);
         }
@@ -272,6 +272,11 @@ public class AdminManagementService : IAdminManagementService
         Facility? initialFacility = null;
         if (request.InitialFacilityId.HasValue)
         {
+            if (!AdminConstants.ValidStaffAssignmentRoles.Contains(role.Code))
+            {
+                throw AppException.FromError(AdminErrors.InvalidInitialFacilityRole);
+            }
+
             initialFacility = await _dbContext.Facilities.FirstOrDefaultAsync(f => f.Id == request.InitialFacilityId.Value, cancellationToken);
             if (initialFacility == null)
             {
@@ -285,7 +290,13 @@ public class AdminManagementService : IAdminManagementService
         // Generate unique employee code if not supplied
         var employeeCode = !string.IsNullOrWhiteSpace(request.EmployeeCode) 
             ? request.EmployeeCode.Trim().ToUpperInvariant() 
-            : $"{AdminConstants.DefaultEmployeeCodePrefix}{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 1000000:D6}";
+            : $"{AdminConstants.DefaultEmployeeCodePrefix}{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % AdminConstants.AutoEmployeeCodeModulo:D6}";
+
+        var codeExists = await _dbContext.EmployeeProfiles.AnyAsync(ep => ep.EmployeeCode == employeeCode, cancellationToken);
+        if (codeExists)
+        {
+            throw AppException.FromError(AdminErrors.EmployeeCodeAlreadyExists);
+        }
 
         var newUser = new User
         {
@@ -384,6 +395,10 @@ public class AdminManagementService : IAdminManagementService
 
         user.Status = normalizedStatus;
         user.UpdatedAt = now;
+        if (user.EmployeeProfile != null)
+        {
+            user.EmployeeProfile.UpdatedAt = now;
+        }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
@@ -394,7 +409,7 @@ public class AdminManagementService : IAdminManagementService
             entityId: user.Id.ToString(),
             action: AuditActionConstants.UpdateStatus,
             oldValues: oldStatus,
-            newValues: $"{normalizedStatus} (Reason: {request.Reason ?? "N/A"})",
+            newValues: $"{normalizedStatus} (Reason: {request.Reason ?? AdminConstants.DefaultNotApplicable})",
             cancellationToken: cancellationToken);
 
         _logger.LogInformation("Admin {AdminId} changed status of user {UserId} from {Old} to {New}.",
@@ -422,6 +437,8 @@ public class AdminManagementService : IAdminManagementService
         CancellationToken cancellationToken = default)
     {
         var user = await _dbContext.Users
+            .Include(u => u.CustomerProfile)
+            .Include(u => u.EmployeeProfile)
             .Include(u => u.UserRoleUsers)
                 .ThenInclude(ur => ur.Role)
             .FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
@@ -485,6 +502,22 @@ public class AdminManagementService : IAdminManagementService
             }
         }
 
+        var hasEmployeeRole = requestedRoleCodes.Any(r => AdminConstants.ValidStaffAssignmentRoles.Contains(r));
+        if (hasEmployeeRole && user.EmployeeProfile == null)
+        {
+            var employeeCode = $"{AdminConstants.DefaultEmployeeCodePrefix}{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % AdminConstants.AutoEmployeeCodeModulo:D6}";
+            user.EmployeeProfile = new EmployeeProfile
+            {
+                UserId = user.Id,
+                EmployeeCode = employeeCode,
+                FullName = user.CustomerProfile?.FullName ?? user.Email,
+                HireDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                EmploymentStatus = EmploymentStatusConstants.Active,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+        }
+
         user.UpdatedAt = now;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
@@ -534,12 +567,23 @@ public class AdminManagementService : IAdminManagementService
             throw AppException.FromError(AdminErrors.EmployeeProfileNotFound);
         }
 
+        if (employee.EmploymentStatus == EmploymentStatusConstants.Terminated ||
+            employee.User.Status != UserStatusConstants.Active)
+        {
+            throw AppException.FromError(AdminErrors.EmployeeInactive);
+        }
+
         var facility = await _dbContext.Facilities
             .FirstOrDefaultAsync(f => f.Id == request.FacilityId, cancellationToken);
 
         if (facility == null)
         {
             throw AppException.FromError(AdminErrors.FacilityNotFound);
+        }
+
+        if (facility.Status != FacilityStatusConstants.Active)
+        {
+            throw AppException.FromError(AdminErrors.FacilityNotActive);
         }
 
         // Check if there is already an active assignment for this employee and facility
@@ -626,7 +670,7 @@ public class AdminManagementService : IAdminManagementService
             entityId: assignmentId.ToString(),
             action: AuditActionConstants.RevokeStaffAssignment,
             oldValues: summary,
-            newValues: "REVOKED",
+            newValues: AdminConstants.RevokedStatus,
             cancellationToken: cancellationToken);
 
         _logger.LogInformation("Admin {AdminId} revoked staff assignment {AssignmentId} ({Summary}).",

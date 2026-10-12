@@ -42,4 +42,16 @@ public static class AdminErrors
 
     public static readonly Error PasswordRequired =
         Error.Validation("Admin.PasswordRequired", "A strong password is required for internal account creation (min 6 characters).");
+
+    public static readonly Error EmployeeCodeAlreadyExists =
+        Error.Conflict("Admin.EmployeeCodeAlreadyExists", "An employee profile with this employee code already exists.");
+
+    public static readonly Error EmployeeInactive =
+        Error.Validation("Admin.EmployeeInactive", "Cannot assign an inactive, locked, or terminated employee to a facility.");
+
+    public static readonly Error FacilityNotActive =
+        Error.Validation("Admin.FacilityNotActive", "Cannot assign staff to an inactive or non-operational facility.");
+
+    public static readonly Error InvalidInitialFacilityRole =
+        Error.Validation("Admin.InvalidInitialFacilityRole", "Initial facility assignment is only applicable for facility_staff or facility_manager roles.");
 }
