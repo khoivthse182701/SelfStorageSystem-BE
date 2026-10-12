@@ -1,5 +1,3 @@
-using System.Threading.RateLimiting;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.OpenApi.Models;
 using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Common;
@@ -14,8 +12,14 @@ builder.WebHost.ConfigureKestrel(options =>
     options.AddServerHeader = false;
 });
 
-// Support local secret overrides that are git-ignored
-builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+// Ensure wwwroot directory exists so StaticFiles and WebRootPath are properly initialized
+var wwwRootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
+if (!Directory.Exists(wwwRootPath))
+{
+    Directory.CreateDirectory(wwwRootPath);
+}
+builder.Environment.WebRootPath = wwwRootPath;
+
 
 // Add services to the container.
 builder.Services.AddControllers();
@@ -83,34 +87,6 @@ builder.Services.AddCors(options =>
 // Register Infrastructure Services
 builder.Services.AddInfrastructureServices(builder.Configuration);
 
-// Configure Rate Limiting (Anti-spam / Brute-force protection)
-var rateLimitSettings = builder.Configuration
-    .GetSection(RateLimitingSettings.SectionName)
-    .Get<RateLimitingSettings>() ?? new RateLimitingSettings();
-
-builder.Services.AddRateLimiter(options =>
-{
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.OnRejected = async (context, token) =>
-    {
-        context.HttpContext.Response.ContentType = "application/json";
-        var response = ApiResponse.Fail("Too many requests received in a short period. Please try again later.");
-        await context.HttpContext.Response.WriteAsJsonAsync(response, cancellationToken: token);
-    };
-
-    // Keep strict limiter specifically for Auth endpoints (Login, Register, OTP anti-spam)
-    options.AddPolicy(RateLimitingSettings.AuthPolicyName, httpContext =>
-    {
-        var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
-        return RateLimitPartition.GetFixedWindowLimiter(clientIp, _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = rateLimitSettings.AuthPermitLimit > 0 ? rateLimitSettings.AuthPermitLimit : 10,
-            Window = TimeSpan.FromSeconds(rateLimitSettings.AuthWindowSeconds > 0 ? rateLimitSettings.AuthWindowSeconds : 60),
-            QueueLimit = 0
-        });
-    });
-});
-
 var app = builder.Build();
 
 // Global exception handler to avoid leaking stack traces or internal errors
@@ -146,12 +122,11 @@ if (app.Environment.IsDevelopment())
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Self-Storage System API v1");
     });
-    app.UseStaticFiles();
     app.MapGet("/", () => Results.Redirect("/swagger"));
 }
 
 app.UseCors(CorsSettings.PolicyName);
-app.UseRateLimiter();
+app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 

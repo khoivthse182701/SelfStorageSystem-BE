@@ -100,6 +100,8 @@ public partial class SelfStorageDbContext : DbContext
 
     public virtual DbSet<StorageUnit> StorageUnits { get; set; }
 
+    public virtual DbSet<StoredItem> StoredItems { get; set; }
+
     public virtual DbSet<StorageUnitHaTdt> StorageUnitHaTdts { get; set; }
 
     public virtual DbSet<SupportTicket> SupportTickets { get; set; }
@@ -2279,7 +2281,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__support___3213E83F1DA69E75");
 
-            entity.ToTable("support_tickets", "core");
+            entity.ToTable("support_tickets", "core", tb => tb.HasTrigger("trg_support_tickets_validate_scope"));
 
             entity.HasIndex(e => e.TicketNo, "UQ__support___D596C19626217F01").IsUnique();
 
@@ -2360,7 +2362,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__ticket_a__3213E83FD8FED18D");
 
-            entity.ToTable("ticket_assignments", "core");
+            entity.ToTable("ticket_assignments", "core", tb => tb.HasTrigger("trg_ticket_assignments_validate_scope"));
 
             entity.HasIndex(e => e.AssignedBy, "ticket_assignments_assigned_by_idx").HasFilter("([assigned_by] IS NOT NULL)");
 
@@ -2916,6 +2918,29 @@ public partial class SelfStorageDbContext : DbContext
             entity.HasOne(d => d.User).WithMany(p => p.UserRoleUsers)
                 .HasForeignKey(d => d.UserId)
                 .HasConstraintName("FK__user_role__user___5AEE82B9");
+        });
+
+        modelBuilder.Entity<StoredItem>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.ToTable("stored_items", "core");
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.AgreementId).HasColumnName("agreement_id");
+            entity.Property(e => e.ItemName).HasMaxLength(255).HasColumnName("item_name");
+            entity.Property(e => e.Category).HasMaxLength(100).HasColumnName("category");
+            entity.Property(e => e.Description).HasColumnName("description");
+            entity.Property(e => e.Quantity).HasDefaultValue(1).HasColumnName("quantity");
+            entity.Property(e => e.EstimatedValue).HasColumnType("decimal(18, 2)").HasColumnName("estimated_value");
+            entity.Property(e => e.RiskClassification).HasMaxLength(50).HasDefaultValue("standard").HasColumnName("risk_classification");
+            entity.Property(e => e.PhotoUrl).HasMaxLength(500).HasColumnName("photo_url");
+            entity.Property(e => e.LocationNote).HasMaxLength(255).HasColumnName("location_note");
+            entity.Property(e => e.DeclaredAt).HasDefaultValueSql("(sysutcdatetime())").HasColumnName("declared_at");
+            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("(sysutcdatetime())").HasColumnName("updated_at");
+
+            entity.HasOne(d => d.RentalAgreement)
+                .WithMany(p => p.StoredItems)
+                .HasForeignKey(d => d.AgreementId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
         modelBuilder.HasSequence("agreement_no_seq", "core").StartsAt(1001L);
         modelBuilder.HasSequence("invoice_no_seq", "core").StartsAt(1001L);

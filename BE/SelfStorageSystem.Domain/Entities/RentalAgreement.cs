@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace SelfStorageSystem.Domain.Entities;
@@ -74,6 +74,8 @@ public partial class RentalAgreement
     public virtual ICollection<SupportTicket> SupportTicketRentalAgreements { get; set; } = new List<SupportTicket>();
 
     public virtual ICollection<UnitAllocation> UnitAllocations { get; set; } = new List<UnitAllocation>();
+
+    public virtual ICollection<StoredItem> StoredItems { get; set; } = new List<StoredItem>();
 
     public virtual UnitTransferRequest? UnitTransferRequest { get; set; }
 }

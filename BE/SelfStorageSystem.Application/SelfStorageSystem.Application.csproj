@@ -11,6 +11,8 @@
     <ProjectReference Include="..\SelfStorageSystem.Contracts\SelfStorageSystem.Contracts.csproj" />
   </ItemGroup>
 
-
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
 
 </Project>

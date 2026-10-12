@@ -31,9 +31,8 @@ bld/
 .env.local
 *.env
 *.secrets.json
-appsettings*.Local.json
-appsettings.local.json
-appsettings.Production.json
+appsettings*.json
+appsettings.json
 
 # Frontend folder (managed in a separate repo)
 FE/
@@ -42,3 +41,6 @@ fe/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Backup bundles
+*.bundle

@@ -37,14 +37,19 @@ public class CustomerRentalServiceTests
         });
     }
 
-    private CustomerRentalService CreateService(SelfStorageDbContext dbContext, IMemoryCache? cache = null)
+    private CustomerRentalService CreateService(
+        SelfStorageDbContext dbContext,
+        IMemoryCache? cache = null,
+        RentalSettings? rentalSettings = null)
     {
         var memoryCache = cache ?? new MemoryCache(new MemoryCacheOptions());
+        var settingsOptions = Options.Create(rentalSettings ?? new RentalSettings());
         return new CustomerRentalService(
             dbContext,
             memoryCache,
             CreateJwtSettings(),
-            NullLogger<CustomerRentalService>.Instance);
+            NullLogger<CustomerRentalService>.Instance,
+            settingsOptions);
     }
 
     [Fact]
@@ -432,12 +437,68 @@ public class CustomerRentalServiceTests
         await dbContext.RentalAgreements.AddAsync(agreement);
         await dbContext.SaveChangesAsync();
 
-        var service = CreateService(dbContext);
+        var service = CreateService(dbContext, rentalSettings: new RentalSettings { EnforceOperatingHours = true });
 
         var ex = await Assert.ThrowsAsync<AppConflictException>(
             () => service.GetAccessCredentialsAsync(customerId, agreement.Id, CancellationToken.None));
 
         Assert.Equal(RentalErrors.OutsideBusinessHours.Code, ex.Error.Code);
+    }
+
+    [Fact]
+    public async Task GetAccessCredentialsAsync_ShouldAllowAccess_WhenOutsideOperatingHours_AndEnforceOperatingHoursIsFalse()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+
+        var facility = new Facility
+        {
+            Id = 1,
+            Code = "FAC-01",
+            Name = "Strict Hours Branch",
+            AddressLine = "123 Storage Road",
+            City = "Ho Chi Minh City",
+            Timezone = "Asia/Ho_Chi_Minh",
+            OpeningTime = new TimeOnly(3, 0),
+            ClosingTime = new TimeOnly(3, 1),
+            Status = "active"
+        };
+        var agreement = new RentalAgreement
+        {
+            Id = 209,
+            AgreementNo = "AGR-009",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            CheckedInAt = DateTimeOffset.UtcNow.AddDays(-5),
+            Facility = facility
+        };
+
+        var initialPin = "847291";
+        var credential = new AccessCredential
+        {
+            Id = 1,
+            AgreementId = agreement.Id,
+            CredentialType = CredentialTypeConstants.Pin,
+            SecretDigest = BCrypt.Net.BCrypt.HashPassword(initialPin),
+            DisplayHint = initialPin,
+            IssuedAt = DateTimeOffset.UtcNow,
+            Status = CredentialStatusConstants.Active
+        };
+
+        await dbContext.Facilities.AddAsync(facility);
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.AccessCredentials.AddAsync(credential);
+        await dbContext.SaveChangesAsync();
+
+        // EnforceOperatingHours is false by default in RentalSettings
+        var service = CreateService(dbContext, rentalSettings: new RentalSettings { EnforceOperatingHours = false });
+
+        var result = await service.GetAccessCredentialsAsync(customerId, agreement.Id, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(CredentialStatusConstants.Active, result.Status);
+        Assert.Equal(initialPin, result.KeypadPin);
     }
 
     [Theory]
@@ -718,5 +779,164 @@ public class CustomerRentalServiceTests
         Assert.Single(result.Inspection.Items);
         Assert.Equal("Door Lock Mechanism", result.Inspection.Items[0].ItemName);
         Assert.Equal("https://storage.example.com/photos/lock.jpg", result.Inspection.Items[0].PhotoUrl);
+    }
+
+    [Fact]
+    public async Task UnlockUnitAsync_ShouldSucceed_WhenPinIsValidAndUnitCheckedIn()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+        long agreementId = 301;
+        string correctPin = "938210";
+
+        var facility = new Facility
+        {
+            Id = 1,
+            Name = "Cau Giay Storage Facility",
+            Code = "FAC-CG",
+            AddressLine = "123 Cau Giay",
+            Timezone = "Asia/Ho_Chi_Minh",
+            City = "Hanoi",
+            Status = "active",
+            OpeningTime = new TimeOnly(0, 0),
+            ClosingTime = new TimeOnly(23, 59)
+        };
+
+        var unit = new StorageUnit
+        {
+            Id = 1,
+            FacilityId = 1,
+            UnitCode = "CG-A101",
+            PhysicalStatus = StorageUnitStatusConstants.Occupied
+        };
+
+        var agreement = new RentalAgreement
+        {
+            Id = agreementId,
+            AgreementNo = "AGR-301",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            CheckedInAt = DateTimeOffset.UtcNow.AddDays(-2),
+            Facility = facility
+        };
+
+        var unitAllocation = new UnitAllocation
+        {
+            Id = 1,
+            AgreementId = agreementId,
+            StorageUnitId = 1,
+            AllocationKind = "rental",
+            Status = AllocationStatusConstants.Active,
+            StorageUnit = unit
+        };
+
+        var credential = new AccessCredential
+        {
+            Id = 1,
+            AgreementId = agreementId,
+            CredentialType = CredentialTypeConstants.Pin,
+            SecretDigest = BCrypt.Net.BCrypt.HashPassword(correctPin),
+            DisplayHint = correctPin,
+            Status = CredentialStatusConstants.Active,
+            IssuedAt = DateTimeOffset.UtcNow,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        await dbContext.Facilities.AddAsync(facility);
+        await dbContext.StorageUnits.AddAsync(unit);
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.UnitAllocations.AddAsync(unitAllocation);
+        await dbContext.AccessCredentials.AddAsync(credential);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext);
+
+        var request = new UnlockStorageUnitRequest { Pin = correctPin };
+        var result = await service.UnlockUnitAsync(customerId, agreementId, request, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.True(result.Success);
+        Assert.Equal("CG-A101", result.UnitCode);
+        Assert.Equal("Cau Giay Storage Facility", result.FacilityName);
+        Assert.Equal(30, result.RelockAfterSeconds);
+    }
+
+    [Fact]
+    public async Task UnlockUnitAsync_ShouldThrowValidationException_WhenPinIsIncorrect()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+        long agreementId = 302;
+        string correctPin = "938210";
+
+        var facility = new Facility
+        {
+            Id = 1,
+            Name = "Cau Giay Storage Facility",
+            Code = "FAC-CG",
+            AddressLine = "123 Cau Giay",
+            Timezone = "Asia/Ho_Chi_Minh",
+            City = "Hanoi",
+            Status = "active",
+            OpeningTime = new TimeOnly(0, 0),
+            ClosingTime = new TimeOnly(23, 59)
+        };
+
+        var unit = new StorageUnit
+        {
+            Id = 1,
+            FacilityId = 1,
+            UnitCode = "CG-A102",
+            PhysicalStatus = StorageUnitStatusConstants.Occupied
+        };
+
+        var agreement = new RentalAgreement
+        {
+            Id = agreementId,
+            AgreementNo = "AGR-302",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            CheckedInAt = DateTimeOffset.UtcNow.AddDays(-2),
+            Facility = facility
+        };
+
+        var unitAllocation = new UnitAllocation
+        {
+            Id = 1,
+            AgreementId = agreementId,
+            StorageUnitId = 1,
+            AllocationKind = "rental",
+            Status = AllocationStatusConstants.Active,
+            StorageUnit = unit
+        };
+
+        var credential = new AccessCredential
+        {
+            Id = 1,
+            AgreementId = agreementId,
+            CredentialType = CredentialTypeConstants.Pin,
+            SecretDigest = BCrypt.Net.BCrypt.HashPassword(correctPin),
+            DisplayHint = correctPin,
+            Status = CredentialStatusConstants.Active,
+            IssuedAt = DateTimeOffset.UtcNow,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        await dbContext.Facilities.AddAsync(facility);
+        await dbContext.StorageUnits.AddAsync(unit);
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.UnitAllocations.AddAsync(unitAllocation);
+        await dbContext.AccessCredentials.AddAsync(credential);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext);
+
+        var request = new UnlockStorageUnitRequest { Pin = "111222" };
+        var ex = await Assert.ThrowsAsync<AppValidationException>(
+            () => service.UnlockUnitAsync(customerId, agreementId, request, CancellationToken.None));
+
+        Assert.Equal(RentalErrors.IncorrectPin.Code, ex.Error.Code);
     }
 }

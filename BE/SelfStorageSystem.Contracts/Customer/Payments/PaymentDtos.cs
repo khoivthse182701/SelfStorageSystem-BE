@@ -113,4 +113,6 @@ public class PaymentHistoryDto
     public DateTimeOffset? PaidAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public string? FailureReason { get; set; }
+    public long? RenewalId { get; set; }
+    public string? AgreementNo { get; set; }
 }
