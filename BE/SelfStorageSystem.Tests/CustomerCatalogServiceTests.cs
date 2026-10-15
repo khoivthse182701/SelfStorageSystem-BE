@@ -179,6 +179,8 @@ public class CustomerCatalogServiceTests
             FacilityId = 1,
             UnitTypeId = 1,
             MonthlyRate = 1000000m,
+            DepositAmount = 1000000m,
+            BookingFee = 50000m,
             ValidFrom = today.AddDays(-10),
             ValidTo = today.AddDays(100),
             CreatedAt = DateTimeOffset.UtcNow

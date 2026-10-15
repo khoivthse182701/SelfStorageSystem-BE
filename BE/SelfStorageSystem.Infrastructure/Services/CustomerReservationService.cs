@@ -79,17 +79,9 @@ public class CustomerReservationService : ICustomerReservationService
         var facilityRate = await _dbContext.FacilityRates
             .Where(fr => fr.FacilityId == request.FacilityId && fr.UnitTypeId == request.UnitTypeId
                          && fr.ValidFrom <= request.StartDate
-                         && (fr.ValidTo == null || fr.ValidTo >= request.StartDate))
+                         && (fr.ValidTo == null || fr.ValidTo > request.StartDate))
             .OrderByDescending(fr => fr.ValidFrom)
             .FirstOrDefaultAsync(cancellationToken);
-
-        if (facilityRate == null)
-        {
-            facilityRate = await _dbContext.FacilityRates
-                .Where(fr => fr.FacilityId == request.FacilityId && fr.UnitTypeId == request.UnitTypeId)
-                .OrderByDescending(fr => fr.ValidFrom)
-                .FirstOrDefaultAsync(cancellationToken);
-        }
 
         if (facilityRate == null)
         {
@@ -136,6 +128,24 @@ public class CustomerReservationService : ICustomerReservationService
                 }
 
                 if (appliedPromo == null || appliedPromo.ValidFrom > now || appliedPromo.ValidTo < now)
+                {
+                    throw AppException.FromError(ReservationErrors.PromotionInvalidOrExpired);
+                }
+
+                var hasMismatchedFacility = appliedPromo.PromotionRules.Any(r =>
+                    r.RuleType.Contains(PromotionRuleTypeConstants.Facility, StringComparison.OrdinalIgnoreCase) &&
+                    long.TryParse(r.RuleValue, out var facilityId) &&
+                    facilityId != request.FacilityId);
+                var hasMismatchedUnitType = appliedPromo.PromotionRules.Any(r =>
+                    r.RuleType.Contains(PromotionRuleTypeConstants.UnitType, StringComparison.OrdinalIgnoreCase) &&
+                    long.TryParse(r.RuleValue, out var unitTypeId) &&
+                    unitTypeId != request.UnitTypeId);
+                var hasMismatchedDuration = appliedPromo.PromotionRules.Any(r =>
+                    r.RuleType.Contains(PromotionRuleTypeConstants.Month, StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(r.RuleValue, out var minimumMonths) &&
+                    request.DurationMonths < minimumMonths);
+
+                if (hasMismatchedFacility || hasMismatchedUnitType || hasMismatchedDuration)
                 {
                     throw AppException.FromError(ReservationErrors.PromotionInvalidOrExpired);
                 }
@@ -352,7 +362,7 @@ public class CustomerReservationService : ICustomerReservationService
                 {
                     InvoiceId = invoice.Id,
                     LineType = InvoiceLineTypeConstants.Deposit,
-                    Description = "Security deposit (1 month rent per BR-FIN-01)",
+                    Description = "Security deposit at the configured facility rate",
                     Quantity = 1,
                     UnitPrice = depositAmount,
                     LineAmount = depositAmount,

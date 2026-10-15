@@ -183,7 +183,7 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 (!facilityId.HasValue || r.FacilityId == facilityId) &&
                 (!unitTypeId.HasValue || r.UnitTypeId == unitTypeId) &&
                 r.ValidFrom <= today &&
-                (r.ValidTo == null || r.ValidTo >= today))
+                (r.ValidTo == null || r.ValidTo > today))
             .OrderByDescending(r => r.ValidFrom)
             .ToListAsync(ct);
 
@@ -336,15 +336,10 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 x.IsActive &&
                 (x.FacilityId == null || x.FacilityId == request.FacilityId) &&
                 x.ValidFrom <= today &&
-                (x.ValidTo == null || x.ValidTo >= today))
+                (x.ValidTo == null || x.ValidTo > today))
             .ToListAsync(ct);
 
-        var bookingFee = feeRules
-            .Where(x => x.FeeType.Contains(FeeRuleTypeConstants.Booking, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(x => x.FacilityId.HasValue)
-            .Select(x => x.Amount ?? 0m)
-            .FirstOrDefault();
-        bookingFee = Math.Round(bookingFee, 0, MidpointRounding.AwayFromZero);
+        var bookingFee = rate.BookingFee;
 
         // Accounting standard: VAT Tax applies to rental fee after discount (+ booking fee if applicable).
         // Security deposit is a refundable deposit, NOT subject to VAT.
@@ -357,7 +352,7 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             .FirstOrDefault();
 
         var tax = Math.Round(taxable * taxRate / 100m, 0, MidpointRounding.AwayFromZero);
-        var securityDeposit = Math.Round(rate.MonthlyRate, 0, MidpointRounding.AwayFromZero);
+        var securityDeposit = rate.DepositAmount;
         var total = Math.Round(rent - discount + bookingFee + securityDeposit + tax, 0, MidpointRounding.AwayFromZero);
 
         return new PricingCalculationDto
@@ -404,7 +399,7 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
     {
         return db.FacilityRates
             .AsNoTracking()
-            .Where(r => r.FacilityId == facilityId && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo >= today))
+            .Where(r => r.FacilityId == facilityId && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo > today))
             .OrderByDescending(r => r.ValidFrom);
     }
 }
