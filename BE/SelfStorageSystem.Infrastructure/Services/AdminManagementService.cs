@@ -822,8 +822,23 @@ public class AdminManagementService : IAdminManagementService
             .Select(x => x.AttemptedEmail!.ToLowerInvariant())
             .ToHashSet();
 
+        var suspiciousIpsList = suspiciousIpsSet.ToList();
+        var suspiciousEmailsList = suspiciousEmailsSet.ToList();
+
+        var suspiciousQuery = baseQuery.Where(l =>
+            l.Result == LoginHistoryResultConstants.Locked ||
+            l.Result == LoginHistoryResultConstants.Blocked ||
+            (l.Result == LoginHistoryResultConstants.Failed &&
+                ((l.IpAddress != null && suspiciousIpsList.Contains(l.IpAddress)) ||
+                 (l.AttemptedEmail != null && suspiciousEmailsList.Contains(l.AttemptedEmail.ToLower())))));
+
+        var suspiciousAttemptsCount = await suspiciousQuery.CountAsync(cancellationToken);
+
+        var pagedQuery = query.IsSuspiciousOnly == true ? suspiciousQuery : baseQuery;
+        var filteredTotal = query.IsSuspiciousOnly == true ? suspiciousAttemptsCount : totalAttempts;
+
         // Materialize target page
-        var histories = await baseQuery
+        var histories = await pagedQuery
             .OrderByDescending(l => l.OccurredAt)
             .Skip((pageNumber - 1) * pageSize)
             .Take(pageSize)
@@ -843,7 +858,7 @@ public class AdminManagementService : IAdminManagementService
                 suspiciousReason = AdminConstants.SuspiciousLockedAttemptReason;
             else if (isBlocked)
                 suspiciousReason = AdminConstants.SuspiciousBlockedAttemptReason;
-            else if (isBruteForce)
+            else if (isSuspicious)
                 suspiciousReason = AdminConstants.SuspiciousMultipleFailedReason;
 
             return new AdminLoginHistoryDto
@@ -860,16 +875,9 @@ public class AdminManagementService : IAdminManagementService
             };
         }).ToList();
 
-        if (query.IsSuspiciousOnly == true)
-        {
-            items = items.Where(i => i.IsSuspicious).ToList();
-        }
-
-        var suspiciousAttemptsCount = lockedAttempts + blockedAttempts + items.Count(i => i.IsSuspicious && !new[] { LoginHistoryResultConstants.Locked, LoginHistoryResultConstants.Blocked }.Contains(i.Result));
-
         return new AdminLoginHistoryReportDto
         {
-            Histories = new PagedResult<AdminLoginHistoryDto>(items, totalAttempts, pageNumber, pageSize),
+            Histories = new PagedResult<AdminLoginHistoryDto>(items, filteredTotal, pageNumber, pageSize),
             Summary = new AdminLoginSecuritySummaryDto
             {
                 TotalAttempts = totalAttempts,

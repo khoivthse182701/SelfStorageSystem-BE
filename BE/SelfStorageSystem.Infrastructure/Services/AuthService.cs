@@ -44,7 +44,7 @@ public class AuthService : IAuthService
         _logger = logger;
     }
 
-    public async Task<AuthResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
+    public async Task<AuthResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default, string? ipAddress = null, string? userAgent = null)
     {
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
 
@@ -57,6 +57,7 @@ public class AuthService : IAuthService
 
         if (user == null)
         {
+            await RecordLoginAsync(null, normalizedEmail, LoginHistoryResultConstants.Failed, ipAddress, userAgent, cancellationToken);
             throw AppException.FromError(AuthErrors.InvalidCredentials);
         }
 
@@ -72,22 +73,26 @@ public class AuthService : IAuthService
 
         if (!isPasswordValid)
         {
+            await RecordLoginAsync(user.Id, normalizedEmail, LoginHistoryResultConstants.Failed, ipAddress, userAgent, cancellationToken);
             throw AppException.FromError(AuthErrors.InvalidCredentials);
         }
 
         if (string.Equals(user.Status, UserStatusConstants.Locked, StringComparison.OrdinalIgnoreCase))
         {
+            await RecordLoginAsync(user.Id, normalizedEmail, LoginHistoryResultConstants.Locked, ipAddress, userAgent, cancellationToken);
             throw AppException.FromError(AuthErrors.AccountLocked);
         }
 
         if (string.Equals(user.Status, UserStatusConstants.Disabled, StringComparison.OrdinalIgnoreCase))
         {
+            await RecordLoginAsync(user.Id, normalizedEmail, LoginHistoryResultConstants.Blocked, ipAddress, userAgent, cancellationToken);
             throw AppException.FromError(AuthErrors.AccountNotActivated);
         }
 
         var now = DateTimeOffset.UtcNow;
         user.LastLoginAt = now;
         user.UpdatedAt = now;
+        _dbContext.LoginHistories.Add(BuildLoginHistory(user.Id, normalizedEmail, LoginHistoryResultConstants.Succeeded, ipAddress, userAgent, now));
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         return BuildAuthResponse(user);
@@ -303,7 +308,7 @@ public class AuthService : IAuthService
         return "A new OTP code has been sent to your email.";
     }
 
-    public async Task<AuthResponse> GoogleLoginAsync(GoogleLoginRequest request, CancellationToken cancellationToken = default)
+    public async Task<AuthResponse> GoogleLoginAsync(GoogleLoginRequest request, CancellationToken cancellationToken = default, string? ipAddress = null, string? userAgent = null)
     {
         var googleUser = await _googleAuthService.ValidateIdTokenAsync(request.IdToken, cancellationToken);
         var normalizedEmail = googleUser.Email.Trim().ToLowerInvariant();
@@ -351,11 +356,15 @@ public class AuthService : IAuthService
 
             _dbContext.Users.Add(user);
             await _dbContext.SaveChangesAsync(cancellationToken);
+
+            _dbContext.LoginHistories.Add(BuildLoginHistory(user.Id, normalizedEmail, LoginHistoryResultConstants.Succeeded, ipAddress, userAgent, now));
+            await _dbContext.SaveChangesAsync(cancellationToken);
         }
         else
         {
             if (string.Equals(user.Status, UserStatusConstants.Locked, StringComparison.OrdinalIgnoreCase))
             {
+                await RecordLoginAsync(user.Id, normalizedEmail, LoginHistoryResultConstants.Locked, ipAddress, userAgent, cancellationToken);
                 throw AppException.FromError(AuthErrors.AccountLocked);
             }
 
@@ -367,11 +376,44 @@ public class AuthService : IAuthService
 
             user.LastLoginAt = now;
             user.UpdatedAt = now;
+            _dbContext.LoginHistories.Add(BuildLoginHistory(user.Id, normalizedEmail, LoginHistoryResultConstants.Succeeded, ipAddress, userAgent, now));
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
         return BuildAuthResponse(user);
     }
+
+    private static LoginHistory BuildLoginHistory(long? userId, string? email, string result, string? ipAddress, string? userAgent, DateTimeOffset occurredAt)
+    {
+        return new LoginHistory
+        {
+            UserId = userId,
+            AttemptedEmail = Truncate(email, 255),
+            Result = result,
+            IpAddress = Truncate(ipAddress, 45),
+            UserAgent = Truncate(userAgent, 255),
+            OccurredAt = occurredAt
+        };
+    }
+
+    /// <summary>
+    /// Persists a login attempt. Failures are logged and swallowed so they never block authentication.
+    /// </summary>
+    private async Task RecordLoginAsync(long? userId, string? email, string result, string? ipAddress, string? userAgent, CancellationToken cancellationToken)
+    {
+        try
+        {
+            _dbContext.LoginHistories.Add(BuildLoginHistory(userId, email, result, ipAddress, userAgent, DateTimeOffset.UtcNow));
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to record login history for {Email}", email);
+        }
+    }
+
+    private static string? Truncate(string? value, int maxLength)
+        => value == null || value.Length <= maxLength ? value : value[..maxLength];
 
     public async Task<AuthUserDto> GetCurrentUserAsync(long userId, CancellationToken cancellationToken = default)
     {

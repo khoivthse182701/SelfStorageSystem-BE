@@ -68,7 +68,7 @@ public class AuthController : ControllerBase
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken cancellationToken)
     {
-        var response = await _authService.LoginAsync(request, cancellationToken);
+        var response = await _authService.LoginAsync(request, cancellationToken, GetClientIp(), GetUserAgent());
         return Ok(ApiResponse<AuthResponse>.Ok(response, "Login successful."));
     }
 
@@ -81,7 +81,7 @@ public class AuthController : ControllerBase
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginRequest request, CancellationToken cancellationToken)
     {
-        var response = await _authService.GoogleLoginAsync(request, cancellationToken);
+        var response = await _authService.GoogleLoginAsync(request, cancellationToken, GetClientIp(), GetUserAgent());
         return Ok(ApiResponse<AuthResponse>.Ok(response, "Google login successful."));
     }
 
@@ -103,5 +103,24 @@ public class AuthController : ControllerBase
 
         var user = await _authService.GetCurrentUserAsync(userId, cancellationToken);
         return Ok(ApiResponse<AuthUserDto>.Ok(user, "User profile retrieved successfully."));
+    }
+
+    private string? GetClientIp()
+    {
+        var forwarded = Request.Headers["X-Forwarded-For"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(forwarded))
+        {
+            return forwarded.Split(',')[0].Trim();
+        }
+
+        var ip = HttpContext.Connection.RemoteIpAddress;
+        if (ip == null) return null;
+        return ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4().ToString() : ip.ToString();
+    }
+
+    private string? GetUserAgent()
+    {
+        var ua = Request.Headers.UserAgent.ToString();
+        return string.IsNullOrWhiteSpace(ua) ? null : ua;
     }
 }
