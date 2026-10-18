@@ -14,4 +14,5 @@ public interface IBusinessOperationsService
     Task<OperationsPromotionDto> UpdatePromotionStatusAsync(long id, OperationsUpdatePromotionStatusRequest request, long actorUserId, CancellationToken cancellationToken = default);
     Task<OperationsFacilityDto> CreateFacilityAsync(OperationsCreateFacilityRequest request, long actorUserId, CancellationToken cancellationToken = default);
     Task<OperationsFacilityDto> UpdateFacilityAsync(OperationsUpdateFacilityRequest request, long actorUserId, CancellationToken cancellationToken = default);
+    Task<PagedResult<OperationsFacilityDto>> GetFacilitiesAsync(OperationsFacilityQueryParameters query, CancellationToken cancellationToken = default);
 }

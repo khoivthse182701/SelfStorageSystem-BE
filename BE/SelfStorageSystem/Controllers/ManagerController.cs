@@ -441,6 +441,20 @@ public class ManagerController : ControllerBase
         return Ok(ApiResponse<ManagerFacilityDashboardDto>.Ok(result, "Retrieved facility dashboard successfully."));
     }
 
+    /// <summary>
+    /// Danh sách cơ sở mà Manager hiện tại được phân công quản lý (hoặc toàn bộ nếu là Admin).
+    /// </summary>
+    [HttpGet("my-facilities")]
+    [ProducesResponseType(typeof(ApiResponse<List<ManagerFacilityScopeDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetMyFacilities(CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.GetMyFacilitiesAsync(userId, isSystemAdmin, cancellationToken);
+        return Ok(ApiResponse<List<ManagerFacilityScopeDto>>.Ok(result, "Retrieved manager facilities successfully."));
+    }
+
     // ==========================================
     // HELPER
     // ==========================================

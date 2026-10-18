@@ -516,4 +516,22 @@ public class BusinessOperationsServiceTests
         ValidTo = new DateOnly(2026, 6, 30),
         CreatedBy = ActorId
     };
+
+    [Fact]
+    public async Task GetFacilities_ReturnsFilteredAndPagedResults()
+    {
+        await using var db = CreateDbContext();
+        await SeedRateScopeAsync(db);
+        db.Facilities.Add(new Facility { Id = 2, Code = "FAC-HN", Name = "Hanoi Central", AddressLine = "123 Ba Dinh", City = "Ha Noi", Timezone = "Asia/Ho_Chi_Minh", Status = FacilityStatusConstants.Active });
+        db.Facilities.Add(new Facility { Id = 3, Code = "FAC-DN", Name = "Danang Beach", AddressLine = "456 Son Tra", City = "Da Nang", Timezone = "Asia/Ho_Chi_Minh", Status = "maintenance" });
+        await db.SaveChangesAsync();
+
+        var service = new BusinessOperationsService(db);
+        var resultAll = await service.GetFacilitiesAsync(new OperationsFacilityQueryParameters());
+        Assert.Equal(3, resultAll.TotalCount);
+
+        var resultFiltered = await service.GetFacilitiesAsync(new OperationsFacilityQueryParameters { Status = "maintenance" });
+        Assert.Equal(1, resultFiltered.TotalCount);
+        Assert.Equal("FAC-DN", resultFiltered.Items[0].Code);
+    }
 }

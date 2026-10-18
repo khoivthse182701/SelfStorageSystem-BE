@@ -57,3 +57,15 @@ public class OperationsPromotionQueryParameters : OperationsPagedQueryParameters
     public bool? IsActive { get; set; }
     public DateTimeOffset? EffectiveAt { get; set; }
 }
+
+public class OperationsFacilityQueryParameters : OperationsPagedQueryParameters
+{
+    [MaxLength(OperationsConstants.MaxTextLength)]
+    public string? Search { get; set; }
+
+    [MaxLength(OperationsConstants.MaxTextLength)]
+    public string? Status { get; set; }
+
+    [MaxLength(OperationsConstants.MaxTextLength)]
+    public string? City { get; set; }
+}

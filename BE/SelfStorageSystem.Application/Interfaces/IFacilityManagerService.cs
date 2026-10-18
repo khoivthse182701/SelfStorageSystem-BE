@@ -172,4 +172,9 @@ public interface IFacilityManagerService
         long currentUserId,
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
+
+    Task<List<ManagerFacilityScopeDto>> GetMyFacilitiesAsync(
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
 }

@@ -92,6 +92,14 @@ public class OperationsController : ControllerBase
         return Ok(ApiResponse<OperationsPromotionDto>.Ok(result, "Promotion status updated successfully."));
     }
 
+    [HttpGet("facilities")]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<OperationsFacilityDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetFacilities([FromQuery] OperationsFacilityQueryParameters query, CancellationToken cancellationToken)
+    {
+        var result = await _operationsService.GetFacilitiesAsync(query, cancellationToken);
+        return Ok(ApiResponse<PagedResult<OperationsFacilityDto>>.Ok(result, "Retrieved facilities successfully."));
+    }
+
     [HttpPost("facilities")]
     [ProducesResponseType(typeof(ApiResponse<OperationsFacilityDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]

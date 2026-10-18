@@ -951,4 +951,35 @@ public class FacilityManagerServiceTests
         Assert.Equal(1, dashboard.OpenTicketsCount);
         Assert.Equal(1, dashboard.UrgentTicketsCount);
     }
+
+    [Fact]
+    public async Task GetMyFacilities_AsAdmin_ReturnsAllFacilities()
+    {
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+        db.Facilities.Add(new Facility { Id = 2, Code = "FAC-02", Name = "Branch 2", AddressLine = "Address 2", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = FacilityStatusConstants.Active });
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        var facilities = await service.GetMyFacilitiesAsync(currentUserId: 10, isSystemAdmin: true);
+
+        Assert.Equal(2, facilities.Count);
+    }
+
+    [Fact]
+    public async Task GetMyFacilities_AsManager_ReturnsOnlyAssignedFacilities()
+    {
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+        db.Facilities.Add(new Facility { Id = 2, Code = "FAC-02", Name = "Branch 2", AddressLine = "Address 2", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = FacilityStatusConstants.Active });
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        var facilities = await service.GetMyFacilitiesAsync(currentUserId: 10, isSystemAdmin: false);
+
+        Assert.Single(facilities);
+        Assert.Equal(1, facilities[0].Id);
+        Assert.Equal(StaffAssignmentRoles.FacilityManager, facilities[0].AssignmentRole);
+    }
 }
+

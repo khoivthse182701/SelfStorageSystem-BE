@@ -1579,4 +1579,48 @@ public class FacilityManagerService : IFacilityManagerService
 
         return newEmployee.UserId;
     }
+
+    public async Task<List<ManagerFacilityScopeDto>> GetMyFacilitiesAsync(
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        if (isSystemAdmin)
+        {
+            return await _dbContext.Facilities
+                .AsNoTracking()
+                .OrderBy(f => f.Name)
+                .Select(f => new ManagerFacilityScopeDto
+                {
+                    Id = f.Id,
+                    Code = f.Code,
+                    Name = f.Name,
+                    AddressLine = f.AddressLine,
+                    City = f.City,
+                    Status = f.Status,
+                    AssignmentRole = RoleConstants.SystemAdministrator
+                })
+                .ToListAsync(cancellationToken);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        return await _dbContext.StaffFacilityAssignments
+            .AsNoTracking()
+            .Include(sfa => sfa.Facility)
+            .Where(sfa => sfa.EmployeeId == currentUserId &&
+                          sfa.AssignmentRole == StaffAssignmentRoles.FacilityManager &&
+                          (sfa.EndsAt == null || sfa.EndsAt > now))
+            .OrderBy(sfa => sfa.Facility.Name)
+            .Select(sfa => new ManagerFacilityScopeDto
+            {
+                Id = sfa.Facility.Id,
+                Code = sfa.Facility.Code,
+                Name = sfa.Facility.Name,
+                AddressLine = sfa.Facility.AddressLine,
+                City = sfa.Facility.City,
+                Status = sfa.Facility.Status,
+                AssignmentRole = sfa.AssignmentRole
+            })
+            .ToListAsync(cancellationToken);
+    }
 }

@@ -271,6 +271,30 @@ public sealed class BusinessOperationsService(SelfStorageDbContext db) : IBusine
         return MapFacility(facility);
     }
 
+    public async Task<PagedResult<OperationsFacilityDto>> GetFacilitiesAsync(
+        OperationsFacilityQueryParameters query, CancellationToken ct = default)
+    {
+        var rows = db.Facilities.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var search = query.Search.Trim().ToLower();
+            rows = rows.Where(f => f.Code.ToLower().Contains(search) || f.Name.ToLower().Contains(search) || f.City.ToLower().Contains(search));
+        }
+        if (!string.IsNullOrWhiteSpace(query.Status))
+        {
+            var status = query.Status.Trim().ToLower();
+            rows = rows.Where(f => f.Status.ToLower() == status);
+        }
+        if (!string.IsNullOrWhiteSpace(query.City))
+        {
+            var city = query.City.Trim().ToLower();
+            rows = rows.Where(f => f.City.ToLower().Contains(city));
+        }
+
+        return await PageAsync(rows.OrderBy(f => f.City).ThenBy(f => f.Name).ThenBy(f => f.Id),
+            query.PageNumber, query.PageSize, MapFacility, ct);
+    }
+
     private static void ApplyFacility(Facility facility, OperationsCreateFacilityRequest request)
     {
         facility.Code = request.Code.Trim().ToUpperInvariant();
