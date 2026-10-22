@@ -56,11 +56,11 @@ public class OperationsAuthorizationTests : IClassFixture<OperationsAuthorizatio
     public static IEnumerable<object[]> AnonymousRoutes() => Routes().Select(route => route.Take(3).ToArray());
 
     public static IEnumerable<object[]> ForbiddenRoutes() => Routes().SelectMany(route =>
-        new[] { RoleConstants.Customer, RoleConstants.FacilityStaff, RoleConstants.FacilityManager }
+        new[] { RoleConstants.Customer, RoleConstants.FacilityStaff }
             .Select(role => route.Take(3).Concat(new object[] { role }).ToArray()));
 
     public static IEnumerable<object[]> AllowedRoutes() => Routes().SelectMany(route =>
-        new[] { RoleConstants.BusinessOperationsManager, RoleConstants.SystemAdministrator }
+        new[] { RoleConstants.BusinessOperationsManager, RoleConstants.SystemAdministrator, RoleConstants.FacilityManager }
             .Select(role => route.Concat(new object[] { role }).ToArray()));
 
     [Theory]
@@ -89,7 +89,7 @@ public class OperationsAuthorizationTests : IClassFixture<OperationsAuthorizatio
 
     [Theory]
     [MemberData(nameof(AllowedRoutes))]
-    public async Task OperationsManagerAndAdministrator_CanReachEveryRoute(
+    public async Task OperationsManagerAdministratorAndFacilityManager_CanReachEveryRoute(
         string method, string path, string body, string serviceMethod, string role)
     {
         var callsBefore = _fixture.Service.Invocations.Count;

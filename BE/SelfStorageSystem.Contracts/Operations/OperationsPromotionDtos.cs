@@ -42,26 +42,26 @@ public class OperationsCreatePromotionRequest : IValidatableObject
     [MaxLength(OperationsConstants.MaxTextLength)]
     public string? Description { get; set; }
 
-    [Required, RegularExpression("^(percentage|fixed)$")]
+    [Required, RegularExpression(OperationsConstants.DiscountTypeRegex)]
     public string DiscountType { get; set; } = string.Empty;
 
-    [Range(typeof(decimal), "0.01", OperationsConstants.MaxMoneyText)]
+    [Range(typeof(decimal), OperationsConstants.MinPositiveMoneyText, OperationsConstants.MaxMoneyText, ParseLimitsInInvariantCulture = true, ConvertValueInInvariantCulture = true)]
     public decimal DiscountValue { get; set; }
 
-    [Range(typeof(decimal), "0.01", OperationsConstants.MaxMoneyText)]
+    [Range(typeof(decimal), OperationsConstants.MinPositiveMoneyText, OperationsConstants.MaxMoneyText, ParseLimitsInInvariantCulture = true, ConvertValueInInvariantCulture = true)]
     public decimal? MaxDiscountAmount { get; set; }
 
-    [Range(1, int.MaxValue)]
+    [Range(OperationsConstants.MinUsageLimit, int.MaxValue)]
     public int? UsageLimit { get; set; }
 
-    [Range(1, int.MaxValue)]
+    [Range(OperationsConstants.MinPerCustomerLimit, int.MaxValue)]
     public int? PerCustomerLimit { get; set; }
 
     public DateTimeOffset ValidFrom { get; set; }
     public DateTimeOffset ValidTo { get; set; }
     public bool IsActive { get; set; } = true;
 
-    [MaxLength(3)]
+    [MaxLength(OperationsConstants.MaxPromotionRules)]
     public List<OperationsCreatePromotionRuleRequest> Rules { get; set; } = new();
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
@@ -70,11 +70,11 @@ public class OperationsCreatePromotionRequest : IValidatableObject
             yield return new ValidationResult("ValidFrom is required.", new[] { nameof(ValidFrom) });
         if (ValidTo <= ValidFrom)
             yield return new ValidationResult("ValidTo must be later than ValidFrom.", new[] { nameof(ValidTo) });
-        if (DiscountType == PromotionDiscountTypeConstants.Percentage && DiscountValue > 100)
-            yield return new ValidationResult("Percentage discounts cannot exceed 100.", new[] { nameof(DiscountValue) });
-        if (decimal.Round(DiscountValue, 2) != DiscountValue)
+        if (DiscountType == PromotionDiscountTypeConstants.Percentage && DiscountValue > OperationsConstants.MaxPercentageDiscount)
+            yield return new ValidationResult($"Percentage discounts cannot exceed {OperationsConstants.MaxPercentageDiscount}.", new[] { nameof(DiscountValue) });
+        if (decimal.Round(DiscountValue, OperationsConstants.MoneyDecimalPlaces) != DiscountValue)
             yield return new ValidationResult("DiscountValue supports at most two decimal places.", new[] { nameof(DiscountValue) });
-        if (MaxDiscountAmount.HasValue && decimal.Round(MaxDiscountAmount.Value, 2) != MaxDiscountAmount.Value)
+        if (MaxDiscountAmount.HasValue && decimal.Round(MaxDiscountAmount.Value, OperationsConstants.MoneyDecimalPlaces) != MaxDiscountAmount.Value)
             yield return new ValidationResult("MaxDiscountAmount supports at most two decimal places.", new[] { nameof(MaxDiscountAmount) });
         if (UsageLimit.HasValue && PerCustomerLimit.HasValue && PerCustomerLimit > UsageLimit)
             yield return new ValidationResult("PerCustomerLimit cannot exceed UsageLimit.", new[] { nameof(PerCustomerLimit) });
@@ -91,10 +91,10 @@ public class OperationsCreatePromotionRequest : IValidatableObject
 
 public class OperationsCreatePromotionRuleRequest : IValidatableObject
 {
-    [Required, RegularExpression("^(facility|unit_type|minimum_months)$")]
+    [Required, RegularExpression(OperationsConstants.PromotionRuleTypeRegex)]
     public string RuleType { get; set; } = string.Empty;
 
-    [Required, RegularExpression("^(eq|gte)$")]
+    [Required, RegularExpression(OperationsConstants.PromotionOperatorRegex)]
     public string Operator { get; set; } = OperationsConstants.EqualOperator;
 
     [Required, MaxLength(OperationsConstants.MaxTextLength)]
@@ -107,7 +107,7 @@ public class OperationsCreatePromotionRuleRequest : IValidatableObject
             yield return new ValidationResult("minimum_months rules require the gte operator.", new[] { nameof(Operator) });
         if ((RuleType == PromotionRuleTypeConstants.Facility || RuleType == PromotionRuleTypeConstants.UnitType) && Operator != OperationsConstants.EqualOperator)
             yield return new ValidationResult("Facility and unit_type rules require the eq operator.", new[] { nameof(Operator) });
-        if (!long.TryParse(RuleValue, NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value < 1 || (isMinimumMonths && value > 12))
+        if (!long.TryParse(RuleValue, NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value < OperationsConstants.MinEntityId || (isMinimumMonths && value > OperationsConstants.MaxRuleValueMonths))
             yield return new ValidationResult("RuleValue must be a positive integer within the supported range.", new[] { nameof(RuleValue) });
     }
 }

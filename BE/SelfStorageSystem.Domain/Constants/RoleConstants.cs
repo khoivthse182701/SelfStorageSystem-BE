@@ -13,6 +13,7 @@ public static class RoleConstants
 
     // Tickets are visible to operational staff, facility managers, and system administrators.
     public const string StaffOrManager = "facility_staff,facility_manager,system_administrator";
+    public const string OperationsOrManager = BusinessOperationsManager + "," + SystemAdministrator + "," + FacilityManager;
 
     public const string CustomerDisplay = "Customer";
     public const string StaffDisplay = "Staff";

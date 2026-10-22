@@ -10,7 +10,7 @@ namespace SelfStorageSystem.Controllers;
 
 [ApiController]
 [Route("api/operations")]
-[Authorize(Roles = RoleConstants.BusinessOperationsManager + "," + RoleConstants.SystemAdministrator)]
+[Authorize(Roles = RoleConstants.OperationsOrManager)]
 public class OperationsController : ControllerBase
 {
     private readonly IBusinessOperationsService _operationsService;
