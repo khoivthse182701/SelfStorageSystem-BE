@@ -189,6 +189,95 @@ public class AdminController : ControllerBase
     }
 
     // ==========================================
+    // 4. Quản lý Cơ Sở (Facilities)
+    // ==========================================
+
+    /// <summary>
+    /// Danh sách cơ sở (kèm số ô kho và nhân sự đang hoạt động).
+    /// </summary>
+    [HttpGet("facilities")]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<AdminFacilitySummaryDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetFacilities(
+        [FromQuery] AdminFacilityQueryParameters query,
+        CancellationToken cancellationToken)
+    {
+        var result = await _adminService.GetFacilitiesAsync(query, cancellationToken);
+        return Ok(ApiResponse<PagedResult<AdminFacilitySummaryDto>>.Ok(result, "Retrieved facilities successfully."));
+    }
+
+    /// <summary>
+    /// Chi tiết cơ sở (kèm nhân sự đang gán và thống kê trạng thái ô kho).
+    /// </summary>
+    [HttpGet("facilities/{id:long}")]
+    [ProducesResponseType(typeof(ApiResponse<AdminFacilityDetailDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetFacilityDetail(
+        [FromRoute] long id,
+        CancellationToken cancellationToken)
+    {
+        var result = await _adminService.GetFacilityDetailAsync(id, cancellationToken);
+        return Ok(ApiResponse<AdminFacilityDetailDto>.Ok(result, "Retrieved facility detail successfully."));
+    }
+
+    /// <summary>
+    /// Tạo cơ sở mới.
+    /// </summary>
+    [HttpPost("facilities")]
+    [ProducesResponseType(typeof(ApiResponse<AdminFacilityDetailDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> CreateFacility(
+        [FromBody] AdminCreateFacilityRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var adminUserId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify administrator identity from token."));
+
+        var result = await _adminService.CreateFacilityAsync(request, adminUserId, cancellationToken);
+        return Ok(ApiResponse<AdminFacilityDetailDto>.Ok(result, "Facility created successfully."));
+    }
+
+    /// <summary>
+    /// Cập nhật thông tin cơ sở.
+    /// </summary>
+    [HttpPut("facilities/{id:long}")]
+    [ProducesResponseType(typeof(ApiResponse<AdminFacilityDetailDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpdateFacility(
+        [FromRoute] long id,
+        [FromBody] AdminUpdateFacilityRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var adminUserId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify administrator identity from token."));
+
+        var result = await _adminService.UpdateFacilityAsync(id, request, adminUserId, cancellationToken);
+        return Ok(ApiResponse<AdminFacilityDetailDto>.Ok(result, "Facility updated successfully."));
+    }
+
+    /// <summary>
+    /// Cập nhật nhanh trạng thái cơ sở (active / inactive / maintenance).
+    /// </summary>
+    [HttpPut("facilities/{id:long}/status")]
+    [ProducesResponseType(typeof(ApiResponse<AdminFacilityDetailDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateFacilityStatus(
+        [FromRoute] long id,
+        [FromBody] AdminUpdateFacilityStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var adminUserId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify administrator identity from token."));
+
+        var result = await _adminService.UpdateFacilityStatusAsync(id, request, adminUserId, cancellationToken);
+        return Ok(ApiResponse<AdminFacilityDetailDto>.Ok(result, "Facility status updated successfully."));
+    }
+
+    // ==========================================
     // HELPER
     // ==========================================
 

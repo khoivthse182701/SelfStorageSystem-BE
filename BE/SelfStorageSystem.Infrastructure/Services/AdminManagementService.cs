@@ -1005,6 +1005,326 @@ public class AdminManagementService : IAdminManagementService
     }
 
     // ==========================================
+    // 4. Quản lý Cơ Sở (Facilities)
+    // ==========================================
+
+    public async Task<PagedResult<AdminFacilitySummaryDto>> GetFacilitiesAsync(
+        AdminFacilityQueryParameters query,
+        CancellationToken cancellationToken = default)
+    {
+        var pageNumber = query.PageNumber < 1 ? AdminConstants.DefaultPageNumber : query.PageNumber;
+        var pageSize = query.PageSize < 1 ? AdminConstants.DefaultPageSize
+            : Math.Min(query.PageSize, AdminConstants.MaxPageSize);
+
+        var facilitiesQuery = _dbContext.Facilities.AsNoTracking().AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var search = query.Search.Trim().ToLower();
+            facilitiesQuery = facilitiesQuery.Where(f =>
+                f.Code.ToLower().Contains(search) ||
+                f.Name.ToLower().Contains(search) ||
+                f.AddressLine.ToLower().Contains(search));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Status))
+        {
+            var status = query.Status.Trim().ToLowerInvariant();
+            if (!AdminFacilityValidation.ValidStatuses.Contains(status))
+            {
+                throw AppException.FromError(AdminErrors.InvalidFacilityStatus);
+            }
+            facilitiesQuery = facilitiesQuery.Where(f => f.Status == status);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.City))
+        {
+            var city = query.City.Trim().ToLower();
+            facilitiesQuery = facilitiesQuery.Where(f => f.City.ToLower().Contains(city));
+        }
+
+        var totalCount = await facilitiesQuery.CountAsync(cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+
+        var items = await facilitiesQuery
+            .OrderBy(f => f.Name)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .Select(f => new AdminFacilitySummaryDto
+            {
+                Id = f.Id,
+                Code = f.Code,
+                Name = f.Name,
+                AddressLine = f.AddressLine,
+                District = f.District,
+                City = f.City,
+                Status = f.Status,
+                OpeningTime = f.OpeningTime,
+                ClosingTime = f.ClosingTime,
+                TotalUnits = f.StorageUnits.Count(),
+                ActiveStaffCount = f.StaffFacilityAssignments
+                    .Where(sfa => sfa.StartsAt <= now && (sfa.EndsAt == null || sfa.EndsAt > now))
+                    .Select(sfa => sfa.EmployeeId)
+                    .Distinct()
+                    .Count(),
+                CreatedAt = f.CreatedAt,
+                UpdatedAt = f.UpdatedAt
+            })
+            .ToListAsync(cancellationToken);
+
+        return new PagedResult<AdminFacilitySummaryDto>(items, totalCount, pageNumber, pageSize);
+    }
+
+    public async Task<AdminFacilityDetailDto> GetFacilityDetailAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        var facility = await _dbContext.Facilities
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == id, cancellationToken);
+
+        if (facility == null)
+        {
+            throw AppException.FromError(AdminErrors.FacilityNotFound);
+        }
+
+        var unitStatusCounts = await _dbContext.StorageUnits
+            .AsNoTracking()
+            .Where(u => u.FacilityId == id)
+            .GroupBy(u => u.PhysicalStatus)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        int CountOf(params string[] statuses) =>
+            unitStatusCounts.Where(x => statuses.Contains(x.Status)).Sum(x => x.Count);
+
+        var totalUnits = unitStatusCounts.Sum(x => x.Count);
+        var occupied = CountOf(StorageUnitStatusConstants.Occupied);
+        var reserved = CountOf(StorageUnitStatusConstants.Reserved);
+
+        var now = DateTimeOffset.UtcNow;
+        var assignments = await _dbContext.StaffFacilityAssignments
+            .AsNoTracking()
+            .Include(sfa => sfa.Employee)
+            .Include(sfa => sfa.AssignedByNavigation)
+            .Where(sfa => sfa.FacilityId == id && (sfa.EndsAt == null || sfa.EndsAt > now))
+            .OrderBy(sfa => sfa.AssignmentRole)
+            .ThenBy(sfa => sfa.Employee.FullName)
+            .ToListAsync(cancellationToken);
+
+        return new AdminFacilityDetailDto
+        {
+            Id = facility.Id,
+            Code = facility.Code,
+            Name = facility.Name,
+            AddressLine = facility.AddressLine,
+            Ward = facility.Ward,
+            District = facility.District,
+            City = facility.City,
+            Latitude = facility.Latitude,
+            Longitude = facility.Longitude,
+            Timezone = facility.Timezone,
+            OpeningTime = facility.OpeningTime,
+            ClosingTime = facility.ClosingTime,
+            Status = facility.Status,
+            CreatedAt = facility.CreatedAt,
+            UpdatedAt = facility.UpdatedAt,
+            UnitStats = new AdminFacilityUnitStatsDto
+            {
+                TotalUnits = totalUnits,
+                Available = CountOf(StorageUnitStatusConstants.Available),
+                Reserved = reserved,
+                Occupied = occupied,
+                Maintenance = CountOf(
+                    StorageUnitStatusConstants.Maintenance,
+                    StorageUnitStatusConstants.OutOfService,
+                    StorageUnitStatusConstants.PendingInspection),
+                OccupancyRate = totalUnits > 0
+                    ? Math.Round((double)(occupied + reserved) / totalUnits * 100.0, 2)
+                    : 0.0
+            },
+            AssignedStaff = assignments.Select(sfa => new AdminStaffFacilityAssignmentDto
+            {
+                Id = sfa.Id,
+                EmployeeId = sfa.EmployeeId,
+                EmployeeCode = sfa.Employee.EmployeeCode,
+                EmployeeName = sfa.Employee.FullName,
+                FacilityId = facility.Id,
+                FacilityCode = facility.Code,
+                FacilityName = facility.Name,
+                AssignmentRole = sfa.AssignmentRole,
+                StartsAt = sfa.StartsAt,
+                EndsAt = sfa.EndsAt,
+                AssignedBy = sfa.AssignedBy,
+                AssignedByEmail = sfa.AssignedByNavigation?.Email,
+                CreatedAt = sfa.CreatedAt
+            }).ToList()
+        };
+    }
+
+    public async Task<AdminFacilityDetailDto> CreateFacilityAsync(
+        AdminCreateFacilityRequest request,
+        long adminUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var (code, status, timezone) = NormalizeFacilityInput(request);
+
+        if (await _dbContext.Facilities.AnyAsync(f => f.Code == code, cancellationToken))
+        {
+            throw AppException.FromError(AdminErrors.DuplicateFacilityCode);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var facility = new Facility
+        {
+            Code = code,
+            Status = status,
+            Timezone = timezone,
+            CreatedAt = now
+        };
+        ApplyFacilityFields(facility, request, now);
+
+        _dbContext.Facilities.Add(facility);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        await RecordAuditLogAsync(
+            actorUserId: adminUserId,
+            actorRole: RoleConstants.SystemAdministrator,
+            entityType: AuditEntityTypeConstants.Facility,
+            entityId: facility.Id.ToString(),
+            action: AuditActionConstants.Create,
+            oldValues: null,
+            newValues: DescribeFacility(facility),
+            cancellationToken: cancellationToken);
+
+        _logger.LogInformation("Admin {AdminId} created facility {FacilityId} ({Code}).",
+            adminUserId, facility.Id, facility.Code);
+
+        return await GetFacilityDetailAsync(facility.Id, cancellationToken);
+    }
+
+    public async Task<AdminFacilityDetailDto> UpdateFacilityAsync(
+        long id,
+        AdminUpdateFacilityRequest request,
+        long adminUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var facility = await _dbContext.Facilities.FirstOrDefaultAsync(f => f.Id == id, cancellationToken);
+        if (facility == null)
+        {
+            throw AppException.FromError(AdminErrors.FacilityNotFound);
+        }
+
+        var (code, status, timezone) = NormalizeFacilityInput(request);
+
+        if (await _dbContext.Facilities.AnyAsync(f => f.Code == code && f.Id != id, cancellationToken))
+        {
+            throw AppException.FromError(AdminErrors.DuplicateFacilityCode);
+        }
+
+        var oldValues = DescribeFacility(facility);
+        var now = DateTimeOffset.UtcNow;
+
+        facility.Code = code;
+        facility.Status = status;
+        facility.Timezone = timezone;
+        ApplyFacilityFields(facility, request, now);
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        await RecordAuditLogAsync(
+            actorUserId: adminUserId,
+            actorRole: RoleConstants.SystemAdministrator,
+            entityType: AuditEntityTypeConstants.Facility,
+            entityId: facility.Id.ToString(),
+            action: AuditActionConstants.Update,
+            oldValues: oldValues,
+            newValues: DescribeFacility(facility),
+            cancellationToken: cancellationToken);
+
+        _logger.LogInformation("Admin {AdminId} updated facility {FacilityId}.", adminUserId, facility.Id);
+
+        return await GetFacilityDetailAsync(facility.Id, cancellationToken);
+    }
+
+    public async Task<AdminFacilityDetailDto> UpdateFacilityStatusAsync(
+        long id,
+        AdminUpdateFacilityStatusRequest request,
+        long adminUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var status = (request.Status ?? string.Empty).Trim().ToLowerInvariant();
+        if (!AdminFacilityValidation.ValidStatuses.Contains(status))
+        {
+            throw AppException.FromError(AdminErrors.InvalidFacilityStatus);
+        }
+
+        var facility = await _dbContext.Facilities.FirstOrDefaultAsync(f => f.Id == id, cancellationToken);
+        if (facility == null)
+        {
+            throw AppException.FromError(AdminErrors.FacilityNotFound);
+        }
+
+        var oldStatus = facility.Status;
+        if (oldStatus != status)
+        {
+            facility.Status = status;
+            facility.UpdatedAt = DateTimeOffset.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            await RecordAuditLogAsync(
+                actorUserId: adminUserId,
+                actorRole: RoleConstants.SystemAdministrator,
+                entityType: AuditEntityTypeConstants.Facility,
+                entityId: facility.Id.ToString(),
+                action: AuditActionConstants.UpdateStatus,
+                oldValues: oldStatus,
+                newValues: $"{status} (Reason: {request.Reason ?? AdminConstants.DefaultNotApplicable})",
+                cancellationToken: cancellationToken);
+
+            _logger.LogInformation("Admin {AdminId} changed facility {FacilityId} status from {Old} to {New}.",
+                adminUserId, facility.Id, oldStatus, status);
+        }
+
+        return await GetFacilityDetailAsync(facility.Id, cancellationToken);
+    }
+
+    private static (string Code, string Status, string Timezone) NormalizeFacilityInput(AdminCreateFacilityRequest request)
+    {
+        var status = (request.Status ?? string.Empty).Trim().ToLowerInvariant();
+        if (!AdminFacilityValidation.ValidStatuses.Contains(status))
+        {
+            throw AppException.FromError(AdminErrors.InvalidFacilityStatus);
+        }
+
+        var timezone = (request.Timezone ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(timezone) || !AdminFacilityValidation.IsValidTimezone(timezone))
+        {
+            throw AppException.FromError(AdminErrors.InvalidTimezone);
+        }
+
+        return (request.Code.Trim().ToUpperInvariant(), status, timezone);
+    }
+
+    private static void ApplyFacilityFields(Facility facility, AdminCreateFacilityRequest request, DateTimeOffset now)
+    {
+        facility.Name = request.Name.Trim();
+        facility.AddressLine = request.AddressLine.Trim();
+        facility.Ward = string.IsNullOrWhiteSpace(request.Ward) ? null : request.Ward.Trim();
+        facility.District = string.IsNullOrWhiteSpace(request.District) ? null : request.District.Trim();
+        facility.City = request.City.Trim();
+        facility.Latitude = request.Latitude;
+        facility.Longitude = request.Longitude;
+        facility.OpeningTime = request.OpeningTime;
+        facility.ClosingTime = request.ClosingTime;
+        facility.UpdatedAt = now;
+    }
+
+    private static string DescribeFacility(Facility f) =>
+        $"Code: {f.Code}, Name: {f.Name}, Address: {f.AddressLine}, {f.District}, {f.City}, " +
+        $"GPS: {f.Latitude},{f.Longitude}, TZ: {f.Timezone}, Hours: {f.OpeningTime}-{f.ClosingTime}, Status: {f.Status}";
+
+    // ==========================================
     // Helper Audit Logger
     // ==========================================
 

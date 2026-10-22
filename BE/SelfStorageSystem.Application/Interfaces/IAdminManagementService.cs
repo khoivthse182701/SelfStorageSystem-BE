@@ -92,4 +92,48 @@ public interface IAdminManagementService
     /// </summary>
     Task<AdminDashboardOverviewDto> GetDashboardOverviewAsync(
         CancellationToken cancellationToken = default);
+
+    // ==========================================
+    // 4. Quản lý Cơ Sở (Facilities)
+    // ==========================================
+
+    /// <summary>
+    /// Danh sách cơ sở có bộ lọc (search, status, city) và phân trang.
+    /// </summary>
+    Task<PagedResult<AdminFacilitySummaryDto>> GetFacilitiesAsync(
+        AdminFacilityQueryParameters query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chi tiết cơ sở kèm nhân sự đang gán và thống kê trạng thái ô kho.
+    /// </summary>
+    Task<AdminFacilityDetailDto> GetFacilityDetailAsync(
+        long id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Tạo mới cơ sở.
+    /// </summary>
+    Task<AdminFacilityDetailDto> CreateFacilityAsync(
+        AdminCreateFacilityRequest request,
+        long adminUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cập nhật thông tin cơ sở.
+    /// </summary>
+    Task<AdminFacilityDetailDto> UpdateFacilityAsync(
+        long id,
+        AdminUpdateFacilityRequest request,
+        long adminUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Đổi trạng thái hoạt động cơ sở (active / inactive / maintenance).
+    /// </summary>
+    Task<AdminFacilityDetailDto> UpdateFacilityStatusAsync(
+        long id,
+        AdminUpdateFacilityStatusRequest request,
+        long adminUserId,
+        CancellationToken cancellationToken = default);
 }

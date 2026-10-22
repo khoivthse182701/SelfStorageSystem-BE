@@ -54,4 +54,17 @@ public static class AdminErrors
 
     public static readonly Error InvalidInitialFacilityRole =
         Error.Validation("Admin.InvalidInitialFacilityRole", "Initial facility assignment is only applicable for facility_staff or facility_manager roles.");
+
+    // ==========================================
+    // Facility Management
+    // ==========================================
+
+    public static readonly Error DuplicateFacilityCode =
+        Error.Conflict("Admin.DuplicateFacilityCode", "A facility with this code already exists.");
+
+    public static readonly Error InvalidFacilityStatus =
+        Error.Validation("Admin.InvalidFacilityStatus", "Invalid facility status. Allowed values: active, inactive, maintenance.");
+
+    public static readonly Error InvalidTimezone =
+        Error.Validation("Admin.InvalidTimezone", "The specified timezone is not a valid time zone identifier.");
 }

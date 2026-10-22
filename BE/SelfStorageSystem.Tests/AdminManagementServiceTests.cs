@@ -490,4 +490,223 @@ public class AdminManagementServiceTests
         Assert.Equal("Customer Promoted", updatedUser.EmployeeProfile.FullName);
         Assert.StartsWith("EMP-", updatedUser.EmployeeProfile.EmployeeCode);
     }
+
+    [Fact]
+    public async Task GetFacilitiesAsync_WithFiltersAndPaging_ReturnsFilteredSummaryWithStats()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var f1 = new Facility { Id = 1, Code = "FAC-HN", Name = "Facility Hanoi", AddressLine = "123 Tran Hung Dao", City = "Ha Noi", Timezone = "Asia/Ho_Chi_Minh", Status = FacilityStatusConstants.Active, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        var f2 = new Facility { Id = 2, Code = "FAC-SG", Name = "Facility Saigon", AddressLine = "456 Le Loi", City = "Ho Chi Minh", Timezone = "Asia/Ho_Chi_Minh", Status = FacilityStatusConstants.Active, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        db.Facilities.AddRange(f1, f2);
+
+        // Add units to f2
+        db.StorageUnits.AddRange(
+            new StorageUnit { Id = 1, FacilityId = 2, UnitCode = "SG-U1", PhysicalStatus = StorageUnitStatusConstants.Available },
+            new StorageUnit { Id = 2, FacilityId = 2, UnitCode = "SG-U2", PhysicalStatus = StorageUnitStatusConstants.Occupied }
+        );
+
+        // Add staff assignment to f2
+        var user = new User { Id = 101, Email = "staff@storage.local", Status = UserStatusConstants.Active, PasswordHash = "hash" };
+        var emp = new EmployeeProfile { UserId = 101, EmployeeCode = "EMP-101", FullName = "Staff SG", HireDate = new DateOnly(2025, 1, 1), EmploymentStatus = "active" };
+        db.Users.Add(user);
+        db.EmployeeProfiles.Add(emp);
+        db.StaffFacilityAssignments.Add(new StaffFacilityAssignment
+        {
+            Id = 1,
+            EmployeeId = 101,
+            FacilityId = 2,
+            AssignmentRole = StaffAssignmentRoles.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-5),
+            EndsAt = null
+        });
+
+        await db.SaveChangesAsync();
+
+        // Act - Search by city
+        var result = await adminService.GetFacilitiesAsync(new AdminFacilityQueryParameters
+        {
+            City = "Ho Chi Minh",
+            PageNumber = 1,
+            PageSize = 10
+        });
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(1, result.TotalCount);
+        var item = Assert.Single(result.Items);
+        Assert.Equal("FAC-SG", item.Code);
+        Assert.Equal(2, item.TotalUnits);
+        Assert.Equal(1, item.ActiveStaffCount);
+    }
+
+    [Fact]
+    public async Task GetFacilityDetailAsync_ReturnsDetailWithUnitStatsAndAssignedStaff()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var facility = new Facility
+        {
+            Id = 10,
+            Code = "FAC-DN",
+            Name = "Facility Da Nang",
+            AddressLine = "789 Bach Dang",
+            City = "Da Nang",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.Facilities.Add(facility);
+
+        db.StorageUnits.AddRange(
+            new StorageUnit { Id = 11, FacilityId = 10, UnitCode = "DN-01", PhysicalStatus = StorageUnitStatusConstants.Available },
+            new StorageUnit { Id = 12, FacilityId = 10, UnitCode = "DN-02", PhysicalStatus = StorageUnitStatusConstants.Occupied },
+            new StorageUnit { Id = 13, FacilityId = 10, UnitCode = "DN-03", PhysicalStatus = StorageUnitStatusConstants.Reserved },
+            new StorageUnit { Id = 14, FacilityId = 10, UnitCode = "DN-04", PhysicalStatus = StorageUnitStatusConstants.Maintenance }
+        );
+
+        var staffUser = new User { Id = 201, Email = "danang@storage.local", Status = UserStatusConstants.Active, PasswordHash = "hash" };
+        var empProfile = new EmployeeProfile { UserId = 201, EmployeeCode = "EMP-DN1", FullName = "DN Staff", HireDate = new DateOnly(2025, 1, 1), EmploymentStatus = "active" };
+        db.Users.Add(staffUser);
+        db.EmployeeProfiles.Add(empProfile);
+
+        db.StaffFacilityAssignments.Add(new StaffFacilityAssignment
+        {
+            Id = 5,
+            EmployeeId = 201,
+            FacilityId = 10,
+            AssignmentRole = StaffAssignmentRoles.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-1)
+        });
+
+        await db.SaveChangesAsync();
+
+        // Act
+        var detail = await adminService.GetFacilityDetailAsync(10);
+
+        // Assert
+        Assert.NotNull(detail);
+        Assert.Equal("FAC-DN", detail.Code);
+        Assert.Equal(4, detail.UnitStats.TotalUnits);
+        Assert.Equal(1, detail.UnitStats.Available);
+        Assert.Equal(1, detail.UnitStats.Occupied);
+        Assert.Equal(1, detail.UnitStats.Reserved);
+        Assert.Equal(1, detail.UnitStats.Maintenance);
+        Assert.Equal(50.0, detail.UnitStats.OccupancyRate);
+        Assert.Single(detail.AssignedStaff);
+        Assert.Equal("DN Staff", detail.AssignedStaff[0].EmployeeName);
+    }
+
+    [Fact]
+    public async Task CreateFacilityAsync_ValidRequest_CreatesFacilityAndRecordsAuditLog()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var request = new AdminCreateFacilityRequest
+        {
+            Code = "FAC-NEW",
+            Name = "New Branch",
+            AddressLine = "12 New St",
+            City = "Can Tho",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Active,
+            Latitude = 10.035123m,
+            Longitude = 105.778123m,
+            OpeningTime = new TimeOnly(8, 0),
+            ClosingTime = new TimeOnly(20, 0)
+        };
+
+        // Act
+        var created = await adminService.CreateFacilityAsync(request, adminUserId: 999);
+
+        // Assert
+        Assert.NotNull(created);
+        Assert.Equal("FAC-NEW", created.Code);
+        Assert.Equal("New Branch", created.Name);
+
+        var auditLog = await db.AuditLogs.FirstOrDefaultAsync(a => a.EntityType == AuditEntityTypeConstants.Facility);
+        Assert.NotNull(auditLog);
+        Assert.Equal(AuditActionConstants.Create, auditLog.Action);
+        Assert.Equal(999, auditLog.ActorUserId);
+    }
+
+    [Fact]
+    public async Task CreateFacilityAsync_DuplicateCode_ThrowsConflictException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        db.Facilities.Add(new Facility
+        {
+            Id = 1,
+            Code = "FAC-DUP",
+            Name = "Original Facility",
+            AddressLine = "Street 1",
+            City = "HCM",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Active
+        });
+        await db.SaveChangesAsync();
+
+        var request = new AdminCreateFacilityRequest
+        {
+            Code = "fac-dup", // Same code, different case
+            Name = "Duplicate Facility",
+            AddressLine = "Street 2",
+            City = "HCM",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Active
+        };
+
+        // Act & Assert
+        await Assert.ThrowsAsync<AppConflictException>(() =>
+            adminService.CreateFacilityAsync(request, adminUserId: 999));
+    }
+
+    [Fact]
+    public async Task UpdateFacilityStatusAsync_ValidStatus_UpdatesStatusAndRecordsAuditLog()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        db.Facilities.Add(new Facility
+        {
+            Id = 5,
+            Code = "FAC-05",
+            Name = "Facility 05",
+            AddressLine = "Street 5",
+            City = "HCM",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Active
+        });
+        await db.SaveChangesAsync();
+
+        var request = new AdminUpdateFacilityStatusRequest
+        {
+            Status = FacilityStatusConstants.Maintenance,
+            Reason = "Renovation work"
+        };
+
+        // Act
+        var updated = await adminService.UpdateFacilityStatusAsync(5, request, adminUserId: 999);
+
+        // Assert
+        Assert.NotNull(updated);
+        Assert.Equal(FacilityStatusConstants.Maintenance, updated.Status);
+
+        var audit = await db.AuditLogs.FirstOrDefaultAsync(a => a.EntityType == AuditEntityTypeConstants.Facility && a.Action == AuditActionConstants.UpdateStatus);
+        Assert.NotNull(audit);
+        Assert.Equal(FacilityStatusConstants.Active, audit.OldValues);
+        Assert.Contains("maintenance", audit.NewValues);
+    }
 }
+
