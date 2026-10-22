@@ -4,8 +4,17 @@ namespace SelfStorageSystem.Contracts.Customer.Payments;
 
 public class CreateCheckoutRequest
 {
-    [Required(ErrorMessage = "Reservation ID (reservationId) is required.")]
-    public long ReservationId { get; set; }
+    /// <summary>Reservation being paid for during the initial booking flow.</summary>
+    public long? ReservationId { get; set; }
+
+    /// <summary>
+    /// Existing customer invoice to pay, for example a damage, cleaning or
+    /// overdue-charge invoice. Exactly one payment target must be supplied.
+    /// </summary>
+    public long? InvoiceId { get; set; }
+
+    /// <summary>Pending rental renewal to pay with a dynamically configured VietQR.</summary>
+    public long? RenewalId { get; set; }
 
     /// <summary>
     /// Payment method: "bank_transfer" or "sepay_vietqr".
@@ -115,4 +124,18 @@ public class PaymentHistoryDto
     public string? FailureReason { get; set; }
     public long? RenewalId { get; set; }
     public string? AgreementNo { get; set; }
+}
+
+public class UnpaidInvoiceDto
+{
+    public long InvoiceId { get; set; }
+    public string InvoiceNo { get; set; } = string.Empty;
+    public long? ReservationId { get; set; }
+    public string? ReservationCode { get; set; }
+    public string? AgreementNo { get; set; }
+    public decimal AmountDue { get; set; }
+    public string Currency { get; set; } = "VND";
+    public string Status { get; set; } = string.Empty;
+    public DateOnly DueDate { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
 }

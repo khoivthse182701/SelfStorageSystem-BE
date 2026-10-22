@@ -42,37 +42,78 @@ public class CustomerPaymentService : ICustomerPaymentService
     {
         var now = DateTimeOffset.UtcNow;
 
-        // 1. Verify reservation ownership and validity
-        var reservation = await _dbContext.Reservations
-            .Include(r => r.Facility)
-            .Include(r => r.UnitType)
-            .Include(r => r.Invoices)
-            .FirstOrDefaultAsync(r => r.Id == request.ReservationId && r.CustomerId == customerId, cancellationToken);
-
-        if (reservation == null)
+        var targetCount = (request.ReservationId.HasValue ? 1 : 0) +
+                          (request.InvoiceId.HasValue ? 1 : 0) +
+                          (request.RenewalId.HasValue ? 1 : 0);
+        if ((request.ReservationId.HasValue && request.ReservationId <= 0) ||
+            (request.InvoiceId.HasValue && request.InvoiceId <= 0) ||
+            (request.RenewalId.HasValue && request.RenewalId <= 0) || targetCount != 1)
         {
-            throw AppException.FromError(PaymentErrors.ReservationNotFound);
+            throw AppException.FromError(PaymentErrors.InvoiceNotFound);
         }
 
-        // BR-RSV-01: Disallow payment if the hold period has expired
-        if (reservation.HoldUntil < now ||
-            reservation.Status == ReservationStatusConstants.Expired ||
-            reservation.Status == ReservationStatusConstants.Cancelled)
+        if (request.RenewalId.HasValue)
         {
-            throw AppException.FromError(PaymentErrors.HoldExpired);
+            var renewal = await _dbContext.RentalRenewals
+                .Include(r => r.Agreement)
+                .FirstOrDefaultAsync(r => r.Id == request.RenewalId.Value && r.RequestedBy == customerId, cancellationToken);
+            if (renewal == null || renewal.Status != RenewalStatusConstants.PendingPayment ||
+                now - renewal.CreatedAt > TimeSpan.FromMinutes(15))
+            {
+                throw AppException.FromError(PaymentErrors.InvoiceNotFound);
+            }
+
+            var months = (renewal.RequestedEndDate.Year - renewal.OldEndDate.Year) * 12 + renewal.RequestedEndDate.Month - renewal.OldEndDate.Month;
+            var amount = (renewal.NewMonthlyRate ?? renewal.OldMonthlyRate) * Math.Max(1, months);
+            return BuildCheckoutResponse(0, 0, 0, $"RNW-{renewal.Id}", amount, 15 * 60, $"RNW{renewal.Id}");
         }
 
-        if (reservation.Status == ReservationStatusConstants.Confirmed ||
-            reservation.Status == ReservationStatusConstants.Converted)
+        Reservation? reservation = null;
+        Invoice? invoice;
+
+        if (request.ReservationId.HasValue)
         {
-            throw AppException.FromError(PaymentErrors.AlreadyConfirmed);
+            // Booking checkout: preserve the hold-period and confirmation rules.
+            reservation = await _dbContext.Reservations
+                .Include(r => r.Facility)
+                .Include(r => r.UnitType)
+                .Include(r => r.Invoices)
+                .FirstOrDefaultAsync(r => r.Id == request.ReservationId.Value && r.CustomerId == customerId, cancellationToken);
+
+            if (reservation == null)
+            {
+                throw AppException.FromError(PaymentErrors.ReservationNotFound);
+            }
+
+            if (reservation.HoldUntil < now ||
+                reservation.Status == ReservationStatusConstants.Expired ||
+                reservation.Status == ReservationStatusConstants.Cancelled)
+            {
+                throw AppException.FromError(PaymentErrors.HoldExpired);
+            }
+
+            if (reservation.Status == ReservationStatusConstants.Confirmed ||
+                reservation.Status == ReservationStatusConstants.Converted)
+            {
+                throw AppException.FromError(PaymentErrors.AlreadyConfirmed);
+            }
+
+            invoice = reservation.Invoices.FirstOrDefault(i =>
+                i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft);
+        }
+        else
+        {
+            // Independent invoice checkout: damage, cleaning and overdue charges.
+            invoice = await _dbContext.Invoices
+                .Include(i => i.Reservation)
+                    .ThenInclude(r => r!.Facility)
+                .Include(i => i.Reservation)
+                    .ThenInclude(r => r!.UnitType)
+                .FirstOrDefaultAsync(i => i.Id == request.InvoiceId!.Value && i.CustomerId == customerId, cancellationToken);
+            reservation = invoice?.Reservation;
         }
 
-        // 2. Locate open/draft invoice
-        var invoice = reservation.Invoices
-            .FirstOrDefault(i => i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft);
-
-        if (invoice == null)
+        if (invoice == null || (invoice.Status != InvoiceStatusConstants.Open && invoice.Status != InvoiceStatusConstants.Draft && invoice.Status != InvoiceStatusConstants.PartiallyPaid))
         {
             throw AppException.FromError(PaymentErrors.InvoiceNotFound);
         }
@@ -121,7 +162,11 @@ public class CustomerPaymentService : ICustomerPaymentService
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
-        var expiresInSeconds = (int)Math.Max(0, (reservation.HoldUntil - now).TotalSeconds);
+        // Independent invoices do not reserve a unit, but their QR session still
+        // expires after 15 minutes to avoid presenting a stale payment screen.
+        var expiresInSeconds = reservation == null
+            ? 15 * 60
+            : (int)Math.Max(0, (reservation.HoldUntil - now).TotalSeconds);
 
         // Dynamic invoice prefix configured from SePayConfig
         var prefix = !string.IsNullOrWhiteSpace(_sePayConfig.InvoicePrefix)
@@ -145,7 +190,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         return new CheckoutResponse
         {
             PaymentId = payment.Id,
-            ReservationId = reservation.Id,
+            ReservationId = reservation?.Id ?? 0,
             InvoiceId = invoice.Id,
             InvoiceNo = invoice.InvoiceNo,
             Amount = amountToPay,
@@ -162,6 +207,13 @@ public class CustomerPaymentService : ICustomerPaymentService
                 QrImageUrl = qrUrl
             }
         };
+    }
+
+    private CheckoutResponse BuildCheckoutResponse(long paymentId, long reservationId, long invoiceId, string invoiceNo, decimal amount, int expiresInSeconds, string transferContent)
+    {
+        var baseUrl = !string.IsNullOrWhiteSpace(_vietQrConfig.BaseUrl) ? _vietQrConfig.BaseUrl.TrimEnd('/') : SePayConstants.DefaultBaseUrl;
+        var qrUrl = $"{baseUrl}?bank={Uri.EscapeDataString(_vietQrConfig.BankCode ?? SePayConstants.DefaultBankCode)}&acc={Uri.EscapeDataString(_vietQrConfig.AccountNo ?? string.Empty)}&template={Uri.EscapeDataString(_vietQrConfig.Template ?? SePayConstants.DefaultTemplate)}&showinfo={(_vietQrConfig.ShowInfo ? "true" : "false")}&holder={Uri.EscapeDataString(_vietQrConfig.AccountName ?? string.Empty)}&amount={(long)amount}&memo={Uri.EscapeDataString(transferContent)}";
+        return new CheckoutResponse { PaymentId = paymentId, ReservationId = reservationId, InvoiceId = invoiceId, InvoiceNo = invoiceNo, Amount = amount, Currency = PaymentConstants.CurrencyVnd, PaymentMethod = PaymentConstants.MethodBankTransfer, ExpiresInSeconds = expiresInSeconds, VietQr = new VietQrPaymentInfo { BankCode = _vietQrConfig.BankCode ?? string.Empty, AccountNo = _vietQrConfig.AccountNo ?? string.Empty, AccountName = _vietQrConfig.AccountName ?? string.Empty, Amount = amount, TransferContent = transferContent, QrImageUrl = qrUrl } };
     }
 
     public async Task<bool> ProcessSePayWebhookAsync(
@@ -292,6 +344,22 @@ public class CustomerPaymentService : ICustomerPaymentService
                 if (months <= 0) months = 1;
                 var renewalAmount = (renewal.NewMonthlyRate ?? renewal.OldMonthlyRate) * months;
 
+                if (payload.TransferAmount != renewalAmount)
+                {
+                    _logger.LogWarning("Renewal #{RenewalId} received {ReceivedAmount:N0} VND but requires {ExpectedAmount:N0} VND.", renewal.Id, payload.TransferAmount, renewalAmount);
+                    return false;
+                }
+
+                var renewalEventId = !string.IsNullOrWhiteSpace(payload.ReferenceCode)
+                    ? payload.ReferenceCode.Trim()
+                    : $"renewal-{payload.Id}";
+                var renewalAlreadyProcessed = await _dbContext.IntegrationEvents
+                    .AnyAsync(e => e.Source == "sepay_renewal" && e.ExternalEventId == renewalEventId && e.Status == "processed", cancellationToken);
+                if (renewalAlreadyProcessed)
+                {
+                    return true;
+                }
+
                 var nowTime = DateTimeOffset.UtcNow;
                 renewal.Status = RenewalStatusConstants.Paid;
                 renewal.ApprovedEndDate = renewal.RequestedEndDate;
@@ -302,6 +370,17 @@ public class CustomerPaymentService : ICustomerPaymentService
                     renewal.Agreement.EndDate = renewal.RequestedEndDate;
                     renewal.Agreement.UpdatedAt = nowTime;
                 }
+
+                _dbContext.IntegrationEvents.Add(new IntegrationEvent
+                {
+                    Source = "sepay_renewal",
+                    ExternalEventId = renewalEventId,
+                    EventType = "renewal_payment",
+                    Payload = $"{{\"renewalId\":{renewal.Id},\"amount\":{payload.TransferAmount.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}",
+                    Status = "processed",
+                    ReceivedAt = nowTime,
+                    ProcessedAt = nowTime
+                });
 
                 await _dbContext.SaveChangesAsync(cancellationToken);
                 _logger.LogInformation("Renewal #{RenewalId} marked as paid via SePay webhook.", renewal.Id);
@@ -515,6 +594,36 @@ public class CustomerPaymentService : ICustomerPaymentService
         }
 
         return history.OrderByDescending(h => h.CreatedAt).ToList();
+    }
+
+    public async Task<List<UnpaidInvoiceDto>> GetMyUnpaidInvoicesAsync(
+        long customerId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.Invoices
+            .AsNoTracking()
+            .Include(i => i.Reservation)
+            .Include(i => i.Agreement)
+            .Where(i => i.CustomerId == customerId &&
+                        (i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft ||
+                         i.Status == InvoiceStatusConstants.PartiallyPaid || i.Status == InvoiceStatusConstants.Overdue) &&
+                        i.TotalAmount > i.PaidAmount)
+            .OrderBy(i => i.DueDate)
+            .ThenByDescending(i => i.CreatedAt)
+            .Select(i => new UnpaidInvoiceDto
+            {
+                InvoiceId = i.Id,
+                InvoiceNo = i.InvoiceNo,
+                ReservationId = i.ReservationId,
+                ReservationCode = i.Reservation != null ? i.Reservation.ReservationCode : null,
+                AgreementNo = i.Agreement != null ? i.Agreement.AgreementNo : null,
+                AmountDue = i.TotalAmount - i.PaidAmount,
+                Currency = i.Currency,
+                Status = i.Status,
+                DueDate = i.DueDate,
+                CreatedAt = i.CreatedAt
+            })
+            .ToListAsync(cancellationToken);
     }
 
     private async Task CompletePaymentAsync(

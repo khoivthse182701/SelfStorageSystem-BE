@@ -255,7 +255,7 @@ public class CustomerRentalServiceTests
     }
 
     [Fact]
-    public async Task GetAccessCredentialsAsync_ShouldReturnSuspended_WhenOverdueExceedsOneDay()
+    public async Task GetAccessCredentialsAsync_ShouldReturnSuspended_OnTheDayAfterDueDate()
     {
         using var dbContext = CreateInMemoryDbContext();
         long customerId = 1001;
@@ -298,7 +298,7 @@ public class CustomerRentalServiceTests
             StorageUnit = unit
         };
 
-        // Overdue unpaid invoice > 1 day
+        // Access is suspended from 00:00 on the day after the due date.
         var overdueInvoice = new Invoice
         {
             Id = 1,
@@ -306,7 +306,7 @@ public class CustomerRentalServiceTests
             InvoiceNo = "INV-001",
             CustomerId = customerId,
             IssueDate = today.AddDays(-10),
-            DueDate = today.AddDays(-2), // 2 days overdue
+            DueDate = today.AddDays(-1),
             Currency = "VND",
             Status = InvoiceStatusConstants.Open,
             TotalAmount = 1500000m,

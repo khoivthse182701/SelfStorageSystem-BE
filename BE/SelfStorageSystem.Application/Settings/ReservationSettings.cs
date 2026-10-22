@@ -22,7 +22,7 @@ public class ReservationSettings
     /// <summary>
     /// Buffer grace period in minutes to prevent race conditions during late payments around the 15-minute mark.
     /// </summary>
-    public int HoldGracePeriodMinutes { get; set; } = 3;
+    public int HoldGracePeriodMinutes { get; set; } = 0;
 
     /// <summary>
     /// Background worker execution interval in seconds for cleaning expired reservations.

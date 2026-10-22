@@ -111,6 +111,20 @@ public class CustomerPaymentsController : ControllerBase
         return Ok(ApiResponse<List<PaymentHistoryDto>>.Ok(history, "Retrieved payment history successfully."));
     }
 
+    [HttpGet("unpaid-invoices")]
+    [Authorize(Roles = "storage_customer")]
+    [ProducesResponseType(typeof(ApiResponse<List<UnpaidInvoiceDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetMyUnpaidInvoices(CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var invoices = await _paymentService.GetMyUnpaidInvoicesAsync(customerId, cancellationToken);
+        return Ok(ApiResponse<List<UnpaidInvoiceDto>>.Ok(invoices, "Retrieved unpaid invoices successfully."));
+    }
+
     private bool TryGetCustomerId(out long customerId)
     {
         customerId = 0;

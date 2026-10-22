@@ -168,9 +168,9 @@ public class CustomerRentalService : ICustomerRentalService
             }
         }
 
-        // BR-REN-03: Real-time debt check: overdue by > 1 day triggers suspended status
+        // BR-REN-03: access is suspended from 00:00 on the day after an unpaid invoice is due.
         var isOverdue = agreement.Invoices.Any(i =>
-            i.DueDate < today.AddDays(-1) &&
+            i.DueDate < today &&
             i.Status != InvoiceStatusConstants.Paid &&
             (i.TotalAmount - i.PaidAmount) > 0);
 
@@ -288,7 +288,7 @@ public class CustomerRentalService : ICustomerRentalService
         var now = DateTimeOffset.UtcNow;
         var today = DateOnly.FromDateTime(now.DateTime);
         var isOverdue = agreement.Invoices.Any(i =>
-            i.DueDate < today.AddDays(-1) &&
+            i.DueDate < today &&
             i.Status != InvoiceStatusConstants.Paid &&
             (i.TotalAmount - i.PaidAmount) > 0);
 
@@ -425,7 +425,7 @@ public class CustomerRentalService : ICustomerRentalService
 
         // 6. BR-REN-03: Real-time debt check
         var isOverdue = agreement.Invoices.Any(i =>
-            i.DueDate < today.AddDays(-1) &&
+            i.DueDate < today &&
             i.Status != InvoiceStatusConstants.Paid &&
             (i.TotalAmount - i.PaidAmount) > 0);
 

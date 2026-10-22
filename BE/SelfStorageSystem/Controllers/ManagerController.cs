@@ -242,6 +242,44 @@ public class ManagerController : ControllerBase
     }
 
     /// <summary>
+    /// Hủy phân công ca trực của nhân viên.
+    /// </summary>
+    [HttpDelete("facilities/{facilityId:long}/shift-assignments/{shiftId:long}/{employeeId:long}")]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeleteShiftAssignment(
+        [FromRoute] long facilityId,
+        [FromRoute] long shiftId,
+        [FromRoute] long employeeId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        await _managerService.DeleteShiftAssignmentAsync(
+            facilityId, shiftId, employeeId, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse.Ok("Shift assignment removed successfully."));
+    }
+
+    /// <summary>
+    /// Danh sách nhân sự phụ trách thuộc điểm kho (Facility Staff).
+    /// </summary>
+    [HttpGet("facilities/{facilityId:long}/staff")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ManagerFacilityStaffDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetFacilityStaff(
+        [FromRoute] long facilityId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.GetFacilityStaffAsync(
+            facilityId, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<IReadOnlyList<ManagerFacilityStaffDto>>.Ok(result, "Retrieved facility staff successfully."));
+    }
+
+    /// <summary>
     /// Manager chủ động giao task/nhiệm vụ cho Staff.
     /// </summary>
     [HttpPost("facilities/{facilityId:long}/tasks")]

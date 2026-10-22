@@ -25,4 +25,8 @@ public interface ICustomerPaymentService
     Task<List<PaymentHistoryDto>> GetMyPaymentHistoryAsync(
         long customerId,
         CancellationToken cancellationToken = default);
+
+    Task<List<UnpaidInvoiceDto>> GetMyUnpaidInvoicesAsync(
+        long customerId,
+        CancellationToken cancellationToken = default);
 }

@@ -11,7 +11,8 @@ public static class RoleConstants
     public const string Manager = "facility_manager";
     public const string Admin = "system_administrator";
 
-    public const string StaffOrManager = "facility_staff,facility_manager";
+    // Tickets are visible to operational staff, facility managers, and system administrators.
+    public const string StaffOrManager = "facility_staff,facility_manager,system_administrator";
 
     public const string CustomerDisplay = "Customer";
     public const string StaffDisplay = "Staff";

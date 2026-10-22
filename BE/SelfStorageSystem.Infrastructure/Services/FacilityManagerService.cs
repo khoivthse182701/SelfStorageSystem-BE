@@ -729,6 +729,57 @@ public class FacilityManagerService : IFacilityManagerService
         };
     }
 
+    public async Task DeleteShiftAssignmentAsync(
+        long facilityId,
+        long shiftId,
+        long employeeId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        var assignment = await _dbContext.ShiftAssignments
+            .Include(sa => sa.Shift)
+            .FirstOrDefaultAsync(sa => sa.ShiftId == shiftId && sa.EmployeeId == employeeId && sa.Shift.FacilityId == facilityId, cancellationToken);
+
+        if (assignment != null)
+        {
+            _dbContext.ShiftAssignments.Remove(assignment);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    public async Task<IReadOnlyList<ManagerFacilityStaffDto>> GetFacilityStaffAsync(
+        long facilityId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        var staff = await _dbContext.StaffFacilityAssignments
+            .AsNoTracking()
+            .Include(sfa => sfa.Employee)
+                .ThenInclude(ep => ep.User)
+            .Where(sfa => sfa.FacilityId == facilityId && (sfa.EndsAt == null || sfa.EndsAt > now))
+            .OrderBy(sfa => sfa.Employee.FullName)
+            .Select(sfa => new ManagerFacilityStaffDto
+            {
+                EmployeeId = sfa.EmployeeId,
+                EmployeeCode = sfa.Employee.EmployeeCode,
+                FullName = sfa.Employee.FullName,
+                AssignmentRole = sfa.AssignmentRole,
+                EmploymentStatus = sfa.Employee.EmploymentStatus,
+                Email = sfa.Employee.User.Email,
+                PhoneNumber = sfa.Employee.User.PhoneNumber
+            })
+            .ToListAsync(cancellationToken);
+
+        return staff;
+    }
+
     public async Task<ManagerStaffTaskDto> CreateStaffTaskAsync(
         long facilityId,
         ManagerCreateStaffTaskRequest request,
@@ -1451,10 +1502,14 @@ public class FacilityManagerService : IFacilityManagerService
             .CountAsync(m => m.Agreement.FacilityId == facilityId && 
                              m.RequestedMoveOutDate == today, cancellationToken);
 
+        var todayUtcDate = DateTime.UtcNow.Date;
+        var todayStart = new DateTimeOffset(todayUtcDate, TimeSpan.Zero);
+        var todayEnd = todayStart.AddDays(1);
+
         var todayInspections = await _dbContext.Inspections
             .CountAsync(i => i.FacilityId == facilityId && 
-                             i.InspectedAt != null &&
-                             DateOnly.FromDateTime(i.InspectedAt.Value.DateTime) == today, cancellationToken);
+                             i.InspectedAt >= todayStart && 
+                             i.InspectedAt < todayEnd, cancellationToken);
 
         // Support Tickets
         var openTickets = await _dbContext.SupportTickets
@@ -1470,14 +1525,14 @@ public class FacilityManagerService : IFacilityManagerService
         var thisMonthRevenue = await _dbContext.Payments
             .AsNoTracking()
             .Where(p => p.TargetInvoice != null && 
-                        (p.TargetInvoice.Agreement != null ? p.TargetInvoice.Agreement.FacilityId : (p.TargetInvoice.Reservation != null ? p.TargetInvoice.Reservation.FacilityId : 0)) == facilityId &&
+                        ((p.TargetInvoice.Agreement != null && p.TargetInvoice.Agreement.FacilityId == facilityId) || (p.TargetInvoice.Reservation != null && p.TargetInvoice.Reservation.FacilityId == facilityId)) &&
                         p.Status == PaymentConstants.StatusSucceeded &&
                         (p.PaidAt >= firstDayThisMonth || (p.PaidAt == null && p.CreatedAt >= firstDayThisMonth)))
             .SumAsync(p => (decimal?)p.Amount, cancellationToken) ?? 0m;
 
         var totalOutstandingDebt = await _dbContext.Invoices
             .AsNoTracking()
-            .Where(i => (i.Agreement != null ? i.Agreement.FacilityId : (i.Reservation != null ? i.Reservation.FacilityId : 0)) == facilityId &&
+            .Where(i => ((i.Agreement != null && i.Agreement.FacilityId == facilityId) || (i.Reservation != null && i.Reservation.FacilityId == facilityId)) &&
                         i.Status != InvoiceStatusConstants.Paid &&
                         i.Status != InvoiceStatusConstants.Voided)
             .SumAsync(i => (decimal?)(i.TotalAmount - i.PaidAmount), cancellationToken) ?? 0m;

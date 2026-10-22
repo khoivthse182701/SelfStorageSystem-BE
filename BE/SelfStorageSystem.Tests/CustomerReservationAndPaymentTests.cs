@@ -37,7 +37,7 @@ public class CustomerReservationAndPaymentTests
         Assert.Equal(15, settings.HoldDurationMinutes);
 
         // Buffer Grace Period
-        Assert.Equal(3, settings.HoldGracePeriodMinutes);
+        Assert.Equal(0, settings.HoldGracePeriodMinutes);
 
         // BR-RSV-02: Rental duration between 1 and 12 months
         Assert.Equal(1, settings.MinDurationMonths);

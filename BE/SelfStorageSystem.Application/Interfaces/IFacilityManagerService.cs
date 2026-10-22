@@ -93,6 +93,20 @@ public interface IFacilityManagerService
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
 
+    Task DeleteShiftAssignmentAsync(
+        long facilityId,
+        long shiftId,
+        long employeeId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ManagerFacilityStaffDto>> GetFacilityStaffAsync(
+        long facilityId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
     Task<ManagerStaffTaskDto> CreateStaffTaskAsync(
         long facilityId,
         ManagerCreateStaffTaskRequest request,

@@ -109,3 +109,15 @@ public class ManagerStaffTaskDto
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }
+
+
+public class ManagerFacilityStaffDto
+{
+    public long EmployeeId { get; set; }
+    public string EmployeeCode { get; set; } = string.Empty;
+    public string FullName { get; set; } = string.Empty;
+    public string AssignmentRole { get; set; } = string.Empty;
+    public string EmploymentStatus { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public string? PhoneNumber { get; set; }
+}
