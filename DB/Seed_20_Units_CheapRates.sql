@@ -175,36 +175,6 @@ WHEN NOT MATCHED THEN
 
 SET IDENTITY_INSERT [core].[facility_rates] OFF;
 
--- ----------------------------------------------------------------------------
--- 6. PHỤ PHÍ & MÃ GIẢM GIÁ (FEE RULES & PROMOTIONS)
--- ----------------------------------------------------------------------------
-UPDATE [core].[fee_rules]
-SET amount = 5000.00
-WHERE id = 2; -- Phí mất chìa khóa giảm từ 250k về 5k
-
-UPDATE [core].[promotions]
-SET max_discount_amount = 2000.00
-WHERE id = 1; -- Voucher WELCOME10 giảm 10%, tối đa 2k
-
-IF NOT EXISTS (SELECT 1 FROM [core].[promotions] WHERE code = 'GIAM1K')
-BEGIN
-    SET IDENTITY_INSERT [core].[promotions] ON;
-    INSERT INTO [core].[promotions] (
-        id, code, name, description, discount_type, discount_value,
-        max_discount_amount, usage_limit, per_customer_limit,
-        valid_from, valid_to, is_active, created_by
-    )
-    VALUES (
-        2, 'GIAM1K', 'Giảm 1.000đ trực tiếp', 'Mã giảm cố định 1.000đ khi thanh toán thử nghiệm',
-        'fixed', 1000.00, 1000.00, 1000, 10,
-        CONVERT(datetimeoffset, '2026-01-01 00:00:00+07:00'), CONVERT(datetimeoffset, '2030-01-01 00:00:00+07:00'),
-        1, 5
-    );
-    SET IDENTITY_INSERT [core].[promotions] OFF;
-
-    INSERT INTO [core].[promotion_rules] (promotion_id, rule_type, operator, rule_value)
-    VALUES (2, 'minimum_months', 'gte', N'1');
-END;
 
 -- ----------------------------------------------------------------------------
 -- 7. SEED ĐÚNG 20 KHO (STORAGE UNITS)

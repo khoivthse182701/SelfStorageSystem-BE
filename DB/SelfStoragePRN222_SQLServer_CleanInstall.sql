@@ -2647,45 +2647,7 @@ VALUES
 
 SET IDENTITY_INSERT [core].[policy_versions] OFF;
 
-SET IDENTITY_INSERT [core].[fee_rules] ON;
 
-INSERT INTO [core].fee_rules (
-    id, facility_id, code, fee_type, calculation_method, amount, rate_percent,
-    grace_days, conditions, valid_from, valid_to, created_by
-)
-
-VALUES
-    -- BR-REN-02: from N+1, late fee = 150% of the listed DAILY rent.
-    (1, NULL, 'LATE-150PCT-DAILY', 'late_fee', 'percentage', NULL, 150, 0,
-     '{"base":"daily_rent","start_day":1,"default_after_days":30}', CONVERT(date, '2026-01-01', 23), NULL, 5),
-    (2, 1, 'LOST-KEY-HCM', 'lost_key_fee', 'flat', 250000, NULL, 0,
-     '{}', CONVERT(date, '2026-01-01', 23), NULL, 4);
-
-SET IDENTITY_INSERT [core].[fee_rules] OFF;
-
-SET IDENTITY_INSERT [core].[promotions] ON;
-
-INSERT INTO [core].promotions (
-    id, code, name, description, discount_type, discount_value,
-    max_discount_amount, usage_limit, per_customer_limit,
-    valid_from, valid_to, is_active, created_by
-)
-
-VALUES (
-    1, 'WELCOME10', 'Welcome 10%', 'Ten percent off the initial amount for a new customer',
-    'percentage', 10, 300000, 1000, 1,
-    CONVERT(datetimeoffset, '2026-01-01 00:00:00+07:00'), CONVERT(datetimeoffset, '2030-01-01 00:00:00+07:00'),
-    1, 5
-);
-
-SET IDENTITY_INSERT [core].[promotions] OFF;
-
-INSERT INTO [core].promotion_rules (
-    promotion_id, rule_type, operator, rule_value
-)
-VALUES
-    (1, 'minimum_months', 'gte', N'1'),
-    (1, 'new_customer', 'eq', N'1');
 
 SET IDENTITY_INSERT [core].[staff_shifts] ON;
 
