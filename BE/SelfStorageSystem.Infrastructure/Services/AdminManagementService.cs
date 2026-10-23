@@ -1265,6 +1265,14 @@ public class AdminManagementService : IAdminManagementService
             throw AppException.FromError(AdminErrors.FacilityNotFound);
         }
 
+        if (status == FacilityStatusConstants.Inactive)
+        {
+            var hasActiveRentals = await _dbContext.RentalAgreements.AnyAsync(a => a.FacilityId == id && (a.Status == RentalAgreementStatusConstants.Active || a.Status == RentalAgreementStatusConstants.ExpiringSoon), cancellationToken);
+            var hasReservedUnits = await _dbContext.StorageUnits.AnyAsync(u => u.FacilityId == id && u.PhysicalStatus == StorageUnitStatusConstants.Reserved, cancellationToken);
+            var hasInTransitTransfers = await _dbContext.UnitTransferRequests.AnyAsync(t => t.RequestedFacilityId == id && t.Status == TransferRequestStatusConstants.MovedOutInTransit, cancellationToken);
+            if (hasActiveRentals || hasReservedUnits || hasInTransitTransfers) throw AppException.FromError(AdminErrors.FacilityHasActiveOperations);
+        }
+
         var oldStatus = facility.Status;
         if (oldStatus != status)
         {

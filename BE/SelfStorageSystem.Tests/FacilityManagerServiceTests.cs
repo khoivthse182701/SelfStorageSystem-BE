@@ -406,6 +406,7 @@ public class FacilityManagerServiceTests
             AgreementId = 50,
             FromUnitId = 100,
             RequestedUnitTypeId = 1,
+            RequestedFacilityId = 1,
             RequestedEffectiveDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)),
             Reason = "Want cleaner corner",
             Status = TransferRequestStatusConstants.Pending,

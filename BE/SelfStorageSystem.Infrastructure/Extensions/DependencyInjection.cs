@@ -67,6 +67,7 @@ public static class DependencyInjection
 
         // 4.1. Background Hosted Workers
         services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.ReservationHoldExpiryWorker>();
+        services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.TransferExpiryWorker>();
 
         // 5. JWT Authentication
         var jwtSettings = configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() 

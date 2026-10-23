@@ -61,8 +61,15 @@ public record AuthorizedMemberDto(
 
 public record CreateTransferRequest(
     long RequestedUnitTypeId,
-    DateOnly RequestedEffectiveDate,
+    long RequestedFacilityId,
+    DateOnly MoveOutDate,
+    DateOnly MoveInDate,
     string Reason
+);
+
+public record RescheduleTransferRequest(
+    DateOnly MoveOutDate,
+    DateOnly MoveInDate
 );
 
 public record UnitTransferRequestDto(
@@ -72,7 +79,16 @@ public record UnitTransferRequestDto(
     string? FromUnitCode,
     long RequestedUnitTypeId,
     string? RequestedUnitTypeName,
-    DateOnly RequestedEffectiveDate,
+    long RequestedFacilityId,
+    DateOnly MoveOutDate,
+    DateOnly MoveInDate,
+    decimal DiffRentAmount,
+    decimal DiffDepositAmount,
+    decimal TotalPaidAmount,
+    int RescheduleCount,
+    long? InvoiceId,
+    string? PaymentQrUrl,
+    string? PaymentContent,
     string Reason,
     string Status,
     DateTimeOffset CreatedAt

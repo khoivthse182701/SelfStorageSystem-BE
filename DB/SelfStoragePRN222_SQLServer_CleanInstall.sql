@@ -681,12 +681,21 @@ CREATE TABLE [core].unit_transfer_requests (
     id bigint IDENTITY(1,1) PRIMARY KEY,
     agreement_id bigint NOT NULL REFERENCES [core].rental_agreements(id) ON DELETE NO ACTION,
     requested_unit_type_id bigint NOT NULL REFERENCES [core].unit_types(id) ON DELETE NO ACTION,
+    requested_facility_id bigint NOT NULL REFERENCES [core].facilities(id) ON DELETE NO ACTION,
     from_unit_id bigint NOT NULL REFERENCES [core].storage_units(id) ON DELETE NO ACTION,
     to_unit_id bigint REFERENCES [core].storage_units(id) ON DELETE NO ACTION,
     requested_effective_date date NOT NULL,
+    move_out_date date NOT NULL,
+    move_in_date date NOT NULL,
+    reschedule_count int NOT NULL DEFAULT 0,
+    diff_rent_amount decimal(18,2) NOT NULL DEFAULT 0,
+    diff_deposit_amount decimal(18,2) NOT NULL DEFAULT 0,
+    penalty_amount decimal(18,2) NOT NULL DEFAULT 0,
+    credit_amount decimal(18,2) NOT NULL DEFAULT 0,
+    total_paid_amount decimal(18,2) NOT NULL DEFAULT 0,
     reason nvarchar(255) NOT NULL,
-    status nvarchar(255) NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'approved', 'scheduled', 'completed', 'rejected', 'cancelled')),
+    status nvarchar(255) NOT NULL DEFAULT 'pending_payment'
+        CHECK (status IN ('pending_payment', 'paid', 'moved_out_in_transit', 'cancelled_overdue_move_out', 'pending', 'approved', 'scheduled', 'completed', 'rejected', 'cancelled')),
     requested_by bigint NOT NULL REFERENCES [core].users(id) ON DELETE NO ACTION,
     reviewed_by bigint REFERENCES [core].users(id) ON DELETE NO ACTION,
     reviewed_at datetimeoffset(7),
@@ -698,6 +707,8 @@ CREATE INDEX unit_transfer_requests_agreement_idx
     ON [core].unit_transfer_requests (agreement_id, status, created_at DESC);
 CREATE INDEX unit_transfer_requests_requested_unit_type_id_idx
     ON [core].unit_transfer_requests (requested_unit_type_id);
+CREATE INDEX unit_transfer_requests_requested_facility_id_idx
+    ON [core].unit_transfer_requests (requested_facility_id);
 CREATE INDEX unit_transfer_requests_from_unit_id_idx ON [core].unit_transfer_requests (from_unit_id);
 CREATE INDEX unit_transfer_requests_to_unit_id_idx ON [core].unit_transfer_requests (to_unit_id)
     WHERE to_unit_id IS NOT NULL;
@@ -705,7 +716,7 @@ CREATE INDEX unit_transfer_requests_requested_by_idx ON [core].unit_transfer_req
 CREATE INDEX unit_transfer_requests_reviewed_by_idx ON [core].unit_transfer_requests (reviewed_by)
     WHERE reviewed_by IS NOT NULL;
 CREATE UNIQUE INDEX unit_transfer_requests_one_open_uidx ON [core].unit_transfer_requests (agreement_id)
-    WHERE status IN ('pending', 'approved', 'scheduled');
+    WHERE status IN ('pending_payment', 'paid', 'moved_out_in_transit', 'pending', 'approved', 'scheduled');
 
 CREATE TABLE [core].move_out_requests (
     id bigint IDENTITY(1,1) PRIMARY KEY,

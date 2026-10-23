@@ -118,6 +118,13 @@ public class ManagerTransferRequestDto
     public string FromUnitCode { get; set; } = string.Empty;
     public long RequestedUnitTypeId { get; set; }
     public string RequestedUnitTypeName { get; set; } = string.Empty;
+    public long RequestedFacilityId { get; set; }
+    public DateOnly MoveOutDate { get; set; }
+    public DateOnly MoveInDate { get; set; }
+    public decimal DiffRentAmount { get; set; }
+    public decimal DiffDepositAmount { get; set; }
+    public decimal TotalPaidAmount { get; set; }
+    public int RescheduleCount { get; set; }
     public long? ToUnitId { get; set; }
     public string? ToUnitCode { get; set; }
     public DateOnly RequestedEffectiveDate { get; set; }

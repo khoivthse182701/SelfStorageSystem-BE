@@ -5,6 +5,7 @@ public static class FacilityStatusConstants
     public const string Active = "active";
     public const string Inactive = "inactive";
     public const string Maintenance = "maintenance";
+    public const string SuspendedNewBookings = "suspended_new_bookings";
 }
 
 public static class AuthConstants

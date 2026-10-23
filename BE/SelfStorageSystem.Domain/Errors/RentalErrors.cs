@@ -64,6 +64,24 @@ public static class RentalErrors
     public static readonly Error TargetUnitTypeNotFound =
         Error.NotFound("Rental.TargetUnitTypeNotFound", "Requested unit type was not found.");
 
+    public static readonly Error TargetFacilityNotFound =
+        Error.NotFound("Rental.TargetFacilityNotFound", "Requested facility was not found.");
+
+    public static readonly Error InvalidTransferSchedule =
+        Error.Validation("Rental.InvalidTransferSchedule", "Move-out and move-in dates must be ordered and no more than 7 days apart.");
+
+    public static readonly Error TransferRequestNotFound =
+        Error.NotFound("Rental.TransferRequestNotFound", "Transfer request was not found or does not belong to you.");
+
+    public static readonly Error TransferRescheduleLimitReached =
+        Error.Conflict("Rental.TransferRescheduleLimitReached", "You have already used the maximum of 2 transfer reschedules.");
+
+    public static readonly Error TransferRescheduleDeadlinePassed =
+        Error.Conflict("Rental.TransferRescheduleDeadlinePassed", "Transfer dates can only be changed at least 24 hours before the currently scheduled date.");
+
+    public static readonly Error TransferMoveOutAlreadyConfirmed =
+        Error.Conflict("Rental.TransferMoveOutAlreadyConfirmed", "The move-out has already been confirmed and its date can no longer be changed.");
+
     public static readonly Error EmptyTransferReason =
         Error.Validation("Rental.EmptyTransferReason", "Transfer reason is required.");
 }

@@ -2010,7 +2010,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => new { e.ShiftId, e.EmployeeId }).HasName("PK__shift_as__E774929A092DBDEE");
 
-            entity.ToTable("shift_assignments", "core");
+            entity.ToTable("shift_assignments", "core", tb => tb.HasTrigger("trg_shift_assignments_validate_scope"));
 
             entity.HasIndex(e => new { e.EmployeeId, e.ShiftId }, "shift_assignments_employee_id_idx");
 
@@ -2706,7 +2706,7 @@ public partial class SelfStorageDbContext : DbContext
 
             entity.HasIndex(e => e.AgreementId, "unit_transfer_requests_one_open_uidx")
                 .IsUnique()
-                .HasFilter("([status] IN ('pending', 'approved', 'scheduled'))");
+                .HasFilter("([status] IN ('pending_payment', 'paid', 'moved_out_in_transit', 'pending', 'approved', 'scheduled'))");
 
             entity.HasIndex(e => e.RequestedBy, "unit_transfer_requests_requested_by_idx");
 
@@ -2719,23 +2719,32 @@ public partial class SelfStorageDbContext : DbContext
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.AgreementId).HasColumnName("agreement_id");
             entity.Property(e => e.CompletedAt).HasColumnName("completed_at");
+            entity.Property(e => e.CreditAmount).HasColumnName("credit_amount");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(sysutcdatetime())")
                 .HasColumnName("created_at");
             entity.Property(e => e.FromUnitId).HasColumnName("from_unit_id");
+            entity.Property(e => e.DiffDepositAmount).HasColumnName("diff_deposit_amount");
+            entity.Property(e => e.DiffRentAmount).HasColumnName("diff_rent_amount");
+            entity.Property(e => e.MoveInDate).HasColumnName("move_in_date");
+            entity.Property(e => e.MoveOutDate).HasColumnName("move_out_date");
+            entity.Property(e => e.PenaltyAmount).HasColumnName("penalty_amount");
             entity.Property(e => e.Reason)
                 .HasMaxLength(255)
                 .HasColumnName("reason");
             entity.Property(e => e.RequestedBy).HasColumnName("requested_by");
             entity.Property(e => e.RequestedEffectiveDate).HasColumnName("requested_effective_date");
+            entity.Property(e => e.RequestedFacilityId).HasColumnName("requested_facility_id");
             entity.Property(e => e.RequestedUnitTypeId).HasColumnName("requested_unit_type_id");
+            entity.Property(e => e.RescheduleCount).HasColumnName("reschedule_count");
             entity.Property(e => e.ReviewedAt).HasColumnName("reviewed_at");
             entity.Property(e => e.ReviewedBy).HasColumnName("reviewed_by");
             entity.Property(e => e.Status)
                 .HasMaxLength(255)
-                .HasDefaultValue("pending")
+                .HasDefaultValue("pending_payment")
                 .HasColumnName("status");
             entity.Property(e => e.ToUnitId).HasColumnName("to_unit_id");
+            entity.Property(e => e.TotalPaidAmount).HasColumnName("total_paid_amount");
 
             entity.HasOne(d => d.Agreement).WithOne(p => p.UnitTransferRequest)
                 .HasForeignKey<UnitTransferRequest>(d => d.AgreementId)

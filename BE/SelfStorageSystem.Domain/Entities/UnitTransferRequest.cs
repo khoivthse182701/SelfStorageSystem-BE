@@ -11,11 +11,29 @@ public partial class UnitTransferRequest
 
     public long RequestedUnitTypeId { get; set; }
 
+    public long RequestedFacilityId { get; set; }
+
     public long FromUnitId { get; set; }
 
     public long? ToUnitId { get; set; }
 
     public DateOnly RequestedEffectiveDate { get; set; }
+
+    public DateOnly MoveOutDate { get; set; }
+
+    public DateOnly MoveInDate { get; set; }
+
+    public int RescheduleCount { get; set; }
+
+    public decimal DiffRentAmount { get; set; }
+
+    public decimal DiffDepositAmount { get; set; }
+
+    public decimal PenaltyAmount { get; set; }
+
+    public decimal CreditAmount { get; set; }
+
+    public decimal TotalPaidAmount { get; set; }
 
     public string Reason { get; set; } = null!;
 

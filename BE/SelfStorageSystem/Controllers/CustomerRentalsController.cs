@@ -383,6 +383,29 @@ public class CustomerRentalsController : ControllerBase
         return Ok(ApiResponse<UnitTransferRequestDto>.Ok(result, "Unit transfer requested successfully."));
     }
 
+    /// <summary>
+    /// Reschedules a transfer at most twice, at least 24 hours before the currently scheduled affected date.
+    /// </summary>
+    [HttpPut("transfer-requests/{transferRequestId:long}/reschedule")]
+    [ProducesResponseType(typeof(ApiResponse<UnitTransferRequestDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RescheduleTransfer(
+        [FromRoute] long transferRequestId,
+        [FromBody] RescheduleTransferRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.RescheduleTransferAsync(customerId, transferRequestId, request, cancellationToken);
+        return Ok(ApiResponse<UnitTransferRequestDto>.Ok(result, "Transfer schedule updated successfully."));
+    }
+
     private bool TryGetCustomerId(out long customerId)
     {
         customerId = 0;

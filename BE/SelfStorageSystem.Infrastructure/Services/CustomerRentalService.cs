@@ -26,6 +26,7 @@ public class CustomerRentalService : ICustomerRentalService
     private readonly IMemoryCache _cache;
     private readonly JwtSettings _jwtSettings;
     private readonly RentalSettings _rentalSettings;
+    private readonly PaymentSettings _paymentSettings;
     private readonly ILogger<CustomerRentalService> _logger;
 
     public CustomerRentalService(
@@ -33,12 +34,14 @@ public class CustomerRentalService : ICustomerRentalService
         IMemoryCache cache,
         IOptions<JwtSettings> jwtOptions,
         ILogger<CustomerRentalService> logger,
-        IOptions<RentalSettings>? rentalOptions = null)
+        IOptions<RentalSettings>? rentalOptions = null,
+        IOptions<PaymentSettings>? paymentOptions = null)
     {
         _dbContext = dbContext;
         _cache = cache;
         _jwtSettings = jwtOptions.Value;
         _rentalSettings = rentalOptions?.Value ?? new RentalSettings();
+        _paymentSettings = paymentOptions?.Value ?? new PaymentSettings();
         _logger = logger;
     }
 
@@ -865,29 +868,106 @@ public class CustomerRentalService : ICustomerRentalService
         if (targetType == null)
             throw AppException.FromError(RentalErrors.TargetUnitTypeNotFound);
 
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (request.MoveOutDate < today || request.MoveOutDate > request.MoveInDate || request.MoveInDate.DayNumber - request.MoveOutDate.DayNumber > RentalPolicyConstants.MaxTransferTransitDays)
+            throw AppException.FromError(RentalErrors.InvalidTransferSchedule);
+
+        var targetFacilityExists = await _dbContext.Facilities
+            .AsNoTracking()
+            .AnyAsync(f => f.Id == request.RequestedFacilityId, cancellationToken);
+
+        if (!targetFacilityExists)
+            throw AppException.FromError(RentalErrors.TargetFacilityNotFound);
+
+        var targetRate = await _dbContext.FacilityRates
+            .AsNoTracking()
+            .Where(r => r.FacilityId == request.RequestedFacilityId && r.UnitTypeId == request.RequestedUnitTypeId && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo >= today))
+            .OrderByDescending(r => r.ValidFrom)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (targetRate == null)
+            throw AppException.FromError(RentalErrors.TargetUnitTypeNotFound);
+
+        var remainingDays = Math.Max(0, agreement.EndDate.DayNumber - request.MoveOutDate.DayNumber);
+        var diffRent = Math.Max(0, targetRate.MonthlyRate - agreement.MonthlyRateSnapshot) * remainingDays / 30m;
+        var diffDeposit = Math.Max(0, targetRate.DepositAmount - agreement.DepositBalance);
+
         if (string.IsNullOrWhiteSpace(request.Reason))
             throw AppException.FromError(RentalErrors.EmptyTransferReason);
 
         var pendingTransfer = await _dbContext.UnitTransferRequests
-            .AnyAsync(t => t.AgreementId == agreementId && (t.Status == TransferRequestStatusConstants.Pending || t.Status == TransferRequestStatusConstants.Approved || t.Status == TransferRequestStatusConstants.Scheduled), cancellationToken);
+            .AnyAsync(t => t.AgreementId == agreementId && (t.Status == TransferRequestStatusConstants.PendingPayment || t.Status == TransferRequestStatusConstants.Paid || t.Status == TransferRequestStatusConstants.MovedOutInTransit || t.Status == TransferRequestStatusConstants.Pending || t.Status == TransferRequestStatusConstants.Approved || t.Status == TransferRequestStatusConstants.Scheduled), cancellationToken);
 
         if (pendingTransfer)
             throw AppException.FromError(RentalErrors.TransferRequestAlreadyPending);
 
+        var targetUnit = await _dbContext.StorageUnits
+            .FirstOrDefaultAsync(u => u.FacilityId == request.RequestedFacilityId &&
+                                      u.UnitTypeId == request.RequestedUnitTypeId &&
+                                      u.PhysicalStatus == StorageUnitStatusConstants.Available,
+                cancellationToken);
+
+        if (targetUnit is null)
+            throw AppException.FromError(RentalErrors.TargetUnitTypeNotFound);
+
+        var total = decimal.Round(diffRent, 0, MidpointRounding.AwayFromZero) + diffDeposit;
+        var now = DateTimeOffset.UtcNow;
         var transfer = new UnitTransferRequest
         {
             AgreementId = agreementId,
             RequestedUnitTypeId = request.RequestedUnitTypeId,
+            RequestedFacilityId = request.RequestedFacilityId,
             FromUnitId = activeAllocation.StorageUnitId,
-            RequestedEffectiveDate = request.RequestedEffectiveDate,
+            ToUnitId = targetUnit.Id,
+            RequestedEffectiveDate = request.MoveOutDate,
+            MoveOutDate = request.MoveOutDate,
+            MoveInDate = request.MoveInDate,
+            DiffRentAmount = decimal.Round(diffRent, 0, MidpointRounding.AwayFromZero),
+            DiffDepositAmount = diffDeposit,
+            TotalPaidAmount = total,
             Reason = request.Reason.Trim(),
-            Status = TransferRequestStatusConstants.Pending,
+            Status = total > 0 ? TransferRequestStatusConstants.PendingPayment : TransferRequestStatusConstants.Paid,
             RequestedBy = customerId,
-            CreatedAt = DateTimeOffset.UtcNow
+            CreatedAt = now
         };
 
+        // The destination is held immediately.  A pending-payment hold is released
+        // by TransferExpiryWorker if no payment arrives within 15 minutes.
+        targetUnit.PhysicalStatus = StorageUnitStatusConstants.Reserved;
+        targetUnit.UpdatedAt = now;
         _dbContext.UnitTransferRequests.Add(transfer);
         await _dbContext.SaveChangesAsync(cancellationToken);
+
+        long? invoiceId = null;
+        string? paymentQrUrl = null;
+        string? paymentContent = null;
+        if (total > 0)
+        {
+            var invoice = new Invoice
+            {
+                InvoiceNo = $"INV-TRF-{now:yyyyMMdd}-{transfer.Id:D6}",
+                CustomerId = agreement.CustomerId,
+                AgreementId = agreement.Id,
+                BillingPeriod = $"TRANSFER:{transfer.Id}",
+                IssueDate = today,
+                DueDate = today,
+                Currency = PaymentConstants.CurrencyVnd,
+                SubtotalAmount = total,
+                TotalAmount = total,
+                Status = InvoiceStatusConstants.Open,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.Invoices.Add(invoice);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            _dbContext.InvoiceLines.Add(new InvoiceLine { InvoiceId = invoice.Id, LineType = InvoiceLineTypeConstants.Rent, Description = $"Transfer price difference #{transfer.Id}", Quantity = 1, UnitPrice = transfer.DiffRentAmount, LineAmount = transfer.DiffRentAmount, Metadata = "{}" });
+            _dbContext.InvoiceLines.Add(new InvoiceLine { InvoiceId = invoice.Id, LineType = InvoiceLineTypeConstants.Deposit, Description = $"Transfer deposit difference #{transfer.Id}", Quantity = 1, UnitPrice = transfer.DiffDepositAmount, LineAmount = transfer.DiffDepositAmount, Metadata = "{}" });
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            invoiceId = invoice.Id;
+            paymentContent = $"{_paymentSettings.SePay.InvoicePrefix}{invoice.Id}";
+            var cfg = _paymentSettings.VietQr;
+            paymentQrUrl = $"{cfg.BaseUrl.TrimEnd('/')}?bank={Uri.EscapeDataString(cfg.BankCode)}&acc={Uri.EscapeDataString(cfg.AccountNo)}&template={Uri.EscapeDataString(cfg.Template)}&showinfo={(cfg.ShowInfo ? "true" : "false")}&holder={Uri.EscapeDataString(cfg.AccountName)}&amount={(long)total}&memo={Uri.EscapeDataString(paymentContent)}";
+        }
 
         var fromUnit = await _dbContext.StorageUnits.AsNoTracking().FirstOrDefaultAsync(u => u.Id == transfer.FromUnitId, cancellationToken);
 
@@ -898,10 +978,70 @@ public class CustomerRentalService : ICustomerRentalService
             FromUnitCode: fromUnit?.UnitCode,
             RequestedUnitTypeId: transfer.RequestedUnitTypeId,
             RequestedUnitTypeName: targetType.Name,
-            RequestedEffectiveDate: transfer.RequestedEffectiveDate,
+            RequestedFacilityId: transfer.RequestedFacilityId,
+            MoveOutDate: transfer.MoveOutDate,
+            MoveInDate: transfer.MoveInDate,
+            DiffRentAmount: transfer.DiffRentAmount,
+            DiffDepositAmount: transfer.DiffDepositAmount,
+            TotalPaidAmount: transfer.TotalPaidAmount,
+            RescheduleCount: transfer.RescheduleCount,
+            InvoiceId: invoiceId,
+            PaymentQrUrl: paymentQrUrl,
+            PaymentContent: paymentContent,
             Reason: transfer.Reason,
             Status: transfer.Status,
             CreatedAt: transfer.CreatedAt
         );
+    }
+
+    public async Task<UnitTransferRequestDto> RescheduleTransferAsync(
+        long customerId,
+        long transferRequestId,
+        RescheduleTransferRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var transfer = await _dbContext.UnitTransferRequests
+            .Include(t => t.RequestedUnitType)
+            .Include(t => t.FromUnit)
+            .FirstOrDefaultAsync(t => t.Id == transferRequestId && t.RequestedBy == customerId, cancellationToken);
+
+        if (transfer is null)
+            throw AppException.FromError(RentalErrors.TransferRequestNotFound);
+
+        if (transfer.Status == TransferRequestStatusConstants.MovedOutInTransit || transfer.Status == TransferRequestStatusConstants.Completed)
+            throw AppException.FromError(RentalErrors.TransferMoveOutAlreadyConfirmed);
+
+        if (transfer.Status != TransferRequestStatusConstants.PendingPayment &&
+            transfer.Status != TransferRequestStatusConstants.Paid &&
+            transfer.Status != TransferRequestStatusConstants.Pending &&
+            transfer.Status != TransferRequestStatusConstants.Approved &&
+            transfer.Status != TransferRequestStatusConstants.Scheduled)
+            throw AppException.FromError(RentalErrors.TransferRequestNotFound);
+
+        if (transfer.RescheduleCount >= RentalPolicyConstants.MaxTransferReschedules)
+            throw AppException.FromError(RentalErrors.TransferRescheduleLimitReached);
+
+        var now = DateTimeOffset.UtcNow;
+        if (request.MoveOutDate != transfer.MoveOutDate && now > new DateTimeOffset(transfer.MoveOutDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(-24))
+            throw AppException.FromError(RentalErrors.TransferRescheduleDeadlinePassed);
+        if (request.MoveInDate != transfer.MoveInDate && now > new DateTimeOffset(transfer.MoveInDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(-24))
+            throw AppException.FromError(RentalErrors.TransferRescheduleDeadlinePassed);
+
+        var today = DateOnly.FromDateTime(now.UtcDateTime);
+        if (request.MoveOutDate < today || request.MoveOutDate > request.MoveInDate ||
+            request.MoveInDate.DayNumber - request.MoveOutDate.DayNumber > RentalPolicyConstants.MaxTransferTransitDays)
+            throw AppException.FromError(RentalErrors.InvalidTransferSchedule);
+
+        transfer.MoveOutDate = request.MoveOutDate;
+        transfer.MoveInDate = request.MoveInDate;
+        transfer.RequestedEffectiveDate = request.MoveOutDate;
+        transfer.RescheduleCount++;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new UnitTransferRequestDto(
+            transfer.Id, transfer.AgreementId, transfer.FromUnitId, transfer.FromUnit?.UnitCode,
+            transfer.RequestedUnitTypeId, transfer.RequestedUnitType?.Name, transfer.RequestedFacilityId,
+            transfer.MoveOutDate, transfer.MoveInDate, transfer.DiffRentAmount, transfer.DiffDepositAmount,
+            transfer.TotalPaidAmount, transfer.RescheduleCount, null, null, null, transfer.Reason, transfer.Status, transfer.CreatedAt);
     }
 }

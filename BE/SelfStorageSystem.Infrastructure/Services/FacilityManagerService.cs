@@ -417,7 +417,7 @@ public class FacilityManagerService : IFacilityManagerService
             .Include(r => r.FromUnit)
             .Include(r => r.ToUnit)
             .Include(r => r.RequestedUnitType)
-            .Where(r => r.FromUnit.FacilityId == facilityId)
+            .Where(r => r.FromUnit.FacilityId == facilityId || r.RequestedFacilityId == facilityId)
             .OrderByDescending(r => r.CreatedAt)
             .Select(r => new ManagerTransferRequestDto
             {
@@ -431,6 +431,13 @@ public class FacilityManagerService : IFacilityManagerService
                 FromUnitCode = r.FromUnit.UnitCode,
                 RequestedUnitTypeId = r.RequestedUnitTypeId,
                 RequestedUnitTypeName = r.RequestedUnitType.Name,
+                RequestedFacilityId = r.RequestedFacilityId,
+                MoveOutDate = r.MoveOutDate,
+                MoveInDate = r.MoveInDate,
+                DiffRentAmount = r.DiffRentAmount,
+                DiffDepositAmount = r.DiffDepositAmount,
+                TotalPaidAmount = r.TotalPaidAmount,
+                RescheduleCount = r.RescheduleCount,
                 ToUnitId = r.ToUnitId,
                 ToUnitCode = r.ToUnit != null ? r.ToUnit.UnitCode : null,
                 RequestedEffectiveDate = r.RequestedEffectiveDate,
@@ -467,7 +474,11 @@ public class FacilityManagerService : IFacilityManagerService
             throw AppException.FromError(ManagerErrors.TransferRequestNotFound);
         }
 
-        await EnsureFacilityAccessAsync(transfer.FromUnit.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+        var accessNow = DateTimeOffset.UtcNow;
+        var canAccessSource = isSystemAdmin || await _dbContext.StaffFacilityAssignments.AnyAsync(a => a.EmployeeId == currentUserId && a.FacilityId == transfer.FromUnit.FacilityId && a.AssignmentRole == StaffAssignmentRoles.FacilityManager && (a.EndsAt == null || a.EndsAt > accessNow), cancellationToken);
+        var canAccessDestination = isSystemAdmin || await _dbContext.StaffFacilityAssignments.AnyAsync(a => a.EmployeeId == currentUserId && a.FacilityId == transfer.RequestedFacilityId && a.AssignmentRole == StaffAssignmentRoles.FacilityManager && (a.EndsAt == null || a.EndsAt > accessNow), cancellationToken);
+        if (!canAccessSource && !canAccessDestination)
+            throw AppException.FromError(ManagerErrors.NotAssignedToFacility);
 
         if (transfer.Status != TransferRequestStatusConstants.Pending)
         {
@@ -490,7 +501,7 @@ public class FacilityManagerService : IFacilityManagerService
             if (request.TargetUnitId.HasValue)
             {
                 var targetUnit = await _dbContext.StorageUnits
-                    .FirstOrDefaultAsync(u => u.Id == request.TargetUnitId.Value && u.FacilityId == transfer.FromUnit.FacilityId, cancellationToken);
+                    .FirstOrDefaultAsync(u => u.Id == request.TargetUnitId.Value && u.FacilityId == transfer.RequestedFacilityId, cancellationToken);
                 if (targetUnit != null)
                 {
                     transfer.ToUnitId = targetUnit.Id;
@@ -516,6 +527,13 @@ public class FacilityManagerService : IFacilityManagerService
             FromUnitCode = transfer.FromUnit.UnitCode,
             RequestedUnitTypeId = transfer.RequestedUnitTypeId,
             RequestedUnitTypeName = transfer.RequestedUnitType.Name,
+            RequestedFacilityId = transfer.RequestedFacilityId,
+            MoveOutDate = transfer.MoveOutDate,
+            MoveInDate = transfer.MoveInDate,
+            DiffRentAmount = transfer.DiffRentAmount,
+            DiffDepositAmount = transfer.DiffDepositAmount,
+            TotalPaidAmount = transfer.TotalPaidAmount,
+            RescheduleCount = transfer.RescheduleCount,
             ToUnitId = transfer.ToUnitId,
             ToUnitCode = transfer.ToUnit?.UnitCode,
             RequestedEffectiveDate = transfer.RequestedEffectiveDate,

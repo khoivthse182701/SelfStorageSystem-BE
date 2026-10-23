@@ -137,7 +137,8 @@ public static class AdminFacilityValidation
     {
         FacilityStatusConstants.Active,
         FacilityStatusConstants.Inactive,
-        FacilityStatusConstants.Maintenance
+        FacilityStatusConstants.Maintenance,
+        FacilityStatusConstants.SuspendedNewBookings
     };
 
     public static bool IsValidStatus(string value) =>

@@ -45,4 +45,25 @@ public static class StaffErrors
 
     public static readonly Error InvalidStatus =
         Error.Validation("Staff.InvalidStatus", "Invalid status specified for this entity.");
+
+    public static readonly Error ShiftAssignmentNotFound =
+        Error.NotFound("Staff.ShiftAssignmentNotFound", "Shift assignment was not found for this employee.");
+
+    public static readonly Error QrCodeInvalid =
+        Error.Validation("Staff.QrCodeInvalid", "Scanned QR code is invalid or unrecognized.");
+
+    public static readonly Error TransferNotReady =
+        Error.Conflict("Staff.TransferNotReady", "Transfer has not been paid or is not ready for this handover action.");
+
+    public static readonly Error TransferNotFound =
+        Error.NotFound("Staff.TransferNotFound", "Unit transfer request was not found.");
+
+    public static readonly Error TicketNotFound =
+        Error.NotFound("Staff.TicketNotFound", "Support or logistics ticket was not found.");
+
+    public static readonly Error AgreementNotFound =
+        Error.NotFound("Staff.AgreementNotFound", "Rental agreement was not found.");
+
+    public static readonly Error RateNotFound =
+        Error.NotFound("Staff.RateNotFound", "No active pricing rate found for this unit type at the facility.");
 }

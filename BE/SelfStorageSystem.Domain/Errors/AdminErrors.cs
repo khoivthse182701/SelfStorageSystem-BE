@@ -67,4 +67,7 @@ public static class AdminErrors
 
     public static readonly Error InvalidTimezone =
         Error.Validation("Admin.InvalidTimezone", "The specified timezone is not a valid time zone identifier.");
+
+    public static readonly Error FacilityHasActiveOperations =
+        Error.Conflict("Admin.FacilityHasActiveOperations", "Cannot deactivate a facility while active rentals, reserved units, or transfers in transit remain. Use suspended_new_bookings instead.");
 }

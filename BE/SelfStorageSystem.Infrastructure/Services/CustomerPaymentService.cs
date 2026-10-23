@@ -775,6 +775,20 @@ public class CustomerPaymentService : ICustomerPaymentService
                     invoice.Status = InvoiceStatusConstants.PartiallyPaid;
                 }
                 invoice.UpdatedAt = now;
+
+                // Transfer invoices are identified by a stable internal marker, so
+                // the same SePay webhook can activate reservations and transfers.
+                if (invoice.Status == InvoiceStatusConstants.Paid &&
+                    !string.IsNullOrWhiteSpace(invoice.BillingPeriod) &&
+                    invoice.BillingPeriod.StartsWith("TRANSFER:", StringComparison.OrdinalIgnoreCase) &&
+                    long.TryParse(invoice.BillingPeriod["TRANSFER:".Length..], out var transferId))
+                {
+                    var transfer = await _dbContext.UnitTransferRequests.FindAsync(new object[] { transferId }, cancellationToken);
+                    if (transfer != null && transfer.Status == TransferRequestStatusConstants.PendingPayment)
+                    {
+                        transfer.Status = TransferRequestStatusConstants.Paid;
+                    }
+                }
             }
 
             // Cancel any older/duplicate pending payments for this invoice

@@ -144,7 +144,7 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Duyệt hoặc từ chối yêu cầu chuyển đổi sang kho mới.
     /// </summary>
-    [HttpPut("transfer-requests/{id:long}/decide")]
+    [NonAction]
     [ProducesResponseType(typeof(ApiResponse<ManagerTransferRequestDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> DecideTransferRequest(
         [FromRoute] long id,
@@ -167,7 +167,7 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Quản lý khung giờ ca trực nhân sự (staff_shifts) - Danh sách.
     /// </summary>
-    [HttpGet("facilities/{facilityId:long}/shifts")]
+    [NonAction]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ManagerStaffShiftDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetShifts(
         [FromRoute] long facilityId,
@@ -185,7 +185,7 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Quản lý khung giờ ca trực nhân sự (staff_shifts) - Tạo mới.
     /// </summary>
-    [HttpPost("facilities/{facilityId:long}/shifts")]
+    [NonAction]
     [ProducesResponseType(typeof(ApiResponse<ManagerStaffShiftDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> CreateShift(
         [FromRoute] long facilityId,
@@ -204,7 +204,7 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Xem lịch làm việc ma trận của nhân viên trong tuần/tháng.
     /// </summary>
-    [HttpGet("facilities/{facilityId:long}/shift-roster")]
+    [NonAction]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ManagerShiftRosterItemDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetShiftRoster(
         [FromRoute] long facilityId,
@@ -225,7 +225,7 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Phân ca trực cụ thể cho nhân sự.
     /// </summary>
-    [HttpPost("facilities/{facilityId:long}/shift-assignments")]
+    [NonAction]
     [ProducesResponseType(typeof(ApiResponse<ManagerShiftAssignmentDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> AssignShift(
         [FromRoute] long facilityId,
@@ -244,7 +244,7 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Hủy phân công ca trực của nhân viên.
     /// </summary>
-    [HttpDelete("facilities/{facilityId:long}/shift-assignments/{shiftId:long}/{employeeId:long}")]
+    [NonAction]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
     public async Task<IActionResult> DeleteShiftAssignment(
         [FromRoute] long facilityId,
@@ -282,7 +282,7 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Manager chủ động giao task/nhiệm vụ cho Staff.
     /// </summary>
-    [HttpPost("facilities/{facilityId:long}/tasks")]
+    [NonAction]
     [ProducesResponseType(typeof(ApiResponse<ManagerStaffTaskDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> CreateStaffTask(
         [FromRoute] long facilityId,

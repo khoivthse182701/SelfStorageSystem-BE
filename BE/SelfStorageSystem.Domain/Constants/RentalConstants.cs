@@ -61,6 +61,10 @@ public static class RenewalStatusConstants
 
 public static class TransferRequestStatusConstants
 {
+    public const string PendingPayment = "pending_payment";
+    public const string Paid = "paid";
+    public const string MovedOutInTransit = "moved_out_in_transit";
+    public const string CancelledOverdueMoveOut = "cancelled_overdue_move_out";
     public const string Pending = "pending";
     public const string Approved = "approved";
     public const string Scheduled = "scheduled";
@@ -183,6 +187,8 @@ public static class RentalDefaults
 
 public static class RentalPolicyConstants
 {
+    public const int MaxTransferTransitDays = 7;
+    public const int MaxTransferReschedules = 2;
     public const int DefaultMaxFailedPinAttempts = 5;
     public const int DefaultPinLockoutDurationMinutes = 15;
     public const int DefaultQrTtlSeconds = 120;

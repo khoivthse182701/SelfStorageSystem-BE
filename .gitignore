@@ -42,5 +42,9 @@ fe/
 .DS_Store
 Thumbs.db
 
+# Runtime uploads
+**/[Ww]wwroot/uploads/*
+!**/[Ww]wwroot/uploads/**/.gitkeep
+
 # Backup bundles
 *.bundle

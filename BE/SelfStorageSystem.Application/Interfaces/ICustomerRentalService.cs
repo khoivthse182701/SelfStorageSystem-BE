@@ -17,4 +17,5 @@ public interface ICustomerRentalService
     Task<AuthorizedMemberDto> AddAuthorizedMemberAsync(long customerId, long agreementId, CreateAuthorizedMemberRequest request, CancellationToken cancellationToken = default);
     Task RevokeAuthorizedMemberAsync(long customerId, long agreementId, long memberId, CancellationToken cancellationToken = default);
     Task<UnitTransferRequestDto> RequestUnitTransferAsync(long customerId, long agreementId, CreateTransferRequest request, CancellationToken cancellationToken = default);
+    Task<UnitTransferRequestDto> RescheduleTransferAsync(long customerId, long transferRequestId, RescheduleTransferRequest request, CancellationToken cancellationToken = default);
 }
