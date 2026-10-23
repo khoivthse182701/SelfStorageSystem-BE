@@ -936,6 +936,29 @@ public class CustomerRentalService : ICustomerRentalService
         targetUnit.PhysicalStatus = StorageUnitStatusConstants.Reserved;
         targetUnit.UpdatedAt = now;
         _dbContext.UnitTransferRequests.Add(transfer);
+
+        // Nếu kho mới rẻ hơn, tặng voucher ưu đãi cho khách hàng theo chính sách
+        if (total <= 0 && targetRate.MonthlyRate < agreement.MonthlyRateSnapshot)
+        {
+            var promoCode = $"DOWNGRADE-{transfer.AgreementId}-{Guid.NewGuid().ToString()[..4].ToUpper()}";
+            var promo = new Promotion
+            {
+                Code = promoCode,
+                Name = $"Ưu đãi chuyển kho tiết kiệm #{agreement.AgreementNo}",
+                Description = "Tặng voucher giảm giá 10% cho khách hàng khi chuyển đổi sang kho tiết kiệm hơn.",
+                DiscountType = PromotionDiscountTypeConstants.Percentage,
+                DiscountValue = 10m,
+                MaxDiscountAmount = 200000m,
+                UsageLimit = 1,
+                PerCustomerLimit = 1,
+                ValidFrom = now,
+                ValidTo = now.AddDays(90),
+                IsActive = true,
+                CreatedAt = now
+            };
+            _dbContext.Promotions.Add(promo);
+        }
+
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         long? invoiceId = null;

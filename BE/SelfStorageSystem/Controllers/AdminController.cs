@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Contracts.Admin;
+using SelfStorageSystem.Contracts.Operations;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Domain.Constants;
 
@@ -14,10 +15,14 @@ namespace SelfStorageSystem.Controllers;
 public class AdminController : ControllerBase
 {
     private readonly IAdminManagementService _adminService;
+    private readonly IBusinessOperationsService _operationsService;
 
-    public AdminController(IAdminManagementService adminService)
+    public AdminController(
+        IAdminManagementService adminService,
+        IBusinessOperationsService operationsService)
     {
         _adminService = adminService;
+        _operationsService = operationsService;
     }
 
     // ==========================================
@@ -275,6 +280,42 @@ public class AdminController : ControllerBase
 
         var result = await _adminService.UpdateFacilityStatusAsync(id, request, adminUserId, cancellationToken);
         return Ok(ApiResponse<AdminFacilityDetailDto>.Ok(result, "Facility status updated successfully."));
+    }
+
+    // ==========================================
+    // 5. Quản Lý Quy Tắc Phí & Biểu Phí Hệ Thống
+    // ==========================================
+
+    /// <summary>
+    /// Tra cứu danh mục quy tắc phí hệ thống (phí vệ sinh, phạt quá hạn, phí hư hỏng).
+    /// </summary>
+    [HttpGet("pricing/fees")]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<OperationsFeeDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetFees(
+        [FromQuery] OperationsFeeQueryParameters query,
+        CancellationToken cancellationToken)
+    {
+        var result = await _operationsService.GetFeesAsync(query, cancellationToken);
+        return Ok(ApiResponse<PagedResult<OperationsFeeDto>>.Ok(result, "Retrieved fee rules successfully."));
+    }
+
+    /// <summary>
+    /// Thiết lập / cập nhật quy tắc tính phí toàn hệ thống hoặc theo cơ sở.
+    /// </summary>
+    [HttpPut("pricing/fees")]
+    [ProducesResponseType(typeof(ApiResponse<OperationsFeeDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpsertFee(
+        [FromBody] OperationsUpsertFeeRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var adminUserId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify administrator identity from token."));
+
+        var result = await _operationsService.UpsertFeeAsync(request, adminUserId, cancellationToken);
+        return Ok(ApiResponse<OperationsFeeDto>.Ok(result, "Fee rule saved successfully."));
     }
 
     // ==========================================

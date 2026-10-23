@@ -869,7 +869,7 @@ public class FacilityStaffService : IFacilityStaffService
         // ----------------------------------------------------
         // ACTION 2: DỌN KHO CHUYỂN CƠ SỞ (transfer_move_out)
         // ----------------------------------------------------
-        if (action == "transfer_move_out" || action == "confirm_transfer_moveout")
+        if (action == "transfer_move_out" || action == "confirm_transfer_moveout" || action == "transfer_out")
         {
             var transfer = await _dbContext.UnitTransferRequests
                 .Include(t => t.FromUnit)
@@ -886,7 +886,7 @@ public class FacilityStaffService : IFacilityStaffService
             var fromUnit = await _dbContext.StorageUnits.FindAsync(transfer.FromUnitId);
             if (fromUnit != null)
             {
-                fromUnit.PhysicalStatus = StorageUnitStatusConstants.Available;
+                fromUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
                 fromUnit.UpdatedAt = now;
 
                 var cleaningTicket = new SupportTicket
@@ -932,7 +932,7 @@ public class FacilityStaffService : IFacilityStaffService
         // ----------------------------------------------------
         // ACTION 3: NHẬN KHO KHI CHUYỂN CƠ SỞ (transfer_move_in)
         // ----------------------------------------------------
-        if (action == "transfer_move_in" || action == "confirm_transfer_movein")
+        if (action == "transfer_move_in" || action == "confirm_transfer_movein" || action == "transfer_in" || action == "transfer_check_in")
         {
             var transfer = await _dbContext.UnitTransferRequests
                 .Include(t => t.ToUnit)
@@ -971,7 +971,20 @@ public class FacilityStaffService : IFacilityStaffService
             }
 
             transfer.Agreement.FacilityId = transfer.RequestedFacilityId;
-            transfer.Agreement.DepositBalance += transfer.DiffDepositAmount;
+            if (transfer.DiffDepositAmount > 0)
+            {
+                transfer.Agreement.DepositSnapshot += transfer.DiffDepositAmount;
+                transfer.Agreement.DepositBalance += transfer.DiffDepositAmount;
+            }
+            var targetRate = await _dbContext.FacilityRates
+                .AsNoTracking()
+                .Where(r => r.FacilityId == transfer.RequestedFacilityId && r.UnitTypeId == transfer.RequestedUnitTypeId && r.ValidFrom <= DateOnly.FromDateTime(DateTime.UtcNow) && (r.ValidTo == null || r.ValidTo >= DateOnly.FromDateTime(DateTime.UtcNow)))
+                .OrderByDescending(r => r.ValidFrom)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (targetRate != null)
+            {
+                transfer.Agreement.MonthlyRateSnapshot = targetRate.MonthlyRate;
+            }
             transfer.Agreement.UpdatedAt = now;
 
             await _dbContext.SaveChangesAsync(cancellationToken);
@@ -999,7 +1012,7 @@ public class FacilityStaffService : IFacilityStaffService
             if (moveOut != null)
             {
                 moveOut.Status = MoveOutStatusConstants.Completed;
-                moveOut.Agreement.Status = RentalAgreementStatusConstants.Completed;
+                moveOut.Agreement.Status = RentalAgreementStatusConstants.Terminated;
                 moveOut.Agreement.CheckedOutAt = now;
                 moveOut.Agreement.ActualEndDate = DateOnly.FromDateTime(DateTime.UtcNow);
 
@@ -1011,8 +1024,61 @@ public class FacilityStaffService : IFacilityStaffService
                 foreach (var a in allocations)
                 {
                     a.Status = AllocationStatusConstants.Released;
-                    a.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Available;
+                    a.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
                     a.StorageUnit.UpdatedAt = now;
+
+                    var cleaningTicket = new SupportTicket
+                    {
+                        TicketNo = TicketConstants.GenerateTicketNo(),
+                        CustomerId = moveOut.Agreement.CustomerId,
+                        FacilityId = moveOut.Agreement.FacilityId,
+                        AgreementId = moveOut.AgreementId,
+                        StorageUnitId = a.StorageUnitId,
+                        Category = "cleaning",
+                        Priority = TicketPriorityConstants.Normal,
+                        Subject = $"Dọn vệ sinh ô kho {a.StorageUnit.UnitCode} sau khi khách trả kho",
+                        Description = $"Khách hàng đã hoàn tất trả kho hợp đồng {moveOut.Agreement.AgreementNo}. Nhân viên cần kiểm tra hiện trạng và dọn dẹp sạch sẽ ô kho {a.StorageUnit.UnitCode}.",
+                        Status = TicketStatusConstants.Open,
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    _dbContext.SupportTickets.Add(cleaningTicket);
+                }
+
+                // Tự động tạo bản ghi Refund trong [operations].[refunds] để Manager duyệt hoàn cọc
+                var depositAmount = moveOut.Agreement.DepositSnapshot > 0 
+                    ? moveOut.Agreement.DepositSnapshot 
+                    : moveOut.Agreement.DepositBalance;
+
+                if (depositAmount > 0)
+                {
+                    var existingRefund = await _dbContext.Refunds
+                        .FirstOrDefaultAsync(r => r.AgreementId == moveOut.AgreementId, cancellationToken);
+
+                    if (existingRefund == null)
+                    {
+                        var lastPayment = await _dbContext.Payments
+                            .Where(p => p.CustomerId == moveOut.Agreement.CustomerId && p.Status == PaymentConstants.StatusSucceeded)
+                            .OrderByDescending(p => p.CreatedAt)
+                            .FirstOrDefaultAsync(cancellationToken);
+
+                        var paymentId = lastPayment?.Id ?? 1L;
+                        var refund = new Refund
+                        {
+                            PaymentId = paymentId,
+                            AgreementId = moveOut.AgreementId,
+                            Amount = depositAmount,
+                            Currency = "VND",
+                            Reason = $"Tự động tạo yêu cầu hoàn cọc sau khi trả kho hợp đồng {moveOut.Agreement.AgreementNo}",
+                            Provider = lastPayment?.Provider ?? "manual",
+                            IdempotencyKey = $"REF-MOVEOUT-{moveOut.AgreementId}-{now.ToUnixTimeSeconds()}",
+                            Status = RefundStatusConstants.Pending,
+                            RequestedBy = moveOut.Agreement.CustomerId,
+                            CreatedAt = now,
+                            UpdatedAt = now
+                        };
+                        _dbContext.Refunds.Add(refund);
+                    }
                 }
 
                 await _dbContext.SaveChangesAsync(cancellationToken);
@@ -1020,11 +1086,11 @@ public class FacilityStaffService : IFacilityStaffService
                 return new StaffConfirmQrActionResultDto(
                     Success: true,
                     ActionType: "move_out",
-                    Message: "Đã xác nhận trả kho thành công. Hợp đồng đã hoàn tất và ô kho được đưa về Available.",
+                    Message: "Đã xác nhận trả kho thành công. Hợp đồng đã hoàn tất, ô kho chuyển sang Cleaning và đã tạo yêu cầu hoàn cọc chờ duyệt.",
                     AgreementId: moveOut.AgreementId,
                     AgreementStatus: moveOut.Agreement.Status,
                     UnitId: allocations.FirstOrDefault()?.StorageUnitId,
-                    UnitStatus: StorageUnitStatusConstants.Available
+                    UnitStatus: StorageUnitStatusConstants.Maintenance
                 );
             }
         }

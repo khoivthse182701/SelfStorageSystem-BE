@@ -5,6 +5,7 @@ using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Customer.Rentals;
 using SelfStorageSystem.Contracts.Manager;
+using SelfStorageSystem.Contracts.Operations;
 using SelfStorageSystem.Domain.Constants;
 
 namespace SelfStorageSystem.Controllers;
@@ -15,10 +16,14 @@ namespace SelfStorageSystem.Controllers;
 public class ManagerController : ControllerBase
 {
     private readonly IFacilityManagerService _managerService;
+    private readonly IBusinessOperationsService _operationsService;
 
-    public ManagerController(IFacilityManagerService managerService)
+    public ManagerController(
+        IFacilityManagerService managerService,
+        IBusinessOperationsService operationsService)
     {
         _managerService = managerService;
+        _operationsService = operationsService;
     }
 
     // ==========================================
@@ -141,125 +146,9 @@ public class ManagerController : ControllerBase
         return Ok(ApiResponse<IReadOnlyList<ManagerTransferRequestDto>>.Ok(result, "Retrieved transfer requests successfully."));
     }
 
-    /// <summary>
-    /// Duyệt hoặc từ chối yêu cầu chuyển đổi sang kho mới.
-    /// </summary>
-    [NonAction]
-    [ProducesResponseType(typeof(ApiResponse<ManagerTransferRequestDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> DecideTransferRequest(
-        [FromRoute] long id,
-        [FromBody] ManagerDecideTransferRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        var result = await _managerService.DecideTransferRequestAsync(
-            id, request, userId, isSystemAdmin, cancellationToken);
-
-        return Ok(ApiResponse<ManagerTransferRequestDto>.Ok(result, "Transfer request processed successfully."));
-    }
-
     // ==========================================
     // 2. Phân Ca Trực & Giao Việc Nhân Viên
     // ==========================================
-
-    /// <summary>
-    /// Quản lý khung giờ ca trực nhân sự (staff_shifts) - Danh sách.
-    /// </summary>
-    [NonAction]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ManagerStaffShiftDto>>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetShifts(
-        [FromRoute] long facilityId,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        var result = await _managerService.GetShiftsAsync(
-            facilityId, userId, isSystemAdmin, cancellationToken);
-
-        return Ok(ApiResponse<IReadOnlyList<ManagerStaffShiftDto>>.Ok(result, "Retrieved shifts successfully."));
-    }
-
-    /// <summary>
-    /// Quản lý khung giờ ca trực nhân sự (staff_shifts) - Tạo mới.
-    /// </summary>
-    [NonAction]
-    [ProducesResponseType(typeof(ApiResponse<ManagerStaffShiftDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> CreateShift(
-        [FromRoute] long facilityId,
-        [FromBody] ManagerCreateShiftRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        var result = await _managerService.CreateShiftAsync(
-            facilityId, request, userId, isSystemAdmin, cancellationToken);
-
-        return Ok(ApiResponse<ManagerStaffShiftDto>.Ok(result, "Staff shift created successfully."));
-    }
-
-    /// <summary>
-    /// Xem lịch làm việc ma trận của nhân viên trong tuần/tháng.
-    /// </summary>
-    [NonAction]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ManagerShiftRosterItemDto>>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetShiftRoster(
-        [FromRoute] long facilityId,
-        [FromQuery] DateTimeOffset? fromDate,
-        [FromQuery] DateTimeOffset? toDate,
-        [FromQuery] long? employeeId,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        var result = await _managerService.GetShiftRosterAsync(
-            facilityId, fromDate, toDate, employeeId, userId, isSystemAdmin, cancellationToken);
-
-        return Ok(ApiResponse<IReadOnlyList<ManagerShiftRosterItemDto>>.Ok(result, "Retrieved shift roster successfully."));
-    }
-
-    /// <summary>
-    /// Phân ca trực cụ thể cho nhân sự.
-    /// </summary>
-    [NonAction]
-    [ProducesResponseType(typeof(ApiResponse<ManagerShiftAssignmentDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> AssignShift(
-        [FromRoute] long facilityId,
-        [FromBody] ManagerCreateShiftAssignmentRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        var result = await _managerService.AssignShiftAsync(
-            facilityId, request, userId, isSystemAdmin, cancellationToken);
-
-        return Ok(ApiResponse<ManagerShiftAssignmentDto>.Ok(result, "Shift assignment completed successfully."));
-    }
-
-    /// <summary>
-    /// Hủy phân công ca trực của nhân viên.
-    /// </summary>
-    [NonAction]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
-    public async Task<IActionResult> DeleteShiftAssignment(
-        [FromRoute] long facilityId,
-        [FromRoute] long shiftId,
-        [FromRoute] long employeeId,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        await _managerService.DeleteShiftAssignmentAsync(
-            facilityId, shiftId, employeeId, userId, isSystemAdmin, cancellationToken);
-
-        return Ok(ApiResponse.Ok("Shift assignment removed successfully."));
-    }
 
     /// <summary>
     /// Danh sách nhân sự phụ trách thuộc điểm kho (Facility Staff).
@@ -282,7 +171,8 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Manager chủ động giao task/nhiệm vụ cho Staff.
     /// </summary>
-    [NonAction]
+    [HttpPost("facilities/{facilityId:long}/staff-tasks")]
+    [HttpPost("facilities/{facilityId:long}/tickets")]
     [ProducesResponseType(typeof(ApiResponse<ManagerStaffTaskDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> CreateStaffTask(
         [FromRoute] long facilityId,
@@ -491,6 +381,135 @@ public class ManagerController : ControllerBase
 
         var result = await _managerService.GetMyFacilitiesAsync(userId, isSystemAdmin, cancellationToken);
         return Ok(ApiResponse<List<ManagerFacilityScopeDto>>.Ok(result, "Retrieved manager facilities successfully."));
+    }
+
+    // ==========================================
+    // 6. Quản Lý Giá Thuê, Phí & Khuyến Mãi (Sáp nhập từ Operations)
+    // ==========================================
+
+    /// <summary>
+    /// Biểu giá thuê ô kho tại cơ sở (áp dụng theo loại kho và thời điểm hiệu lực).
+    /// </summary>
+    [HttpGet("facilities/{facilityId:long}/pricing/rates")]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<OperationsRateDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> GetFacilityRates(
+        [FromRoute] long facilityId,
+        [FromQuery] OperationsRateQueryParameters query,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        await _managerService.ValidateFacilityAccessAsync(facilityId, userId, isSystemAdmin, cancellationToken);
+        query.FacilityId = facilityId;
+
+        var result = await _operationsService.GetRatesAsync(query, cancellationToken);
+        return Ok(ApiResponse<PagedResult<OperationsRateDto>>.Ok(result, "Retrieved facility rates successfully."));
+    }
+
+    /// <summary>
+    /// Cập nhật / thiết lập biểu giá thuê mới cho loại kho tại cơ sở.
+    /// Giá mới có hiệu lực từ ValidFrom, không sửa đổi hồi tố hợp đồng đang active.
+    /// </summary>
+    [HttpPut("facilities/{facilityId:long}/pricing/rates")]
+    [ProducesResponseType(typeof(ApiResponse<OperationsRateDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpsertFacilityRate(
+        [FromRoute] long facilityId,
+        [FromBody] OperationsUpsertRateRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        await _managerService.ValidateFacilityAccessAsync(facilityId, userId, isSystemAdmin, cancellationToken);
+        request.FacilityId = facilityId;
+
+        var result = await _operationsService.UpsertRateAsync(request, userId, cancellationToken);
+        return Ok(ApiResponse<OperationsRateDto>.Ok(result, "Facility rate saved successfully."));
+    }
+
+    /// <summary>
+    /// Tra cứu danh mục quy tắc phí chuẩn hệ thống (phí vệ sinh, quá hạn, hư hỏng).
+    /// </summary>
+    [HttpGet("pricing/fees")]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<OperationsFeeDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetFees(
+        [FromQuery] OperationsFeeQueryParameters query,
+        CancellationToken cancellationToken)
+    {
+        var result = await _operationsService.GetFeesAsync(query, cancellationToken);
+        return Ok(ApiResponse<PagedResult<OperationsFeeDto>>.Ok(result, "Retrieved fee rules successfully."));
+    }
+
+    /// <summary>
+    /// Danh sách chương trình khuyến mãi / voucher.
+    /// </summary>
+    [HttpGet("promotions")]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<OperationsPromotionDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetPromotions(
+        [FromQuery] OperationsPromotionQueryParameters query,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _operationsService.GetPromotionsAsync(query, cancellationToken);
+        return Ok(ApiResponse<PagedResult<OperationsPromotionDto>>.Ok(result, "Retrieved promotions successfully."));
+    }
+
+    /// <summary>
+    /// Tạo mới chiến dịch khuyến mãi / voucher cho cơ sở.
+    /// </summary>
+    [HttpPost("promotions")]
+    [ProducesResponseType(typeof(ApiResponse<OperationsPromotionDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> CreatePromotion(
+        [FromBody] OperationsCreatePromotionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        if (!isSystemAdmin)
+        {
+            var facilityRules = request.Rules.Where(r => r.RuleType.Equals(PromotionRuleTypeConstants.Facility, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var rule in facilityRules)
+            {
+                if (long.TryParse(rule.RuleValue, out var targetFacilityId))
+                {
+                    await _managerService.ValidateFacilityAccessAsync(targetFacilityId, userId, isSystemAdmin, cancellationToken);
+                }
+            }
+        }
+
+        var result = await _operationsService.CreatePromotionAsync(request, userId, cancellationToken);
+        return Ok(ApiResponse<OperationsPromotionDto>.Ok(result, "Promotion created successfully."));
+    }
+
+    /// <summary>
+    /// Kích hoạt hoặc tạm ngưng chương trình khuyến mãi.
+    /// </summary>
+    [HttpPut("promotions/{id:long}/status")]
+    [ProducesResponseType(typeof(ApiResponse<OperationsPromotionDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdatePromotionStatus(
+        [FromRoute] long id,
+        [FromBody] OperationsUpdatePromotionStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _operationsService.UpdatePromotionStatusAsync(id, request, userId, cancellationToken);
+        return Ok(ApiResponse<OperationsPromotionDto>.Ok(result, "Promotion status updated successfully."));
     }
 
     // ==========================================

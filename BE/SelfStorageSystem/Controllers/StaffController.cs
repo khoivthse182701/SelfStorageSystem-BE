@@ -206,28 +206,6 @@ public class StaffController : ControllerBase
     }
 
     // ==========================================
-    // 🗓️ NHÓM 5: CA TRỰC & LỊCH LÀM VIỆC (Staff Shifts Schedule)
-    // ==========================================
-
-    /// <summary>
-    /// Lấy danh sách ca trực / lịch làm việc của nhân viên đang đăng nhập.
-    /// </summary>
-    [HttpGet("shifts")]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffShiftScheduleDto>>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetShifts(
-        [FromQuery] long? facilityId,
-        [FromQuery] DateTimeOffset? fromDate,
-        [FromQuery] DateTimeOffset? toDate,
-        CancellationToken cancellationToken)
-    {
-        if (!TryGetUserId(out var userId))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        var result = await _staffService.GetStaffShiftsAsync(userId, facilityId, fromDate, toDate, cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<StaffShiftScheduleDto>>.Ok(result, "Staff shifts retrieved successfully."));
-    }
-
-    // ==========================================
     // HELPER
     // ==========================================
 

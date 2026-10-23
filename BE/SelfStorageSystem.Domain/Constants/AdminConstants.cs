@@ -33,7 +33,6 @@ public static class AdminConstants
     { 
         RoleConstants.FacilityStaff, 
         RoleConstants.FacilityManager, 
-        RoleConstants.BusinessOperationsManager, 
         RoleConstants.SystemAdministrator 
     };
 

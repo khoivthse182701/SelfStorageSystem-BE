@@ -329,7 +329,7 @@ public class FacilityManagerServiceTests
     }
 
     [Fact]
-    public async Task DecideTransferRequest_Approved_UpdatesTransferStatus()
+    public async Task GetTransferRequests_SourceOrDestination_ReturnsTransferRequests()
     {
         // Arrange
         await using var db = CreateInMemoryDbContext();
@@ -409,28 +409,23 @@ public class FacilityManagerServiceTests
             RequestedFacilityId = 1,
             RequestedEffectiveDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)),
             Reason = "Want cleaner corner",
-            Status = TransferRequestStatusConstants.Pending,
+            Status = TransferRequestStatusConstants.Paid,
             RequestedBy = 20,
             CreatedAt = DateTimeOffset.UtcNow
         };
         db.UnitTransferRequests.Add(transferRequest);
         await db.SaveChangesAsync();
 
-        // Act - Approve transfer
-        var result = await service.DecideTransferRequestAsync(1, new ManagerDecideTransferRequest
-        {
-            Decision = ApprovalDecisionConstants.Approved,
-            TargetUnitId = 101,
-            ReviewNotes = "Approved by manager"
-        }, 10, false);
+        // Act
+        var result = await service.GetTransferRequestsAsync(1, 10, false);
 
         // Assert
-        Assert.Equal(TransferRequestStatusConstants.Approved, result.Status);
-        Assert.Equal(101, result.ToUnitId);
+        Assert.NotEmpty(result);
+        Assert.Equal(1, result[0].Id);
     }
 
     [Fact]
-    public async Task ShiftsAndAssignments_FullLifecycle_WorksSuccessfully()
+    public async Task CreateStaffTask_SyncsSupportTicketAndAssignsStaff()
     {
         // Arrange
         await using var db = CreateInMemoryDbContext();
@@ -466,46 +461,25 @@ public class FacilityManagerServiceTests
         db.StaffFacilityAssignments.Add(staffAssignment);
         await db.SaveChangesAsync();
 
-        // Act 1: Create shift
-        var shift = await service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+        // Act: Create staff task
+        var task = await service.CreateStaffTaskAsync(1, new ManagerCreateStaffTaskRequest
         {
-            ShiftName = "Morning Shift",
-            StartsAt = DateTimeOffset.UtcNow.AddDays(1),
-            EndsAt = DateTimeOffset.UtcNow.AddDays(1).AddHours(8)
+            TaskType = "inspection",
+            Title = "Kiểm tra ô kho dãy A",
+            AssignedEmployeeId = 30
         }, 10, false);
 
-        Assert.NotNull(shift);
-        Assert.Equal("Morning Shift", shift.ShiftName);
+        // Assert
+        Assert.NotNull(task);
+        Assert.Equal("Kiểm tra ô kho dãy A", task.Title);
+        Assert.NotNull(task.TicketId);
 
-        // Act 2: Assign staff to shift
-        var assignment = await service.AssignShiftAsync(1, new ManagerCreateShiftAssignmentRequest
-        {
-            ShiftId = shift.Id,
-            EmployeeId = 30,
-            DutyRole = DutyRoleConstants.ShiftLead
-        }, 10, false);
-
-        Assert.NotNull(assignment);
-        Assert.Equal("EMP-030", assignment.EmployeeCode);
-        Assert.Equal(DutyRoleConstants.ShiftLead, assignment.DutyRole);
-
-        // Act 3: Duplicate assignment should throw Conflict
-        var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
-            service.AssignShiftAsync(1, new ManagerCreateShiftAssignmentRequest
-            {
-                ShiftId = shift.Id,
-                EmployeeId = 30,
-                DutyRole = DutyRoleConstants.Staff
-            }, 10, false));
-
-        var hasError = Assert.IsAssignableFrom<IHasAppError>(ex);
-        Assert.Equal(ManagerErrors.ShiftAssignmentAlreadyExists.Code, hasError.Error.Code);
-
-        // Act 4: Roster retrieval
-        var roster = await service.GetShiftRosterAsync(1, null, null, null, 10, false);
-        Assert.Single(roster);
-        Assert.Equal("Morning Shift", roster[0].ShiftName);
-        Assert.Equal(30, roster[0].EmployeeId);
+        // SupportTicket synced
+        var ticket = await db.SupportTickets.Include(t => t.TicketAssignment).FirstOrDefaultAsync(t => t.Id == task.TicketId);
+        Assert.NotNull(ticket);
+        Assert.Equal("inspection", ticket.Category);
+        Assert.NotNull(ticket.TicketAssignment);
+        Assert.Equal(30, ticket.TicketAssignment.EmployeeId);
     }
 
     [Fact]

@@ -453,320 +453,18 @@ public class FacilityManagerService : IFacilityManagerService
         return requests;
     }
 
-    public async Task<ManagerTransferRequestDto> DecideTransferRequestAsync(
-        long id,
-        ManagerDecideTransferRequest request,
+    public async Task ValidateFacilityAccessAsync(
+        long facilityId,
         long currentUserId,
         bool isSystemAdmin,
         CancellationToken cancellationToken = default)
     {
-        var transfer = await _dbContext.UnitTransferRequests
-            .Include(r => r.Agreement)
-                .ThenInclude(a => a.Customer)
-                    .ThenInclude(c => c.User)
-            .Include(r => r.FromUnit)
-            .Include(r => r.ToUnit)
-            .Include(r => r.RequestedUnitType)
-            .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
-
-        if (transfer == null)
-        {
-            throw AppException.FromError(ManagerErrors.TransferRequestNotFound);
-        }
-
-        var accessNow = DateTimeOffset.UtcNow;
-        var canAccessSource = isSystemAdmin || await _dbContext.StaffFacilityAssignments.AnyAsync(a => a.EmployeeId == currentUserId && a.FacilityId == transfer.FromUnit.FacilityId && a.AssignmentRole == StaffAssignmentRoles.FacilityManager && (a.EndsAt == null || a.EndsAt > accessNow), cancellationToken);
-        var canAccessDestination = isSystemAdmin || await _dbContext.StaffFacilityAssignments.AnyAsync(a => a.EmployeeId == currentUserId && a.FacilityId == transfer.RequestedFacilityId && a.AssignmentRole == StaffAssignmentRoles.FacilityManager && (a.EndsAt == null || a.EndsAt > accessNow), cancellationToken);
-        if (!canAccessSource && !canAccessDestination)
-            throw AppException.FromError(ManagerErrors.NotAssignedToFacility);
-
-        if (transfer.Status != TransferRequestStatusConstants.Pending)
-        {
-            throw AppException.FromError(ManagerErrors.TransferRequestNotPending);
-        }
-
-        var decision = request.Decision.Trim().ToLowerInvariant();
-        if (!ApprovalDecisionConstants.All.Contains(decision))
-        {
-            throw AppException.FromError(ManagerErrors.InvalidDecision);
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        transfer.ReviewedBy = currentUserId;
-        transfer.ReviewedAt = now;
-
-        if (decision == ApprovalDecisionConstants.Approved)
-        {
-            transfer.Status = TransferRequestStatusConstants.Approved;
-            if (request.TargetUnitId.HasValue)
-            {
-                var targetUnit = await _dbContext.StorageUnits
-                    .FirstOrDefaultAsync(u => u.Id == request.TargetUnitId.Value && u.FacilityId == transfer.RequestedFacilityId, cancellationToken);
-                if (targetUnit != null)
-                {
-                    transfer.ToUnitId = targetUnit.Id;
-                }
-            }
-        }
-        else
-        {
-            transfer.Status = TransferRequestStatusConstants.Rejected;
-        }
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        return new ManagerTransferRequestDto
-        {
-            Id = transfer.Id,
-            AgreementId = transfer.AgreementId,
-            AgreementNo = transfer.Agreement.AgreementNo,
-            CustomerId = transfer.Agreement.CustomerId,
-            CustomerName = transfer.Agreement.Customer.FullName,
-            CustomerPhone = transfer.Agreement.Customer.User.PhoneNumber ?? string.Empty,
-            FromUnitId = transfer.FromUnitId,
-            FromUnitCode = transfer.FromUnit.UnitCode,
-            RequestedUnitTypeId = transfer.RequestedUnitTypeId,
-            RequestedUnitTypeName = transfer.RequestedUnitType.Name,
-            RequestedFacilityId = transfer.RequestedFacilityId,
-            MoveOutDate = transfer.MoveOutDate,
-            MoveInDate = transfer.MoveInDate,
-            DiffRentAmount = transfer.DiffRentAmount,
-            DiffDepositAmount = transfer.DiffDepositAmount,
-            TotalPaidAmount = transfer.TotalPaidAmount,
-            RescheduleCount = transfer.RescheduleCount,
-            ToUnitId = transfer.ToUnitId,
-            ToUnitCode = transfer.ToUnit?.UnitCode,
-            RequestedEffectiveDate = transfer.RequestedEffectiveDate,
-            Reason = transfer.Reason,
-            Status = transfer.Status,
-            RequestedBy = transfer.RequestedBy,
-            ReviewedBy = transfer.ReviewedBy,
-            ReviewedAt = transfer.ReviewedAt,
-            CreatedAt = transfer.CreatedAt
-        };
+        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
     }
 
     // ==========================================
-    // 2. Phân Ca Trực & Giao Việc Nhân Viên
+    // 2. Phân Bổ Nhân Sự & Giao Việc Nhân Viên
     // ==========================================
-
-    public async Task<IReadOnlyList<ManagerStaffShiftDto>> GetShiftsAsync(
-        long facilityId,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default)
-    {
-        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
-
-        var shifts = await _dbContext.StaffShifts
-            .AsNoTracking()
-            .Include(s => s.ShiftAssignments)
-            .Where(s => s.FacilityId == facilityId)
-            .OrderByDescending(s => s.StartsAt)
-            .Select(s => new ManagerStaffShiftDto
-            {
-                Id = s.Id,
-                FacilityId = s.FacilityId,
-                ShiftName = s.ShiftName,
-                StartsAt = s.StartsAt,
-                EndsAt = s.EndsAt,
-                Status = s.Status,
-                CreatedBy = s.CreatedBy,
-                CreatedAt = s.CreatedAt,
-                AssignmentCount = s.ShiftAssignments.Count
-            })
-            .ToListAsync(cancellationToken);
-
-        return shifts;
-    }
-
-    public async Task<ManagerStaffShiftDto> CreateShiftAsync(
-        long facilityId,
-        ManagerCreateShiftRequest request,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default)
-    {
-        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
-
-        if (request.EndsAt <= request.StartsAt)
-        {
-            throw AppException.FromError(ManagerErrors.InvalidShiftTimes);
-        }
-
-        var status = !string.IsNullOrWhiteSpace(request.Status) 
-            ? request.Status.Trim().ToLowerInvariant() 
-            : StaffShiftStatusConstants.Planned;
-
-        var shift = new StaffShift
-        {
-            FacilityId = facilityId,
-            ShiftName = request.ShiftName.Trim(),
-            StartsAt = request.StartsAt,
-            EndsAt = request.EndsAt,
-            Status = status,
-            CreatedBy = currentUserId,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-
-        _dbContext.StaffShifts.Add(shift);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        return new ManagerStaffShiftDto
-        {
-            Id = shift.Id,
-            FacilityId = shift.FacilityId,
-            ShiftName = shift.ShiftName,
-            StartsAt = shift.StartsAt,
-            EndsAt = shift.EndsAt,
-            Status = shift.Status,
-            CreatedBy = shift.CreatedBy,
-            CreatedAt = shift.CreatedAt,
-            AssignmentCount = 0
-        };
-    }
-
-    public async Task<IReadOnlyList<ManagerShiftRosterItemDto>> GetShiftRosterAsync(
-        long facilityId,
-        DateTimeOffset? fromDate,
-        DateTimeOffset? toDate,
-        long? employeeId,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default)
-    {
-        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
-
-        var query = _dbContext.ShiftAssignments
-            .AsNoTracking()
-            .Include(sa => sa.Shift)
-            .Include(sa => sa.Employee)
-            .Where(sa => sa.Shift.FacilityId == facilityId)
-            .AsQueryable();
-
-        if (fromDate.HasValue)
-        {
-            query = query.Where(sa => sa.Shift.StartsAt >= fromDate.Value);
-        }
-
-        if (toDate.HasValue)
-        {
-            query = query.Where(sa => sa.Shift.EndsAt <= toDate.Value);
-        }
-
-        if (employeeId.HasValue)
-        {
-            query = query.Where(sa => sa.EmployeeId == employeeId.Value);
-        }
-
-        var items = await query
-            .OrderBy(sa => sa.Shift.StartsAt)
-            .Select(sa => new ManagerShiftRosterItemDto
-            {
-                ShiftId = sa.ShiftId,
-                ShiftName = sa.Shift.ShiftName,
-                StartsAt = sa.Shift.StartsAt,
-                EndsAt = sa.Shift.EndsAt,
-                EmployeeId = sa.EmployeeId,
-                EmployeeCode = sa.Employee.EmployeeCode,
-                EmployeeName = sa.Employee.FullName,
-                DutyRole = sa.DutyRole,
-                Status = sa.Status,
-                CheckInAt = sa.CheckInAt,
-                CheckOutAt = sa.CheckOutAt
-            })
-            .ToListAsync(cancellationToken);
-
-        return items;
-    }
-
-    public async Task<ManagerShiftAssignmentDto> AssignShiftAsync(
-        long facilityId,
-        ManagerCreateShiftAssignmentRequest request,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default)
-    {
-        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
-
-        var shift = await _dbContext.StaffShifts
-            .FirstOrDefaultAsync(s => s.Id == request.ShiftId && s.FacilityId == facilityId, cancellationToken);
-        if (shift == null)
-        {
-            throw AppException.FromError(ManagerErrors.ShiftNotFound);
-        }
-
-        var employee = await _dbContext.EmployeeProfiles
-            .Include(ep => ep.StaffFacilityAssignments)
-            .FirstOrDefaultAsync(ep => ep.UserId == request.EmployeeId, cancellationToken);
-        if (employee == null)
-        {
-            throw AppException.FromError(AdminErrors.EmployeeProfileNotFound);
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        var isAssignedToFacility = employee.StaffFacilityAssignments
-            .Any(sfa => sfa.FacilityId == facilityId && (sfa.EndsAt == null || sfa.EndsAt > now));
-        if (!isAssignedToFacility)
-        {
-            throw AppException.FromError(ManagerErrors.EmployeeNotAssignedToFacility);
-        }
-
-        var exists = await _dbContext.ShiftAssignments
-            .AnyAsync(sa => sa.ShiftId == request.ShiftId && sa.EmployeeId == request.EmployeeId, cancellationToken);
-        if (exists)
-        {
-            throw AppException.FromError(ManagerErrors.ShiftAssignmentAlreadyExists);
-        }
-
-        var status = !string.IsNullOrWhiteSpace(request.Status) 
-            ? request.Status.Trim().ToLowerInvariant() 
-            : ShiftAssignmentStatusConstants.Scheduled;
-
-        var assignment = new ShiftAssignment
-        {
-            ShiftId = request.ShiftId,
-            EmployeeId = request.EmployeeId,
-            DutyRole = request.DutyRole.Trim().ToLowerInvariant(),
-            Status = status
-        };
-
-        _dbContext.ShiftAssignments.Add(assignment);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        return new ManagerShiftAssignmentDto
-        {
-            ShiftId = assignment.ShiftId,
-            EmployeeId = assignment.EmployeeId,
-            EmployeeCode = employee.EmployeeCode,
-            EmployeeName = employee.FullName,
-            DutyRole = assignment.DutyRole,
-            Status = assignment.Status,
-            CheckInAt = assignment.CheckInAt,
-            CheckOutAt = assignment.CheckOutAt
-        };
-    }
-
-    public async Task DeleteShiftAssignmentAsync(
-        long facilityId,
-        long shiftId,
-        long employeeId,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default)
-    {
-        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
-
-        var assignment = await _dbContext.ShiftAssignments
-            .Include(sa => sa.Shift)
-            .FirstOrDefaultAsync(sa => sa.ShiftId == shiftId && sa.EmployeeId == employeeId && sa.Shift.FacilityId == facilityId, cancellationToken);
-
-        if (assignment != null)
-        {
-            _dbContext.ShiftAssignments.Remove(assignment);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-        }
-    }
 
     public async Task<IReadOnlyList<ManagerFacilityStaffDto>> GetFacilityStaffAsync(
         long facilityId,
@@ -851,6 +549,38 @@ public class FacilityManagerService : IFacilityManagerService
             CreatedAt = now,
             UpdatedAt = now
         };
+
+        // Đồng bộ tạo SupportTicket để hiển thị trên API GET /api/staff/tickets của Staff
+        if (!request.TicketId.HasValue)
+        {
+            var syncTicket = new SupportTicket
+            {
+                TicketNo = TicketConstants.GenerateTicketNo(),
+                FacilityId = facilityId,
+                CustomerId = currentUserId,
+                Category = taskType,
+                Priority = TicketPriorityConstants.Normal,
+                Subject = request.Title.Trim(),
+                Description = $"Nhiệm vụ điều phối từ Quản lý cơ sở: {request.Title.Trim()}",
+                Status = TicketStatusConstants.Open,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.SupportTickets.Add(syncTicket);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            task.TicketId = syncTicket.Id;
+
+            if (request.AssignedEmployeeId.HasValue)
+            {
+                _dbContext.TicketAssignments.Add(new TicketAssignment
+                {
+                    TicketId = syncTicket.Id,
+                    EmployeeId = request.AssignedEmployeeId.Value,
+                    AssignedBy = currentUserId,
+                    AssignedAt = now
+                });
+            }
+        }
 
         _dbContext.StaffTasks.Add(task);
         await _dbContext.SaveChangesAsync(cancellationToken);

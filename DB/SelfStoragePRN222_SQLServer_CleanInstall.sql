@@ -96,7 +96,6 @@ CREATE TABLE [core].roles (
         'storage_customer',
         'facility_staff',
         'facility_manager',
-        'business_operations_manager',
         'system_administrator'
     ))
 );
@@ -2482,8 +2481,7 @@ VALUES
     (1, 'storage_customer', 'Storage Customer', 'Customer who rents storage units'),
     (2, 'facility_staff', 'Facility Staff', 'On-site check-in, checkout and support staff'),
     (3, 'facility_manager', 'Facility Manager', 'Manager scoped to assigned facilities'),
-    (4, 'business_operations_manager', 'Business Operations Manager', 'Cross-facility pricing, policy and reporting'),
-    (5, 'system_administrator', 'System Administrator', 'Accounts, authorization and audit administration');
+    (4, 'system_administrator', 'System Administrator', 'Accounts, authorization and audit administration');
 
 SET IDENTITY_INSERT [core].[roles] OFF;
 
@@ -2509,8 +2507,8 @@ VALUES
     (2, 1),
     (3, 2),
     (4, 3),
-    (5, 4),
-    (6, 5);
+    (5, 3),
+    (6, 4);
 
 INSERT INTO [core].customer_profiles (
     user_id, full_name, identity_number, date_of_birth, address
@@ -2525,7 +2523,7 @@ INSERT INTO [core].employee_profiles (
 VALUES
     (3, 'EMP-HCM-001', 'Le Hoang Staff', CONVERT(date, '2025-01-10', 23), 'active'),
     (4, 'MGR-HCM-001', 'Pham Thu Manager', CONVERT(date, '2024-03-01', 23), 'active'),
-    (5, 'OPS-001', 'Do Quang Operations', CONVERT(date, '2023-08-15', 23), 'active');
+    (5, 'MGR-HN-001', 'Do Quang Manager', CONVERT(date, '2023-08-15', 23), 'active');
 
 SET IDENTITY_INSERT [core].[facilities] ON;
 
@@ -2547,8 +2545,8 @@ INSERT INTO [core].staff_facility_assignments (
 )
 VALUES
     (3, 1, 'facility_staff', CONVERT(datetimeoffset, '2026-01-01 00:00:00+07:00'), 4),
-    (4, 1, 'facility_manager', CONVERT(datetimeoffset, '2026-01-01 00:00:00+07:00'), 5),
-    (4, 2, 'facility_manager', CONVERT(datetimeoffset, '2026-01-01 00:00:00+07:00'), 5);
+    (4, 1, 'facility_manager', CONVERT(datetimeoffset, '2026-01-01 00:00:00+07:00'), 6),
+    (5, 2, 'facility_manager', CONVERT(datetimeoffset, '2026-01-01 00:00:00+07:00'), 6);
 
 SET IDENTITY_INSERT [core].[facility_areas] ON;
 

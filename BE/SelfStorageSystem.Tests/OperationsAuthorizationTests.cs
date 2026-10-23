@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 using SelfStorageSystem.Application.Interfaces;
+using SelfStorageSystem.Contracts.Admin;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Operations;
 using SelfStorageSystem.Controllers;
@@ -28,29 +29,17 @@ public class OperationsAuthorizationTests : IClassFixture<OperationsAuthorizatio
 
     public static IEnumerable<object[]> Routes()
     {
-        yield return new object[] { "GET", "/api/operations/pricing/rates", "", nameof(IBusinessOperationsService.GetRatesAsync) };
-        yield return new object[] { "PUT", "/api/operations/pricing/rates",
+        yield return new object[] { "GET", "/api/manager/facilities/1/pricing/rates", "", nameof(IBusinessOperationsService.GetRatesAsync) };
+        yield return new object[] { "PUT", "/api/manager/facilities/1/pricing/rates",
             """{"facilityId":1,"unitTypeId":1,"monthlyRate":1000000,"validFrom":"2026-01-01"}""",
             nameof(IBusinessOperationsService.UpsertRateAsync) };
-        yield return new object[] { "GET", "/api/operations/pricing/fees", "", nameof(IBusinessOperationsService.GetFeesAsync) };
-        yield return new object[] { "PUT", "/api/operations/pricing/fees",
-            """{"code":"DAMAGE","feeType":"damage_fee","calculationMethod":"flat","amount":50000,"validFrom":"2026-01-01"}""",
-            nameof(IBusinessOperationsService.UpsertFeeAsync) };
-        yield return new object[] { "GET", "/api/operations/promotions", "", nameof(IBusinessOperationsService.GetPromotionsAsync) };
-        yield return new object[] { "POST", "/api/operations/promotions",
+        yield return new object[] { "GET", "/api/manager/pricing/fees", "", nameof(IBusinessOperationsService.GetFeesAsync) };
+        yield return new object[] { "GET", "/api/manager/promotions", "", nameof(IBusinessOperationsService.GetPromotionsAsync) };
+        yield return new object[] { "POST", "/api/manager/promotions",
             """{"code":"SALE","name":"Sale","discountType":"fixed","discountValue":100000,"validFrom":"2026-01-01T00:00:00Z","validTo":"2026-12-31T00:00:00Z"}""",
             nameof(IBusinessOperationsService.CreatePromotionAsync) };
-        yield return new object[] { "PUT", "/api/operations/promotions/7/status", """{"isActive":false}""",
+        yield return new object[] { "PUT", "/api/manager/promotions/7/status", """{"isActive":false}""",
             nameof(IBusinessOperationsService.UpdatePromotionStatusAsync) };
-        yield return new object[] { "POST", "/api/operations/facilities",
-            """{"code":"FAC-AUTH","name":"Facility","addressLine":"123 Main Street","city":"HCM"}""",
-            nameof(IBusinessOperationsService.CreateFacilityAsync) };
-        yield return new object[] { "PUT", "/api/operations/facilities",
-            """{"id":7,"code":"FAC-AUTH","name":"Facility","addressLine":"123 Main Street","city":"HCM"}""",
-            nameof(IBusinessOperationsService.UpdateFacilityAsync) };
-        yield return new object[] { "PUT", "/api/operations/facilities/7",
-            """{"id":7,"code":"FAC-AUTH","name":"Facility","addressLine":"123 Main Street","city":"HCM"}""",
-            nameof(IBusinessOperationsService.UpdateFacilityAsync) };
     }
 
     public static IEnumerable<object[]> AnonymousRoutes() => Routes().Select(route => route.Take(3).ToArray());
@@ -60,7 +49,7 @@ public class OperationsAuthorizationTests : IClassFixture<OperationsAuthorizatio
             .Select(role => route.Take(3).Concat(new object[] { role }).ToArray()));
 
     public static IEnumerable<object[]> AllowedRoutes() => Routes().SelectMany(route =>
-        new[] { RoleConstants.BusinessOperationsManager, RoleConstants.SystemAdministrator, RoleConstants.FacilityManager }
+        new[] { RoleConstants.FacilityManager, RoleConstants.SystemAdministrator }
             .Select(role => route.Concat(new object[] { role }).ToArray()));
 
     [Theory]
@@ -89,7 +78,7 @@ public class OperationsAuthorizationTests : IClassFixture<OperationsAuthorizatio
 
     [Theory]
     [MemberData(nameof(AllowedRoutes))]
-    public async Task OperationsManagerAdministratorAndFacilityManager_CanReachEveryRoute(
+    public async Task ManagerAndAdministrator_CanReachEveryRoute(
         string method, string path, string body, string serviceMethod, string role)
     {
         var callsBefore = _fixture.Service.Invocations.Count;
@@ -119,6 +108,8 @@ public sealed class OperationsAuthorizationFixture : IDisposable
     public const string RoleHeader = "X-Test-Role";
     private readonly TestServer _server;
     public Mock<IBusinessOperationsService> Service { get; } = new(MockBehavior.Strict);
+    public Mock<IFacilityManagerService> ManagerService { get; } = new(MockBehavior.Strict);
+    public Mock<IAdminManagementService> AdminService { get; } = new(MockBehavior.Strict);
     public HttpClient Client { get; }
 
     public OperationsAuthorizationFixture()
@@ -137,10 +128,9 @@ public sealed class OperationsAuthorizationFixture : IDisposable
             .ReturnsAsync(new OperationsPromotionDto());
         Service.Setup(s => s.UpdatePromotionStatusAsync(7, It.IsAny<OperationsUpdatePromotionStatusRequest>(), UserId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OperationsPromotionDto());
-        Service.Setup(s => s.CreateFacilityAsync(It.IsAny<OperationsCreateFacilityRequest>(), UserId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OperationsFacilityDto());
-        Service.Setup(s => s.UpdateFacilityAsync(It.IsAny<OperationsUpdateFacilityRequest>(), UserId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OperationsFacilityDto());
+
+        ManagerService.Setup(m => m.ValidateFacilityAccessAsync(It.IsAny<long>(), UserId, It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
 
         // Exercise MVC routing and authorization middleware without connecting to a database.
         _server = new TestServer(new WebHostBuilder()
@@ -148,13 +138,16 @@ public sealed class OperationsAuthorizationFixture : IDisposable
             {
                 services.AddLogging();
                 services.AddSingleton(Service.Object);
+                services.AddSingleton(ManagerService.Object);
+                services.AddSingleton(AdminService.Object);
                 services.AddAuthentication("Test")
                     .AddScheme<AuthenticationSchemeOptions, RoleAuthenticationHandler>("Test", _ => { });
                 services.AddAuthorization();
                 services.AddControllers().ConfigureApplicationPartManager(parts =>
                 {
                     parts.ApplicationParts.Clear();
-                    parts.ApplicationParts.Add(new OperationsControllerPart());
+                    parts.ApplicationParts.Add(new ControllerPart(typeof(ManagerController)));
+                    parts.ApplicationParts.Add(new ControllerPart(typeof(AdminController)));
                 });
             })
             .Configure(app =>
@@ -173,10 +166,12 @@ public sealed class OperationsAuthorizationFixture : IDisposable
         _server.Dispose();
     }
 
-    private sealed class OperationsControllerPart : ApplicationPart, IApplicationPartTypeProvider
+    private sealed class ControllerPart : ApplicationPart, IApplicationPartTypeProvider
     {
-        public override string Name => nameof(OperationsController);
-        public IEnumerable<TypeInfo> Types => new[] { typeof(OperationsController).GetTypeInfo() };
+        private readonly Type _controllerType;
+        public ControllerPart(Type controllerType) => _controllerType = controllerType;
+        public override string Name => _controllerType.Name;
+        public IEnumerable<TypeInfo> Types => new[] { _controllerType.GetTypeInfo() };
     }
 
     public sealed class RoleAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>

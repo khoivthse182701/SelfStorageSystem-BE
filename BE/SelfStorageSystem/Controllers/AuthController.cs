@@ -105,6 +105,28 @@ public class AuthController : ControllerBase
         return Ok(ApiResponse<AuthUserDto>.Ok(user, "User profile retrieved successfully."));
     }
 
+    /// <summary>
+    /// Get capabilities (permissions and assigned facilities) for current authenticated user.
+    /// </summary>
+    [HttpGet("me/capabilities")]
+    [HttpGet("/api/v1/me/capabilities")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<UserCapabilitiesDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> GetUserCapabilities(
+        [FromServices] ICapabilitiesService capabilitiesService,
+        CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdClaim) || !long.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot authenticate user identity from token."));
+        }
+
+        var capabilities = await capabilitiesService.GetUserCapabilitiesAsync(userId, cancellationToken);
+        return Ok(ApiResponse<UserCapabilitiesDto>.Ok(capabilities, "User capabilities retrieved successfully."));
+    }
+
     private string? GetClientIp()
     {
         var forwarded = Request.Headers["X-Forwarded-For"].FirstOrDefault();

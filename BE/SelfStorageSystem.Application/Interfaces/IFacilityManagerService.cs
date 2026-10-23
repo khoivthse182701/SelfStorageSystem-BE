@@ -53,50 +53,12 @@ public interface IFacilityManagerService
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
 
-    Task<ManagerTransferRequestDto> DecideTransferRequestAsync(
-        long id,
-        ManagerDecideTransferRequest request,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default);
-
     // ==========================================
-    // 2. Phân Ca Trực & Giao Việc Nhân Viên
+    // 2. Phân Bổ Nhân Sự & Giao Việc Nhân Viên
     // ==========================================
 
-    Task<IReadOnlyList<ManagerStaffShiftDto>> GetShiftsAsync(
+    Task ValidateFacilityAccessAsync(
         long facilityId,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default);
-
-    Task<ManagerStaffShiftDto> CreateShiftAsync(
-        long facilityId,
-        ManagerCreateShiftRequest request,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default);
-
-    Task<IReadOnlyList<ManagerShiftRosterItemDto>> GetShiftRosterAsync(
-        long facilityId,
-        DateTimeOffset? fromDate,
-        DateTimeOffset? toDate,
-        long? employeeId,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default);
-
-    Task<ManagerShiftAssignmentDto> AssignShiftAsync(
-        long facilityId,
-        ManagerCreateShiftAssignmentRequest request,
-        long currentUserId,
-        bool isSystemAdmin,
-        CancellationToken cancellationToken = default);
-
-    Task DeleteShiftAssignmentAsync(
-        long facilityId,
-        long shiftId,
-        long employeeId,
         long currentUserId,
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);

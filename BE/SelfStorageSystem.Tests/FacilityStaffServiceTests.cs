@@ -327,9 +327,9 @@ public class FacilityStaffServiceTests
         var updatedTransfer = await db.UnitTransferRequests.FindAsync(99L);
         Assert.Equal(TransferRequestStatusConstants.MovedOutInTransit, updatedTransfer!.Status);
 
-        // HCM unit freed to Available
+        // HCM unit set to Maintenance while cleaning ticket is open
         var updatedUnit = await db.StorageUnits.FindAsync(101L);
-        Assert.Equal(StorageUnitStatusConstants.Available, updatedUnit!.PhysicalStatus);
+        Assert.Equal(StorageUnitStatusConstants.Maintenance, updatedUnit!.PhysicalStatus);
 
         // Cleaning ticket automatically created for HCM unit
         var cleaningTicket = await db.SupportTickets.FirstOrDefaultAsync(t => t.StorageUnitId == 101 && t.Category == "cleaning");
