@@ -27,6 +27,8 @@ public class ManagerCreateShiftRequest
     public DateTimeOffset EndsAt { get; set; }
 
     public string? Status { get; set; }
+
+    public bool AllowPast { get; set; } = false;
 }
 
 public class ManagerShiftRosterItemDto
@@ -56,6 +58,8 @@ public class ManagerCreateShiftAssignmentRequest
     public string DutyRole { get; set; } = string.Empty; // staff, shift_lead, manager_on_call
 
     public string? Status { get; set; }
+
+    public bool AllowPast { get; set; } = false;
 }
 
 public class ManagerShiftAssignmentDto
@@ -68,6 +72,44 @@ public class ManagerShiftAssignmentDto
     public string Status { get; set; } = string.Empty;
     public DateTimeOffset? CheckInAt { get; set; }
     public DateTimeOffset? CheckOutAt { get; set; }
+}
+
+public class ManagerBatchShiftAssignmentItem
+{
+    [Required]
+    public long ShiftId { get; set; }
+
+    [Required]
+    public long EmployeeId { get; set; }
+
+    [Required]
+    public string DutyRole { get; set; } = string.Empty;
+
+    public string? Status { get; set; }
+
+    public bool AllowPast { get; set; } = false;
+}
+
+public class ManagerBatchDeleteShiftAssignmentItem
+{
+    [Required]
+    public long ShiftId { get; set; }
+
+    [Required]
+    public long EmployeeId { get; set; }
+}
+
+public class ManagerBatchSaveShiftAssignmentsRequest
+{
+    public List<ManagerBatchShiftAssignmentItem>? AssignmentsToAdd { get; set; } = new();
+    public List<ManagerBatchDeleteShiftAssignmentItem>? AssignmentsToDelete { get; set; } = new();
+}
+
+public class ManagerBatchSaveShiftAssignmentsResultDto
+{
+    public int AddedCount { get; set; }
+    public int DeletedCount { get; set; }
+    public List<ManagerShiftAssignmentDto> Assignments { get; set; } = new();
 }
 
 public class ManagerCreateStaffTaskRequest

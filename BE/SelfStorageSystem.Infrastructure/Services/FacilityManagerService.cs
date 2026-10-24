@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Contracts.Common;
@@ -576,6 +577,11 @@ public class FacilityManagerService : IFacilityManagerService
             throw AppException.FromError(ManagerErrors.InvalidShiftTimes);
         }
 
+        if (!request.AllowPast && request.StartsAt < DateTimeOffset.UtcNow)
+        {
+            throw AppException.FromError(ManagerErrors.PastShiftCreationNotAllowed);
+        }
+
         var status = !string.IsNullOrWhiteSpace(request.Status) 
             ? request.Status.Trim().ToLowerInvariant() 
             : StaffShiftStatusConstants.Planned;
@@ -678,6 +684,11 @@ public class FacilityManagerService : IFacilityManagerService
             throw AppException.FromError(ManagerErrors.ShiftNotFound);
         }
 
+        if (!request.AllowPast && shift.StartsAt < DateTimeOffset.UtcNow)
+        {
+            throw AppException.FromError(ManagerErrors.PastShiftAssignmentNotAllowed);
+        }
+
         var employee = await _dbContext.EmployeeProfiles
             .Include(ep => ep.StaffFacilityAssignments)
             .FirstOrDefaultAsync(ep => ep.UserId == request.EmployeeId, cancellationToken);
@@ -699,6 +710,19 @@ public class FacilityManagerService : IFacilityManagerService
         if (exists)
         {
             throw AppException.FromError(ManagerErrors.ShiftAssignmentAlreadyExists);
+        }
+
+        var hasOverlap = await _dbContext.ShiftAssignments
+            .Include(sa => sa.Shift)
+            .AnyAsync(sa => sa.EmployeeId == request.EmployeeId
+                         && sa.ShiftId != request.ShiftId
+                         && sa.Shift.Status != StaffShiftStatusConstants.Cancelled
+                         && sa.Status != ShiftAssignmentStatusConstants.Absent
+                         && sa.Shift.StartsAt < shift.EndsAt
+                         && sa.Shift.EndsAt > shift.StartsAt, cancellationToken);
+        if (hasOverlap)
+        {
+            throw AppException.FromError(ManagerErrors.OverlappingShiftAssignment);
         }
 
         var status = !string.IsNullOrWhiteSpace(request.Status) 
@@ -747,6 +771,187 @@ public class FacilityManagerService : IFacilityManagerService
         {
             _dbContext.ShiftAssignments.Remove(assignment);
             await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    public async Task<ManagerBatchSaveShiftAssignmentsResultDto> BatchSaveShiftAssignmentsAsync(
+        long facilityId,
+        ManagerBatchSaveShiftAssignmentsRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureFacilityAccessAsync(facilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        IDbContextTransaction? transaction = null;
+        if (_dbContext.Database.IsSqlServer())
+        {
+            transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        }
+
+        try
+        {
+            var result = new ManagerBatchSaveShiftAssignmentsResultDto();
+            var toDelete = request.AssignmentsToDelete ?? new List<ManagerBatchDeleteShiftAssignmentItem>();
+            var toAdd = request.AssignmentsToAdd ?? new List<ManagerBatchShiftAssignmentItem>();
+
+            // 1. Process Deletions
+            if (toDelete.Count > 0)
+            {
+                foreach (var del in toDelete)
+                {
+                    var assignment = await _dbContext.ShiftAssignments
+                        .Include(sa => sa.Shift)
+                        .FirstOrDefaultAsync(sa => sa.ShiftId == del.ShiftId 
+                                                && sa.EmployeeId == del.EmployeeId 
+                                                && sa.Shift.FacilityId == facilityId, cancellationToken);
+
+                    if (assignment != null)
+                    {
+                        _dbContext.ShiftAssignments.Remove(assignment);
+                        result.DeletedCount++;
+                    }
+                }
+
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            // 2. Process Additions
+            if (toAdd.Count > 0)
+            {
+                // Check duplicate within the batch
+                var duplicateInBatch = toAdd
+                    .GroupBy(x => new { x.ShiftId, x.EmployeeId })
+                    .Any(g => g.Count() > 1);
+                if (duplicateInBatch)
+                {
+                    throw AppException.FromError(ManagerErrors.DuplicateAssignmentInBatch);
+                }
+
+                var shiftIds = toAdd.Select(x => x.ShiftId).Distinct().ToList();
+                var shifts = await _dbContext.StaffShifts
+                    .Where(s => shiftIds.Contains(s.Id) && s.FacilityId == facilityId)
+                    .ToDictionaryAsync(s => s.Id, cancellationToken);
+
+                var employeeIds = toAdd.Select(x => x.EmployeeId).Distinct().ToList();
+                var employees = await _dbContext.EmployeeProfiles
+                    .Include(ep => ep.StaffFacilityAssignments)
+                    .Where(ep => employeeIds.Contains(ep.UserId))
+                    .ToDictionaryAsync(ep => ep.UserId, cancellationToken);
+
+                var now = DateTimeOffset.UtcNow;
+
+                var newAssignments = new List<ShiftAssignment>();
+                var plannedIntervals = new List<(long EmployeeId, DateTimeOffset StartsAt, DateTimeOffset EndsAt)>();
+
+                foreach (var item in toAdd)
+                {
+                    if (!shifts.TryGetValue(item.ShiftId, out var shift))
+                    {
+                        throw AppException.FromError(ManagerErrors.ShiftNotFound);
+                    }
+
+                    if (!employees.TryGetValue(item.EmployeeId, out var employee))
+                    {
+                        throw AppException.FromError(AdminErrors.EmployeeProfileNotFound);
+                    }
+
+                    var isAssignedToFacility = employee.StaffFacilityAssignments
+                        .Any(sfa => sfa.FacilityId == facilityId && (sfa.EndsAt == null || sfa.EndsAt > now));
+                    if (!isAssignedToFacility)
+                    {
+                        throw AppException.FromError(ManagerErrors.EmployeeNotAssignedToFacility);
+                    }
+
+                    if (!item.AllowPast && shift.StartsAt < now)
+                    {
+                        throw AppException.FromError(ManagerErrors.PastShiftAssignmentNotAllowed);
+                    }
+
+                    // Check already exists in DB
+                    var exists = await _dbContext.ShiftAssignments
+                        .AnyAsync(sa => sa.ShiftId == item.ShiftId && sa.EmployeeId == item.EmployeeId, cancellationToken);
+                    if (exists)
+                    {
+                        throw AppException.FromError(ManagerErrors.ShiftAssignmentAlreadyExists);
+                    }
+
+                    // Check overlapping within the batch itself
+                    var overlapInBatch = plannedIntervals.Any(pi => pi.EmployeeId == item.EmployeeId
+                                                                  && pi.StartsAt < shift.EndsAt
+                                                                  && pi.EndsAt > shift.StartsAt);
+                    if (overlapInBatch)
+                    {
+                        throw AppException.FromError(ManagerErrors.OverlappingShiftAssignment);
+                    }
+
+                    // Check overlapping with other shifts in DB
+                    var overlapInDb = await _dbContext.ShiftAssignments
+                        .Include(sa => sa.Shift)
+                        .AnyAsync(sa => sa.EmployeeId == item.EmployeeId
+                                     && sa.ShiftId != shift.Id
+                                     && sa.Shift.Status != StaffShiftStatusConstants.Cancelled
+                         && sa.Status != ShiftAssignmentStatusConstants.Absent
+                                     && sa.Shift.StartsAt < shift.EndsAt
+                                     && sa.Shift.EndsAt > shift.StartsAt, cancellationToken);
+                    if (overlapInDb)
+                    {
+                        throw AppException.FromError(ManagerErrors.OverlappingShiftAssignment);
+                    }
+
+                    plannedIntervals.Add((item.EmployeeId, shift.StartsAt, shift.EndsAt));
+
+                    var status = !string.IsNullOrWhiteSpace(item.Status)
+                        ? item.Status.Trim().ToLowerInvariant()
+                        : ShiftAssignmentStatusConstants.Scheduled;
+
+                    var assignment = new ShiftAssignment
+                    {
+                        ShiftId = item.ShiftId,
+                        EmployeeId = item.EmployeeId,
+                        DutyRole = item.DutyRole.Trim().ToLowerInvariant(),
+                        Status = status
+                    };
+
+                    newAssignments.Add(assignment);
+                    _dbContext.ShiftAssignments.Add(assignment);
+
+                    result.Assignments.Add(new ManagerShiftAssignmentDto
+                    {
+                        ShiftId = assignment.ShiftId,
+                        EmployeeId = assignment.EmployeeId,
+                        EmployeeCode = employee.EmployeeCode,
+                        EmployeeName = employee.FullName,
+                        DutyRole = assignment.DutyRole,
+                        Status = assignment.Status
+                    });
+                }
+
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                result.AddedCount = newAssignments.Count;
+            }
+
+            if (transaction != null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+
+            return result;
+        }
+        catch
+        {
+            if (transaction != null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+            throw;
+        }
+        finally
+        {
+            if (transaction != null)
+            {
+                await transaction.DisposeAsync();
+            }
         }
     }
 
