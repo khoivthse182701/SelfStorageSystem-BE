@@ -4,6 +4,8 @@ using Microsoft.Extensions.Options;
 using SelfStorageSystem.Application.DTOs;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
+using SelfStorageSystem.Domain.Errors;
+using SelfStorageSystem.Domain.Exceptions;
 
 namespace SelfStorageSystem.Infrastructure.Services;
 
@@ -24,7 +26,8 @@ public class GoogleAuthService : IGoogleAuthService
         {
             var validationSettings = new GoogleJsonWebSignature.ValidationSettings();
 
-            if (!string.IsNullOrWhiteSpace(_googleAuthSettings.ClientId))
+            if (!string.IsNullOrWhiteSpace(_googleAuthSettings.ClientId) &&
+                !_googleAuthSettings.ClientId.StartsWith("YOUR_GOOGLE_CLIENT_ID", StringComparison.OrdinalIgnoreCase))
             {
                 validationSettings.Audience = new[] { _googleAuthSettings.ClientId };
             }
@@ -33,7 +36,7 @@ public class GoogleAuthService : IGoogleAuthService
 
             if (payload == null)
             {
-                throw new InvalidOperationException("Google ID Token is invalid.");
+                throw AppException.FromError(AuthErrors.InvalidGoogleToken);
             }
 
             return new GoogleUserInfo
@@ -47,12 +50,16 @@ public class GoogleAuthService : IGoogleAuthService
         catch (InvalidJwtException ex)
         {
             _logger.LogWarning(ex, SelfStorageSystem.Domain.Constants.AuthLogMessages.InvalidGoogleToken, ex.Message);
-            throw new InvalidOperationException("Google ID Token is invalid or has expired.", ex);
+            throw AppException.FromError(AuthErrors.InvalidGoogleToken);
+        }
+        catch (AppException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, SelfStorageSystem.Domain.Constants.AuthLogMessages.VerifyGoogleTokenError, ex.Message);
-            throw new InvalidOperationException($"Error validating Google ID Token: {ex.Message}", ex);
+            throw AppException.FromError(AuthErrors.InvalidGoogleToken);
         }
     }
 }

@@ -10,7 +10,7 @@ namespace SelfStorageSystem.Controllers;
 
 [ApiController]
 [Route("api/staff")]
-[Authorize(Roles = RoleConstants.StaffOrManager)]
+[Authorize(Roles = RoleConstants.StaffOrManagerOrAdmin)]
 public class StaffController : ControllerBase
 {
     private readonly IFacilityStaffService _staffService;

@@ -63,7 +63,7 @@ public class OperationsFacilityQueryParameters : OperationsPagedQueryParameters
     [MaxLength(OperationsConstants.MaxTextLength)]
     public string? Search { get; set; }
 
-    [MaxLength(OperationsConstants.MaxTextLength)]
+    [RegularExpression("^(active|inactive|maintenance)$")]
     public string? Status { get; set; }
 
     [MaxLength(OperationsConstants.MaxTextLength)]

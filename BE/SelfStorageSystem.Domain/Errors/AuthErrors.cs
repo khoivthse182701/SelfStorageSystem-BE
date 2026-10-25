@@ -32,6 +32,9 @@ public static class AuthErrors
     public static readonly Error UserNotFound =
         Error.NotFound("Auth.UserNotFound", "Account information not found for this email.");
 
+    public static readonly Error InvalidGoogleToken =
+        Error.Unauthorized("Auth.InvalidGoogleToken", "Google ID Token is invalid or has expired.");
+
     public static readonly Error UserTokenInvalid =
         Error.Unauthorized("Auth.UserTokenInvalid", "Cannot authenticate user identity from token.");
 
