@@ -63,6 +63,50 @@ public interface IFacilityManagerService
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<ManagerStaffShiftDto>> GetShiftsAsync(
+        long facilityId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerStaffShiftDto> CreateShiftAsync(
+        long facilityId,
+        ManagerCreateShiftRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ManagerShiftRosterItemDto>> GetShiftRosterAsync(
+        long facilityId,
+        DateTimeOffset? fromDate,
+        DateTimeOffset? toDate,
+        long? employeeId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerShiftAssignmentDto> AssignShiftAsync(
+        long facilityId,
+        ManagerCreateShiftAssignmentRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteShiftAssignmentAsync(
+        long facilityId,
+        long shiftId,
+        long employeeId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerBatchSaveShiftAssignmentsResultDto> BatchSaveShiftAssignmentsAsync(
+        long facilityId,
+        ManagerBatchSaveShiftAssignmentsRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ManagerFacilityStaffDto>> GetFacilityStaffAsync(
         long facilityId,
         long currentUserId,

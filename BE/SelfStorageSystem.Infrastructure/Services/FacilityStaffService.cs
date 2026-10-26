@@ -1636,7 +1636,6 @@ public class FacilityStaffService : IFacilityStaffService
 
         if (assignedFacilityId.HasValue) return assignedFacilityId.Value;
 
-        var firstFacilityId = await _dbContext.Facilities.Select(f => (long?)f.Id).FirstOrDefaultAsync(cancellationToken);
-        return firstFacilityId ?? 1;
+        throw AppException.FromError(ManagerErrors.EmployeeNotAssignedToFacility);
     }
 }

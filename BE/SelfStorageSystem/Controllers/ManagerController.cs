@@ -151,6 +151,125 @@ public class ManagerController : ControllerBase
     // ==========================================
 
     /// <summary>
+    /// Quản lý khung giờ ca trực nhân sự (staff_shifts) - Danh sách.
+    /// </summary>
+    [HttpGet("facilities/{facilityId:long}/shifts")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ManagerStaffShiftDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetShifts(
+        [FromRoute] long facilityId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.GetShiftsAsync(
+            facilityId, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<IReadOnlyList<ManagerStaffShiftDto>>.Ok(result, "Retrieved shifts successfully."));
+    }
+
+    /// <summary>
+    /// Quản lý khung giờ ca trực nhân sự (staff_shifts) - Tạo mới.
+    /// </summary>
+    [HttpPost("facilities/{facilityId:long}/shifts")]
+    [ProducesResponseType(typeof(ApiResponse<ManagerStaffShiftDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CreateShift(
+        [FromRoute] long facilityId,
+        [FromBody] ManagerCreateShiftRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.CreateShiftAsync(
+            facilityId, request, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<ManagerStaffShiftDto>.Ok(result, "Staff shift created successfully."));
+    }
+
+    /// <summary>
+    /// Xem lịch làm việc ma trận của nhân viên trong tuần/tháng.
+    /// </summary>
+    [HttpGet("facilities/{facilityId:long}/shift-roster")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ManagerShiftRosterItemDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetShiftRoster(
+        [FromRoute] long facilityId,
+        [FromQuery] DateTimeOffset? fromDate,
+        [FromQuery] DateTimeOffset? toDate,
+        [FromQuery] long? employeeId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.GetShiftRosterAsync(
+            facilityId, fromDate, toDate, employeeId, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<IReadOnlyList<ManagerShiftRosterItemDto>>.Ok(result, "Retrieved shift roster successfully."));
+    }
+
+    /// <summary>
+    /// Phân ca trực cụ thể cho nhân sự.
+    /// </summary>
+    [HttpPost("facilities/{facilityId:long}/shift-assignments")]
+    [ProducesResponseType(typeof(ApiResponse<ManagerShiftAssignmentDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AssignShift(
+        [FromRoute] long facilityId,
+        [FromBody] ManagerCreateShiftAssignmentRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.AssignShiftAsync(
+            facilityId, request, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<ManagerShiftAssignmentDto>.Ok(result, "Shift assignment completed successfully."));
+    }
+
+    /// <summary>
+    /// Hủy phân công ca trực của nhân viên.
+    /// </summary>
+    [HttpDelete("facilities/{facilityId:long}/shift-assignments/{shiftId:long}/{employeeId:long}")]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> DeleteShiftAssignment(
+        [FromRoute] long facilityId,
+        [FromRoute] long shiftId,
+        [FromRoute] long employeeId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        await _managerService.DeleteShiftAssignmentAsync(
+            facilityId, shiftId, employeeId, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse.Ok("Shift assignment removed successfully."));
+    }
+
+    /// <summary>
+    /// Lưu hàng loạt phân công ca trực (Thực thi khi nhấn nút Save trên giao diện).
+    /// </summary>
+    [HttpPost("facilities/{facilityId:long}/shift-assignments/batch-save")]
+    [ProducesResponseType(typeof(ApiResponse<ManagerBatchSaveShiftAssignmentsResultDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> BatchSaveShiftAssignments(
+        [FromRoute] long facilityId,
+        [FromBody] ManagerBatchSaveShiftAssignmentsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.BatchSaveShiftAssignmentsAsync(
+            facilityId, request, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<ManagerBatchSaveShiftAssignmentsResultDto>.Ok(result, "Batch shift assignments saved successfully."));
+    }
+
+    /// <summary>
     /// Danh sách nhân sự phụ trách thuộc điểm kho (Facility Staff).
     /// </summary>
     [HttpGet("facilities/{facilityId:long}/staff")]

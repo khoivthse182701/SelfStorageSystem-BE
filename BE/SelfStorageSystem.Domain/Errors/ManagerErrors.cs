@@ -40,6 +40,18 @@ public static class ManagerErrors
     public static readonly Error ShiftAssignmentAlreadyExists =
         Error.Conflict("Manager.ShiftAssignmentAlreadyExists", "Employee is already assigned to this shift.");
 
+    public static readonly Error PastShiftCreationNotAllowed =
+        Error.Validation("Manager.PastShiftCreationNotAllowed", "Shift start time cannot be in the past without confirmation.");
+
+    public static readonly Error PastShiftAssignmentNotAllowed =
+        Error.Validation("Manager.PastShiftAssignmentNotAllowed", "Cannot assign employee to a shift in the past without confirmation.");
+
+    public static readonly Error OverlappingShiftAssignment =
+        Error.Conflict("Manager.OverlappingShiftAssignment", "Employee is already assigned to another shift during this time slot.");
+
+    public static readonly Error DuplicateAssignmentInBatch =
+        Error.Conflict("Manager.DuplicateAssignmentInBatch", "Batch contains duplicate assignments for the same employee and shift.");
+
     public static readonly Error EmployeeNotAssignedToFacility =
         Error.Validation("Manager.EmployeeNotAssignedToFacility", "The specified employee does not have an active assignment at this facility.");
 

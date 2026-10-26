@@ -483,6 +483,316 @@ public class FacilityManagerServiceTests
     }
 
     [Fact]
+    public async Task ShiftScheduling_PastDate_WithoutAllowPast_ThrowsError_WithAllowPast_Succeeds()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var staffUser = new User
+        {
+            Id = 30,
+            Email = "staff30@storage.local",
+            Status = UserStatusConstants.Active,
+            PasswordHash = "hash",
+            CreatedAt = DateTimeOffset.UtcNow,
+            EmployeeProfile = new EmployeeProfile
+            {
+                UserId = 30,
+                EmployeeCode = "EMP-030",
+                FullName = "Staff Member",
+                HireDate = new DateOnly(2025, 1, 1),
+                EmploymentStatus = "active"
+            }
+        };
+        db.Users.Add(staffUser);
+        db.StaffFacilityAssignments.Add(new StaffFacilityAssignment
+        {
+            Id = 30,
+            FacilityId = 1,
+            EmployeeId = 30,
+            AssignmentRole = RoleConstants.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+        await db.SaveChangesAsync();
+
+        var pastStart = DateTimeOffset.UtcNow.AddHours(-5);
+        var pastEnd = DateTimeOffset.UtcNow.AddHours(-1);
+
+        // 1. CreateShift without AllowPast -> throws
+        var exCreate = await Assert.ThrowsAnyAsync<Exception>(() =>
+            service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+            {
+                ShiftName = "Past Shift",
+                StartsAt = pastStart,
+                EndsAt = pastEnd,
+                AllowPast = false
+            }, 10, false));
+        var errorCreate = Assert.IsAssignableFrom<IHasAppError>(exCreate);
+        Assert.Equal(ManagerErrors.PastShiftCreationNotAllowed.Code, errorCreate.Error.Code);
+
+        // 2. CreateShift with AllowPast = true -> succeeds
+        var pastShift = await service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+        {
+            ShiftName = "Past Shift Allowed",
+            StartsAt = pastStart,
+            EndsAt = pastEnd,
+            AllowPast = true
+        }, 10, false);
+        Assert.NotNull(pastShift);
+
+        // 3. AssignShift without AllowPast to past shift -> throws
+        var exAssign = await Assert.ThrowsAnyAsync<Exception>(() =>
+            service.AssignShiftAsync(1, new ManagerCreateShiftAssignmentRequest
+            {
+                ShiftId = pastShift.Id,
+                EmployeeId = 30,
+                DutyRole = DutyRoleConstants.Staff,
+                AllowPast = false
+            }, 10, false));
+        var errorAssign = Assert.IsAssignableFrom<IHasAppError>(exAssign);
+        Assert.Equal(ManagerErrors.PastShiftAssignmentNotAllowed.Code, errorAssign.Error.Code);
+
+        // 4. AssignShift with AllowPast = true -> succeeds
+        var assignment = await service.AssignShiftAsync(1, new ManagerCreateShiftAssignmentRequest
+        {
+            ShiftId = pastShift.Id,
+            EmployeeId = 30,
+            DutyRole = DutyRoleConstants.Staff,
+            AllowPast = true
+        }, 10, false);
+        Assert.NotNull(assignment);
+        Assert.Equal(30, assignment.EmployeeId);
+    }
+
+    [Fact]
+    public async Task ShiftAssignment_OverlappingShiftInSameTimeSlot_ThrowsConflict()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var staffUser = new User
+        {
+            Id = 30,
+            Email = "staff30@storage.local",
+            Status = UserStatusConstants.Active,
+            PasswordHash = "hash",
+            CreatedAt = DateTimeOffset.UtcNow,
+            EmployeeProfile = new EmployeeProfile
+            {
+                UserId = 30,
+                EmployeeCode = "EMP-030",
+                FullName = "Staff Member",
+                HireDate = new DateOnly(2025, 1, 1),
+                EmploymentStatus = "active"
+            }
+        };
+        db.Users.Add(staffUser);
+        db.StaffFacilityAssignments.Add(new StaffFacilityAssignment
+        {
+            Id = 30,
+            FacilityId = 1,
+            EmployeeId = 30,
+            AssignmentRole = RoleConstants.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+        await db.SaveChangesAsync();
+
+        var baseTime = DateTimeOffset.UtcNow.AddDays(2);
+        // Shift 1: 10:00 - 14:00
+        var shift1 = await service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+        {
+            ShiftName = "Shift 10-14",
+            StartsAt = baseTime.AddHours(10),
+            EndsAt = baseTime.AddHours(14)
+        }, 10, false);
+
+        // Shift 2: 12:00 - 16:00 (overlaps with Shift 1 between 12:00 and 14:00)
+        var shift2 = await service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+        {
+            ShiftName = "Shift 12-16",
+            StartsAt = baseTime.AddHours(12),
+            EndsAt = baseTime.AddHours(16)
+        }, 10, false);
+
+        // Act 1: Assign to Shift 1 -> succeeds
+        var assign1 = await service.AssignShiftAsync(1, new ManagerCreateShiftAssignmentRequest
+        {
+            ShiftId = shift1.Id,
+            EmployeeId = 30,
+            DutyRole = DutyRoleConstants.Staff
+        }, 10, false);
+        Assert.NotNull(assign1);
+
+        // Act 2: Assign to Shift 2 -> overlapping conflict error
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
+            service.AssignShiftAsync(1, new ManagerCreateShiftAssignmentRequest
+            {
+                ShiftId = shift2.Id,
+                EmployeeId = 30,
+                DutyRole = DutyRoleConstants.Staff
+            }, 10, false));
+
+        var error = Assert.IsAssignableFrom<IHasAppError>(ex);
+        Assert.Equal(ManagerErrors.OverlappingShiftAssignment.Code, error.Error.Code);
+    }
+
+    [Fact]
+    public async Task BatchSaveShiftAssignments_ValidAddAndDelete_ExecutesSuccessfully()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var staffUser = new User
+        {
+            Id = 30,
+            Email = "staff30@storage.local",
+            Status = UserStatusConstants.Active,
+            PasswordHash = "hash",
+            CreatedAt = DateTimeOffset.UtcNow,
+            EmployeeProfile = new EmployeeProfile
+            {
+                UserId = 30,
+                EmployeeCode = "EMP-030",
+                FullName = "Staff Member",
+                HireDate = new DateOnly(2025, 1, 1),
+                EmploymentStatus = "active"
+            }
+        };
+        db.Users.Add(staffUser);
+        db.StaffFacilityAssignments.Add(new StaffFacilityAssignment
+        {
+            Id = 30,
+            FacilityId = 1,
+            EmployeeId = 30,
+            AssignmentRole = RoleConstants.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+        await db.SaveChangesAsync();
+
+        var tomorrow = DateTimeOffset.UtcNow.AddDays(1);
+        var shiftMorning = await service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+        {
+            ShiftName = "Morning",
+            StartsAt = tomorrow.AddHours(8),
+            EndsAt = tomorrow.AddHours(12)
+        }, 10, false);
+
+        var shiftAfternoon = await service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+        {
+            ShiftName = "Afternoon",
+            StartsAt = tomorrow.AddHours(13),
+            EndsAt = tomorrow.AddHours(17)
+        }, 10, false);
+
+        // Pre-assign morning shift
+        await service.AssignShiftAsync(1, new ManagerCreateShiftAssignmentRequest
+        {
+            ShiftId = shiftMorning.Id,
+            EmployeeId = 30,
+            DutyRole = DutyRoleConstants.Staff
+        }, 10, false);
+
+        // Act: Batch Save (Remove morning, add afternoon)
+        var batchRequest = new ManagerBatchSaveShiftAssignmentsRequest
+        {
+            AssignmentsToDelete = new List<ManagerBatchDeleteShiftAssignmentItem>
+            {
+                new() { ShiftId = shiftMorning.Id, EmployeeId = 30 }
+            },
+            AssignmentsToAdd = new List<ManagerBatchShiftAssignmentItem>
+            {
+                new() { ShiftId = shiftAfternoon.Id, EmployeeId = 30, DutyRole = DutyRoleConstants.ShiftLead }
+            }
+        };
+
+        var batchResult = await service.BatchSaveShiftAssignmentsAsync(1, batchRequest, 10, false);
+
+        // Assert
+        Assert.Equal(1, batchResult.DeletedCount);
+        Assert.Equal(1, batchResult.AddedCount);
+        Assert.Single(batchResult.Assignments);
+        Assert.Equal(shiftAfternoon.Id, batchResult.Assignments[0].ShiftId);
+
+        var roster = await service.GetShiftRosterAsync(1, null, null, null, 10, false);
+        Assert.Single(roster);
+        Assert.Equal("Afternoon", roster[0].ShiftName);
+        Assert.Equal(DutyRoleConstants.ShiftLead, roster[0].DutyRole);
+    }
+
+    [Fact]
+    public async Task BatchSaveShiftAssignments_OverlappingInBatch_ThrowsConflict()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var staffUser = new User
+        {
+            Id = 30,
+            Email = "staff30@storage.local",
+            Status = UserStatusConstants.Active,
+            PasswordHash = "hash",
+            CreatedAt = DateTimeOffset.UtcNow,
+            EmployeeProfile = new EmployeeProfile
+            {
+                UserId = 30,
+                EmployeeCode = "EMP-030",
+                FullName = "Staff Member",
+                HireDate = new DateOnly(2025, 1, 1),
+                EmploymentStatus = "active"
+            }
+        };
+        db.Users.Add(staffUser);
+        db.StaffFacilityAssignments.Add(new StaffFacilityAssignment
+        {
+            Id = 30,
+            FacilityId = 1,
+            EmployeeId = 30,
+            AssignmentRole = RoleConstants.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+        await db.SaveChangesAsync();
+
+        var tomorrow = DateTimeOffset.UtcNow.AddDays(1);
+        var shift1 = await service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+        {
+            ShiftName = "Shift 08-12",
+            StartsAt = tomorrow.AddHours(8),
+            EndsAt = tomorrow.AddHours(12)
+        }, 10, false);
+
+        var shift2 = await service.CreateShiftAsync(1, new ManagerCreateShiftRequest
+        {
+            ShiftName = "Shift 10-14",
+            StartsAt = tomorrow.AddHours(10),
+            EndsAt = tomorrow.AddHours(14)
+        }, 10, false);
+
+        // Act: Batch Save tries to assign employee 30 to both overlapping shifts
+        var batchRequest = new ManagerBatchSaveShiftAssignmentsRequest
+        {
+            AssignmentsToAdd = new List<ManagerBatchShiftAssignmentItem>
+            {
+                new() { ShiftId = shift1.Id, EmployeeId = 30, DutyRole = DutyRoleConstants.Staff },
+                new() { ShiftId = shift2.Id, EmployeeId = 30, DutyRole = DutyRoleConstants.Staff }
+            }
+        };
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
+            service.BatchSaveShiftAssignmentsAsync(1, batchRequest, 10, false));
+
+        var error = Assert.IsAssignableFrom<IHasAppError>(ex);
+        Assert.Equal(ManagerErrors.OverlappingShiftAssignment.Code, error.Error.Code);
+    }
+
+    [Fact]
     public async Task DecideChargeProposal_Approved_GeneratesInvoiceAndApprovesProposal()
     {
         // Arrange

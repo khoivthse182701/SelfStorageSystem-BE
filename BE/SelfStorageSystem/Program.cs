@@ -75,11 +75,24 @@ builder.Services.AddCors(options =>
                   .AllowAnyMethod()
                   .AllowCredentials();
         }
+        else if (builder.Environment.IsDevelopment())
+        {
+            policy.SetIsOriginAllowed(origin =>
+                  {
+                      if (Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                      {
+                          return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                              || uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
+                      }
+                      return false;
+                  })
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        }
         else
         {
-            policy.AllowAnyOrigin()
-                  .AllowAnyHeader()
-                  .AllowAnyMethod();
+            throw new InvalidOperationException("CORS AllowedOrigins must be configured for non-development environments.");
         }
     });
 });

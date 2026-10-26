@@ -48,3 +48,6 @@ Thumbs.db
 
 # Backup bundles
 *.bundle
+
+# Local AI Agent state
+.antigravity/
