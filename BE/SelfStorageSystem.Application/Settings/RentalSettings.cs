@@ -16,6 +16,16 @@ public class RentalSettings
     public string DefaultTimezone { get; set; } = RentalDefaults.DefaultTimezone;
     public string DefaultRefundPreviewNote { get; set; } = RentalDefaults.DefaultRefundPreviewNote;
 
+    public int TransferUnpaidHoldMinutes { get; set; } = RentalPolicyConstants.DefaultTransferUnpaidHoldMinutes;
+    public int TransferExpiryCheckIntervalMinutes { get; set; } = RentalPolicyConstants.DefaultTransferExpiryCheckIntervalMinutes;
+    public decimal TransferOverduePenaltyRate { get; set; } = RentalPolicyConstants.DefaultTransferOverduePenaltyRate;
+    public int TransferRescheduleCutoffHours { get; set; } = RentalPolicyConstants.DefaultTransferRescheduleCutoffHours;
+    public decimal DowngradeVoucherDiscountPercent { get; set; } = RentalPolicyConstants.DefaultDowngradeVoucherDiscountPercent;
+    public decimal DowngradeVoucherMaxAmount { get; set; } = RentalPolicyConstants.DefaultDowngradeVoucherMaxAmount;
+    public int DowngradeVoucherValidityDays { get; set; } = RentalPolicyConstants.DefaultDowngradeVoucherValidityDays;
+    public int RenewalHoldMinutes { get; set; } = RentalPolicyConstants.DefaultRenewalHoldMinutes;
+    public int CheckoutExpirySeconds { get; set; } = RentalPolicyConstants.DefaultCheckoutExpirySeconds;
+
     /// <summary>
     /// When true, rejects access credential requests outside facility business hours (07:00 - 21:00).
     /// Default is false to allow 24/7 credential retrieval and smooth testing at night.

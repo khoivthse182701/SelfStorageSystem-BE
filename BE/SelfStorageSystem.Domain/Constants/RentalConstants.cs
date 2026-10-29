@@ -136,6 +136,37 @@ public static class StaffConstants
     public const string DefaultNotApplicable = "N/A";
     public const string DefaultCustomerName = "Customer";
     public const string DefaultCredentialStatusNone = "none";
+    public const int DefaultWalkInHoldMinutes = 60;
+}
+
+public static class StaffActionConstants
+{
+    public const string CheckIn = "check_in";
+    public const string ConfirmCheckIn = "confirm_checkin";
+    public const string TransferMoveOut = "transfer_move_out";
+    public const string ConfirmTransferMoveOut = "confirm_transfer_moveout";
+    public const string TransferOut = "transfer_out";
+    public const string TransferMoveIn = "transfer_move_in";
+    public const string ConfirmTransferMoveIn = "confirm_transfer_movein";
+    public const string TransferIn = "transfer_in";
+    public const string TransferCheckIn = "transfer_check_in";
+    public const string MoveOut = "move_out";
+    public const string ConfirmMoveOut = "confirm_moveout";
+}
+
+public static class MaintenanceCategoryConstants
+{
+    public const string Cleaning = "cleaning";
+    public const string Repair = "repair";
+    public const string Routine = "routine";
+    public const string Inspection = "inspection";
+}
+
+public static class TransferConstants
+{
+    public const string BillingPeriodPrefix = "TRANSFER:";
+    public const string InvoicePrefix = "INV-TRF-";
+    public const string DowngradePromoPrefix = "DOWNGRADE-";
 }
 
 public static class RentalSuspensionReasons
@@ -196,6 +227,15 @@ public static class RentalPolicyConstants
     public const int DefaultEstimatedPinSyncSeconds = 60;
     public const int MinRenewalMonths = 1;
     public const int MaxRenewalMonths = 12;
+    public const int DefaultTransferUnpaidHoldMinutes = 15;
+    public const int DefaultTransferExpiryCheckIntervalMinutes = 15;
+    public const decimal DefaultTransferOverduePenaltyRate = 0.5m;
+    public const int DefaultTransferRescheduleCutoffHours = 24;
+    public const decimal DefaultDowngradeVoucherDiscountPercent = 10m;
+    public const decimal DefaultDowngradeVoucherMaxAmount = 200000m;
+    public const int DefaultDowngradeVoucherValidityDays = 90;
+    public const int DefaultRenewalHoldMinutes = 15;
+    public const int DefaultCheckoutExpirySeconds = 900;
 }
 
 public static class RentalClaimTypes

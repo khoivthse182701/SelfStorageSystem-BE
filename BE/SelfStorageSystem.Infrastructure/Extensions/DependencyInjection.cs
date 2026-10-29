@@ -42,6 +42,7 @@ public static class DependencyInjection
         services.Configure<ReservationSettings>(configuration.GetSection(ReservationSettings.SectionName));
         services.Configure<PaymentSettings>(configuration.GetSection(PaymentSettings.SectionName));
         services.Configure<RentalSettings>(configuration.GetSection(RentalSettings.SectionName));
+        services.Configure<MediaSettings>(configuration.GetSection(MediaSettings.SectionName));
 
         services.AddHttpContextAccessor();
         services.AddScoped<IJwtTokenService, JwtTokenService>();

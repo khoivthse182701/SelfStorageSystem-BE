@@ -20,18 +20,21 @@ public class CustomerPaymentService : ICustomerPaymentService
     private readonly IEmailService _emailService;
     private readonly VietQrConfig _vietQrConfig;
     private readonly SePayConfig _sePayConfig;
+    private readonly RentalSettings _rentalSettings;
     private readonly ILogger<CustomerPaymentService> _logger;
 
     public CustomerPaymentService(
         SelfStorageDbContext dbContext,
         IEmailService emailService,
         IOptions<PaymentSettings> paymentOptions,
-        ILogger<CustomerPaymentService> logger)
+        ILogger<CustomerPaymentService> logger,
+        IOptions<RentalSettings>? rentalOptions = null)
     {
         _dbContext = dbContext;
         _emailService = emailService;
         _vietQrConfig = paymentOptions.Value.VietQr;
         _sePayConfig = paymentOptions.Value.SePay;
+        _rentalSettings = rentalOptions?.Value ?? new RentalSettings();
         _logger = logger;
     }
 
@@ -58,14 +61,14 @@ public class CustomerPaymentService : ICustomerPaymentService
                 .Include(r => r.Agreement)
                 .FirstOrDefaultAsync(r => r.Id == request.RenewalId.Value && r.RequestedBy == customerId, cancellationToken);
             if (renewal == null || renewal.Status != RenewalStatusConstants.PendingPayment ||
-                now - renewal.CreatedAt > TimeSpan.FromMinutes(15))
+                now - renewal.CreatedAt > TimeSpan.FromMinutes(_rentalSettings.RenewalHoldMinutes))
             {
                 throw AppException.FromError(PaymentErrors.InvoiceNotFound);
             }
 
             var months = (renewal.RequestedEndDate.Year - renewal.OldEndDate.Year) * 12 + renewal.RequestedEndDate.Month - renewal.OldEndDate.Month;
             var amount = (renewal.NewMonthlyRate ?? renewal.OldMonthlyRate) * Math.Max(1, months);
-            return BuildCheckoutResponse(0, 0, 0, $"RNW-{renewal.Id}", amount, 15 * 60, $"RNW{renewal.Id}");
+            return BuildCheckoutResponse(0, 0, 0, $"{PaymentConstants.RenewalInvoicePrefix}{renewal.Id}", amount, _rentalSettings.CheckoutExpirySeconds, $"{PaymentConstants.RenewalCheckoutPrefix}{renewal.Id}");
         }
 
         Reservation? reservation = null;
@@ -165,7 +168,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         // Independent invoices do not reserve a unit, but their QR session still
         // expires after 15 minutes to avoid presenting a stale payment screen.
         var expiresInSeconds = reservation == null
-            ? 15 * 60
+            ? _rentalSettings.CheckoutExpirySeconds
             : (int)Math.Max(0, (reservation.HoldUntil - now).TotalSeconds);
 
         // Dynamic invoice prefix configured from SePayConfig

@@ -11,7 +11,7 @@ namespace SelfStorageSystem.Controllers;
 
 [ApiController]
 [Route("api/admin")]
-[Authorize(Roles = RoleConstants.SystemAdministrator)]
+[Authorize(Roles = ManagerConstants.ManagerOrAdmin)]
 public class AdminController : ControllerBase
 {
     private readonly IAdminManagementService _adminService;
@@ -32,6 +32,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Danh sách người dùng, tìm kiếm & bộ lọc nâng cao (role, status, facilityId).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpGet("users")]
     [ProducesResponseType(typeof(ApiResponse<PagedResult<AdminUserSummaryDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetUsers(
@@ -45,6 +46,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Chi tiết hồ sơ nhân viên / khách hàng & lịch sử đăng nhập.
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpGet("users/{id:long}")]
     [ProducesResponseType(typeof(ApiResponse<AdminUserDetailDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
@@ -59,6 +61,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Tạo tài khoản nội bộ mới cho Staff / Manager / Admin.
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPost("users")]
     [ProducesResponseType(typeof(ApiResponse<AdminUserDetailDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -77,6 +80,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Khóa hoặc kích hoạt tài khoản người dùng.
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPut("users/{id:long}/status")]
     [ProducesResponseType(typeof(ApiResponse<AdminUserSummaryDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -96,6 +100,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Gán & cập nhật vai trò người dùng ([core].[user_roles]).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPut("users/{id:long}/roles")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<string>>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -119,6 +124,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Gán nhân sự vào điểm kho phụ trách ([core].[staff_facility_assignments]).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPost("staff-assignments")]
     [ProducesResponseType(typeof(ApiResponse<AdminStaffFacilityAssignmentDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -138,6 +144,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Thu hồi điều chuyển nhân sự khỏi điểm kho.
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpDelete("staff-assignments/{id:long}")]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
@@ -159,6 +166,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Tra cứu nhật ký kiểm toán hệ thống ([core].[audit_logs]).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpGet("audit-logs")]
     [ProducesResponseType(typeof(ApiResponse<PagedResult<AdminAuditLogDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetAuditLogs(
@@ -172,6 +180,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Xem nhật ký đăng nhập & cảnh báo các hành vi đăng nhập bất thường.
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpGet("login-histories")]
     [ProducesResponseType(typeof(ApiResponse<AdminLoginHistoryReportDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetLoginHistories(
@@ -185,6 +194,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Thống kê KPI chuỗi kho (doanh thu tổng, tỷ lệ lấp đầy toàn hệ thống).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpGet("dashboard/overview")]
     [ProducesResponseType(typeof(ApiResponse<AdminDashboardOverviewDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetDashboardOverview(CancellationToken cancellationToken)
@@ -228,6 +238,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Tạo cơ sở mới.
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPost("facilities")]
     [ProducesResponseType(typeof(ApiResponse<AdminFacilityDetailDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -246,6 +257,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Cập nhật thông tin cơ sở.
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPut("facilities/{id:long}")]
     [ProducesResponseType(typeof(ApiResponse<AdminFacilityDetailDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -266,6 +278,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Cập nhật nhanh trạng thái cơ sở (active / inactive / maintenance).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPut("facilities/{id:long}/status")]
     [ProducesResponseType(typeof(ApiResponse<AdminFacilityDetailDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -302,6 +315,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Thiết lập / cập nhật quy tắc tính phí toàn hệ thống hoặc theo cơ sở.
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPut("pricing/fees")]
     [ProducesResponseType(typeof(ApiResponse<OperationsFeeDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]

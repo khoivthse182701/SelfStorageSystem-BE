@@ -40,8 +40,8 @@ public class ManagerController : ControllerBase
         [FromQuery] string? status,
         [FromQuery] long? unitTypeId,
         [FromQuery] string? search,
-        [FromQuery] int pageNumber = 1,
-        [FromQuery] int pageSize = 20,
+        [FromQuery] int pageNumber = AdminConstants.DefaultPageNumber,
+        [FromQuery] int pageSize = AdminConstants.DefaultPageSize,
         CancellationToken cancellationToken = default)
     {
         if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
@@ -398,8 +398,8 @@ public class ManagerController : ControllerBase
         [FromRoute] long facilityId,
         [FromQuery] string? status,
         [FromQuery] string? search,
-        [FromQuery] int pageNumber = 1,
-        [FromQuery] int pageSize = 20,
+        [FromQuery] int pageNumber = AdminConstants.DefaultPageNumber,
+        [FromQuery] int pageSize = AdminConstants.DefaultPageSize,
         CancellationToken cancellationToken = default)
     {
         if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
@@ -492,6 +492,7 @@ public class ManagerController : ControllerBase
     /// Danh sách cơ sở mà Manager hiện tại được phân công quản lý (hoặc toàn bộ nếu là Admin).
     /// </summary>
     [HttpGet("my-facilities")]
+    [HttpGet("facilities")]
     [ProducesResponseType(typeof(ApiResponse<List<ManagerFacilityScopeDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetMyFacilities(CancellationToken cancellationToken = default)
     {
@@ -510,18 +511,23 @@ public class ManagerController : ControllerBase
     /// Biểu giá thuê ô kho tại cơ sở (áp dụng theo loại kho và thời điểm hiệu lực).
     /// </summary>
     [HttpGet("facilities/{facilityId:long}/pricing/rates")]
+    [HttpGet("pricing/rates")]
     [ProducesResponseType(typeof(ApiResponse<PagedResult<OperationsRateDto>>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetFacilityRates(
-        [FromRoute] long facilityId,
+        [FromRoute] long? facilityId,
         [FromQuery] OperationsRateQueryParameters query,
         CancellationToken cancellationToken)
     {
         if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
             return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
 
-        await _managerService.ValidateFacilityAccessAsync(facilityId, userId, isSystemAdmin, cancellationToken);
-        query.FacilityId = facilityId;
+        var targetFacilityId = facilityId ?? query.FacilityId;
+        if (targetFacilityId.HasValue)
+        {
+            await _managerService.ValidateFacilityAccessAsync(targetFacilityId.Value, userId, isSystemAdmin, cancellationToken);
+            query.FacilityId = targetFacilityId.Value;
+        }
 
         var result = await _operationsService.GetRatesAsync(query, cancellationToken);
         return Ok(ApiResponse<PagedResult<OperationsRateDto>>.Ok(result, "Retrieved facility rates successfully."));
@@ -532,21 +538,26 @@ public class ManagerController : ControllerBase
     /// Giá mới có hiệu lực từ ValidFrom, không sửa đổi hồi tố hợp đồng đang active.
     /// </summary>
     [HttpPut("facilities/{facilityId:long}/pricing/rates")]
+    [HttpPut("pricing/rates")]
     [ProducesResponseType(typeof(ApiResponse<OperationsRateDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> UpsertFacilityRate(
-        [FromRoute] long facilityId,
+        [FromRoute] long? facilityId,
         [FromBody] OperationsUpsertRateRequest request,
         CancellationToken cancellationToken)
     {
         if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
             return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
 
-        await _managerService.ValidateFacilityAccessAsync(facilityId, userId, isSystemAdmin, cancellationToken);
-        request.FacilityId = facilityId;
+        if (facilityId.HasValue)
+        {
+            request.FacilityId = facilityId.Value;
+        }
+
+        await _managerService.ValidateFacilityAccessAsync(request.FacilityId, userId, isSystemAdmin, cancellationToken);
 
         var result = await _operationsService.UpsertRateAsync(request, userId, cancellationToken);
         return Ok(ApiResponse<OperationsRateDto>.Ok(result, "Facility rate saved successfully."));
@@ -563,6 +574,31 @@ public class ManagerController : ControllerBase
     {
         var result = await _operationsService.GetFeesAsync(query, cancellationToken);
         return Ok(ApiResponse<PagedResult<OperationsFeeDto>>.Ok(result, "Retrieved fee rules successfully."));
+    }
+
+    /// <summary>
+    /// Thiết lập / cập nhật quy tắc tính phí toàn hệ thống hoặc theo cơ sở.
+    /// </summary>
+    [HttpPut("pricing/fees")]
+    [ProducesResponseType(typeof(ApiResponse<OperationsFeeDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpsertFee(
+        [FromBody] OperationsUpsertFeeRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        if (!isSystemAdmin && request.FacilityId.HasValue)
+        {
+            await _managerService.ValidateFacilityAccessAsync(request.FacilityId.Value, userId, isSystemAdmin, cancellationToken);
+        }
+
+        var result = await _operationsService.UpsertFeeAsync(request, userId, cancellationToken);
+        return Ok(ApiResponse<OperationsFeeDto>.Ok(result, "Fee rule saved successfully."));
     }
 
     /// <summary>
@@ -637,7 +673,11 @@ public class ManagerController : ControllerBase
 
     private bool TryGetCurrentUser(out long userId, out bool isSystemAdmin)
     {
-        isSystemAdmin = User.IsInRole(RoleConstants.SystemAdministrator);
+        isSystemAdmin = User.IsInRole(RoleConstants.SystemAdministrator) ||
+                        User.IsInRole("system_administrator") ||
+                        User.IsInRole("admin") ||
+                        User.IsInRole(RoleConstants.BusinessOperationsManager) ||
+                        User.IsInRole("business_operations_manager");
         userId = 0;
         var claim = User.FindFirstValue(ClaimTypes.NameIdentifier);
         return !string.IsNullOrEmpty(claim) && long.TryParse(claim, out userId);

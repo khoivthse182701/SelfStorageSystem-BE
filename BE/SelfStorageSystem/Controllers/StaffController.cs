@@ -73,6 +73,27 @@ public class StaffController : ControllerBase
         return Ok(ApiResponse<StaffUnitDetailDto>.Ok(result, "Retrieved unit detail successfully."));
     }
 
+    /// <summary>
+    /// Cập nhật trạng thái vật lý của ô kho (available, under_maintenance, cleaning, damaged...).
+    /// </summary>
+    [HttpPut("facilities/{facilityId:long}/units/{unitId:long}/physical-status")]
+    [HttpPut("units/{unitId:long}/status")]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateUnitStatus(
+        [FromRoute] long unitId,
+        [FromRoute] long? facilityId,
+        [FromBody] UpdateUnitStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        await _staffService.UpdateUnitStatusAsync(userId, unitId, request, cancellationToken);
+        return Ok(ApiResponse.Ok("Unit physical status updated successfully."));
+    }
+
     // ==========================================
     // 🛒 NHÓM 2: ĐẶT THUÊ KHO TẠI QUẦY (Walk-in Booking)
     // ==========================================
@@ -168,6 +189,26 @@ public class StaffController : ControllerBase
 
         await _staffService.AssignTicketToStaffAsync(userId, id, cancellationToken);
         return Ok(ApiResponse.Ok("Ticket assigned to staff successfully."));
+    }
+
+    /// <summary>
+    /// Staff gửi phản hồi hoặc ghi chú nội bộ cho Ticket.
+    /// </summary>
+    [HttpPost("tickets/{id:long}/messages")]
+    [HttpPost("support-tickets/{id:long}/messages")]
+    [ProducesResponseType(typeof(ApiResponse<StaffTicketMessageDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> AddTicketMessage(
+        [FromRoute] long id,
+        [FromBody] AddStaffTicketMessageRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.AddStaffTicketMessageAsync(userId, id, request, cancellationToken);
+        return Ok(ApiResponse<StaffTicketMessageDto>.Ok(result, "Ticket message added successfully."));
     }
 
     /// <summary>

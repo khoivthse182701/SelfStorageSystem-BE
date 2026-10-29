@@ -2,7 +2,7 @@ namespace SelfStorageSystem.Domain.Constants;
 
 public static class ManagerConstants
 {
-    public const string ManagerOrAdmin = "facility_manager,system_administrator";
+    public const string ManagerOrAdmin = "facility_manager,system_administrator,business_operations_manager,manager,admin";
 
     public const string DefaultMapMetadata = "{}";
     public const string DefaultActionDetails = "{}";

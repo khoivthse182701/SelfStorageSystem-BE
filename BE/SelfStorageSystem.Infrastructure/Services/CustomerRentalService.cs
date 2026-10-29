@@ -940,19 +940,19 @@ public class CustomerRentalService : ICustomerRentalService
         // Nếu kho mới rẻ hơn, tặng voucher ưu đãi cho khách hàng theo chính sách
         if (total <= 0 && targetRate.MonthlyRate < agreement.MonthlyRateSnapshot)
         {
-            var promoCode = $"DOWNGRADE-{transfer.AgreementId}-{Guid.NewGuid().ToString()[..4].ToUpper()}";
+            var promoCode = $"{TransferConstants.DowngradePromoPrefix}{transfer.AgreementId}-{Guid.NewGuid().ToString()[..4].ToUpper()}";
             var promo = new Promotion
             {
                 Code = promoCode,
                 Name = $"Ưu đãi chuyển kho tiết kiệm #{agreement.AgreementNo}",
                 Description = "Tặng voucher giảm giá 10% cho khách hàng khi chuyển đổi sang kho tiết kiệm hơn.",
                 DiscountType = PromotionDiscountTypeConstants.Percentage,
-                DiscountValue = 10m,
-                MaxDiscountAmount = 200000m,
+                DiscountValue = _rentalSettings.DowngradeVoucherDiscountPercent,
+                MaxDiscountAmount = _rentalSettings.DowngradeVoucherMaxAmount,
                 UsageLimit = 1,
                 PerCustomerLimit = 1,
                 ValidFrom = now,
-                ValidTo = now.AddDays(90),
+                ValidTo = now.AddDays(_rentalSettings.DowngradeVoucherValidityDays),
                 IsActive = true,
                 CreatedAt = now
             };
@@ -968,10 +968,10 @@ public class CustomerRentalService : ICustomerRentalService
         {
             var invoice = new Invoice
             {
-                InvoiceNo = $"INV-TRF-{now:yyyyMMdd}-{transfer.Id:D6}",
+                InvoiceNo = $"{TransferConstants.InvoicePrefix}{now:yyyyMMdd}-{transfer.Id:D6}",
                 CustomerId = agreement.CustomerId,
                 AgreementId = agreement.Id,
-                BillingPeriod = $"TRANSFER:{transfer.Id}",
+                BillingPeriod = $"{TransferConstants.BillingPeriodPrefix}{transfer.Id}",
                 IssueDate = today,
                 DueDate = today,
                 Currency = PaymentConstants.CurrencyVnd,
@@ -1045,9 +1045,9 @@ public class CustomerRentalService : ICustomerRentalService
             throw AppException.FromError(RentalErrors.TransferRescheduleLimitReached);
 
         var now = DateTimeOffset.UtcNow;
-        if (request.MoveOutDate != transfer.MoveOutDate && now > new DateTimeOffset(transfer.MoveOutDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(-24))
+        if (request.MoveOutDate != transfer.MoveOutDate && now > new DateTimeOffset(transfer.MoveOutDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(-_rentalSettings.TransferRescheduleCutoffHours))
             throw AppException.FromError(RentalErrors.TransferRescheduleDeadlinePassed);
-        if (request.MoveInDate != transfer.MoveInDate && now > new DateTimeOffset(transfer.MoveInDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(-24))
+        if (request.MoveInDate != transfer.MoveInDate && now > new DateTimeOffset(transfer.MoveInDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddHours(-_rentalSettings.TransferRescheduleCutoffHours))
             throw AppException.FromError(RentalErrors.TransferRescheduleDeadlinePassed);
 
         var today = DateOnly.FromDateTime(now.UtcDateTime);

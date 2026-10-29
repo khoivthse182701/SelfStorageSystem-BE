@@ -447,4 +447,170 @@ public class FacilityStaffServiceTests
         Assert.NotNull(updatedTicket.TicketAssignment);
         Assert.Equal(3L, updatedTicket.TicketAssignment.EmployeeId);
     }
+
+    [Fact]
+    public async Task QrConfirmAction_CheckIn_WithZeroDefaultIds_HandlesCorrectly_ByAgreementId()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var staffUser = new User { Id = 3, Email = "staff@system.local", PasswordHash = "hash", Status = "active" };
+        var customerUser = new User { Id = 10, Email = "cust@system.local", PasswordHash = "hash", Status = "active" };
+        var customer = new CustomerProfile { UserId = 10, FullName = "Customer Test" };
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "Thu Duc Facility", AddressLine = "123 Street", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var unit = new StorageUnit { Id = 101, FacilityId = 1, UnitTypeId = 1, UnitCode = "TD-101", PhysicalStatus = StorageUnitStatusConstants.Available, IsListed = true };
+        var agreement = new RentalAgreement
+        {
+            Id = 80,
+            AgreementNo = "AGR-HCM-80",
+            CustomerId = 10,
+            FacilityId = 1,
+            PolicyVersionId = 1,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(-1)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(2)),
+            MonthlyRateSnapshot = 1000000m,
+            DepositSnapshot = 1000000m,
+            DepositBalance = 1000000m,
+            Status = RentalAgreementStatusConstants.Draft,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        var allocation = new UnitAllocation
+        {
+            Id = 1,
+            AgreementId = 80,
+            StorageUnitId = 101,
+            AllocationKind = AllocationKindConstants.Rental,
+            AllocationStartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            AllocationEndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(1)),
+            Status = AllocationStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        db.Users.AddRange(staffUser, customerUser);
+        db.CustomerProfiles.Add(customer);
+        db.Facilities.Add(facility);
+        db.StorageUnits.Add(unit);
+        db.RentalAgreements.Add(agreement);
+        db.UnitAllocations.Add(allocation);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityStaffService(db);
+
+        // FE sends 0 instead of null for omitted IDs
+        var request = new StaffConfirmQrActionRequest(
+            ActionType: "check_in",
+            ReservationId: 0,
+            AgreementId: 80,
+            TransferRequestId: 0,
+            MoveOutId: 0,
+            UnitId: 0,
+            Notes: "Checked in with QR"
+        );
+
+        // Act
+        var result = await service.ConfirmQrActionAsync(employeeUserId: 3, request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.True(result.Success);
+        Assert.Equal("check_in", result.ActionType);
+        Assert.Equal(80L, result.AgreementId);
+        Assert.Equal(RentalAgreementStatusConstants.Active, result.AgreementStatus);
+        Assert.Equal(StorageUnitStatusConstants.Occupied, result.UnitStatus);
+
+        var updatedUnit = await db.StorageUnits.FindAsync(101L);
+        Assert.Equal(StorageUnitStatusConstants.Occupied, updatedUnit!.PhysicalStatus);
+
+        var updatedAgreement = await db.RentalAgreements.FindAsync(80L);
+        Assert.Equal(RentalAgreementStatusConstants.Active, updatedAgreement!.Status);
+        Assert.NotNull(updatedAgreement.CheckedInAt);
+    }
+
+    [Fact]
+    public async Task AddStaffTicketMessageAsync_WithValidTicket_AddsMessageSuccessfully()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var staffUser = new User { Id = 3, Email = "staff@system.local", PasswordHash = "hash", Status = "active" };
+        var employee = new EmployeeProfile { UserId = 3, EmployeeCode = "EMP-003", FullName = "Staff Nguyen", EmploymentStatus = "active" };
+        var customerUser = new User { Id = 10, Email = "cust@system.local", PasswordHash = "hash", Status = "active" };
+        var customer = new CustomerProfile { UserId = 10, FullName = "Customer Test" };
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "Thu Duc Facility", AddressLine = "123 Street", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+
+        var ticket = new SupportTicket
+        {
+            Id = 888,
+            TicketNo = "TCK-888",
+            CustomerId = 10,
+            FacilityId = 1,
+            Category = "general",
+            Priority = TicketPriorityConstants.Normal,
+            Subject = "Test Ticket",
+            Description = "Need assistance",
+            Status = TicketStatusConstants.Open,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        db.Users.AddRange(staffUser, customerUser);
+        db.EmployeeProfiles.Add(employee);
+        db.CustomerProfiles.Add(customer);
+        db.Facilities.Add(facility);
+        db.SupportTickets.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityStaffService(db);
+        var request = new AddStaffTicketMessageRequest("Staff is investigating the issue", IsInternal: false);
+
+        // Act
+        var result = await service.AddStaffTicketMessageAsync(employeeUserId: 3, ticketId: 888, request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(888L, result.TicketId);
+        Assert.Equal("Staff is investigating the issue", result.Body);
+        Assert.False(result.IsInternal);
+        Assert.Equal("Staff Nguyen", result.AuthorName);
+
+        var msg = await db.TicketMessages.FirstOrDefaultAsync(m => m.TicketId == 888);
+        Assert.NotNull(msg);
+        Assert.Equal("Staff is investigating the issue", msg.Body);
+    }
+
+    [Fact]
+    public async Task UpdateUnitStatusAsync_WithValidStaffAndUnit_UpdatesPhysicalStatus()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var staffUser = new User { Id = 3, Email = "staff@system.local", PasswordHash = "hash", Status = "active" };
+        var employee = new EmployeeProfile { UserId = 3, EmployeeCode = "EMP-003", FullName = "Staff Nguyen", EmploymentStatus = "active" };
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "Thu Duc Facility", AddressLine = "123 Street", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var assignment = new StaffFacilityAssignment
+        {
+            Id = 1,
+            EmployeeId = 3,
+            FacilityId = 1,
+            AssignmentRole = "staff",
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-10)
+        };
+        var unit = new StorageUnit { Id = 101, FacilityId = 1, UnitTypeId = 1, UnitCode = "TD-101", PhysicalStatus = StorageUnitStatusConstants.Available, IsListed = true };
+
+        db.Users.Add(staffUser);
+        db.EmployeeProfiles.Add(employee);
+        db.Facilities.Add(facility);
+        db.StaffFacilityAssignments.Add(assignment);
+        db.StorageUnits.Add(unit);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityStaffService(db);
+        var request = new UpdateUnitStatusRequest(PhysicalStatus: "under_maintenance");
+
+        // Act
+        await service.UpdateUnitStatusAsync(employeeUserId: 3, unitId: 101, request);
+
+        // Assert
+        var updatedUnit = await db.StorageUnits.FindAsync(101L);
+        Assert.NotNull(updatedUnit);
+        Assert.Equal("under_maintenance", updatedUnit.PhysicalStatus);
+    }
 }

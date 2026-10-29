@@ -458,7 +458,8 @@ public record StaffFacilityUnitDto(
 );
 
 public record UpdateUnitStatusRequest(
-    string Status
+    string? Status = null,
+    string? PhysicalStatus = null
 );
 
 public record CreateMaintenanceWorkOrderRequest(

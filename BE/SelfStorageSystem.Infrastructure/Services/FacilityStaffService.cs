@@ -341,7 +341,7 @@ public class FacilityStaffService : IFacilityStaffService
             BookingFeeSnapshot = 0m,
             DiscountSnapshot = 0m,
             QuotedTotal = (monthlyRent * durationMonths) + depositAmount,
-            HoldUntil = now.AddMinutes(60),
+            HoldUntil = now.AddMinutes(StaffConstants.DefaultWalkInHoldMinutes),
             Status = ReservationStatusConstants.Pending,
             CreatedAt = now,
             UpdatedAt = now
@@ -409,15 +409,20 @@ public class FacilityStaffService : IFacilityStaffService
 
         var prefix = !string.IsNullOrWhiteSpace(_paymentSettings.SePay?.InvoicePrefix)
             ? _paymentSettings.SePay.InvoicePrefix.Trim()
-            : "DH";
+            : SePayConstants.DefaultInvoicePrefix;
         var transferContent = $"{prefix}{invoice.Id}";
 
-        var bankCode = _paymentSettings.VietQr?.BankCode ?? "MBBank";
-        var accNo = _paymentSettings.VietQr?.AccountNo ?? "0817495759";
-        var accName = _paymentSettings.VietQr?.AccountName ?? "VO THAI HOANG KHOI";
-        var template = _paymentSettings.VietQr?.Template ?? "compact";
+        var baseUrl = !string.IsNullOrWhiteSpace(_paymentSettings.VietQr?.BaseUrl)
+            ? _paymentSettings.VietQr.BaseUrl.TrimEnd('/')
+            : SePayConstants.DefaultBaseUrl;
 
-        var qrImageUrl = $"https://img.vietqr.io/image/{bankCode}-{accNo}-{template}.png?amount={(long)totalAmount}&addInfo={Uri.EscapeDataString(transferContent)}&accountName={Uri.EscapeDataString(accName)}";
+        var bankCode = _paymentSettings.VietQr?.BankCode ?? SePayConstants.DefaultBankCode;
+        var accNo = _paymentSettings.VietQr?.AccountNo ?? string.Empty;
+        var accName = _paymentSettings.VietQr?.AccountName ?? string.Empty;
+        var template = _paymentSettings.VietQr?.Template ?? SePayConstants.DefaultTemplate;
+        var showInfo = (_paymentSettings.VietQr?.ShowInfo ?? true) ? "true" : "false";
+
+        var qrImageUrl = $"{baseUrl}?bank={Uri.EscapeDataString(bankCode)}&acc={Uri.EscapeDataString(accNo)}&template={Uri.EscapeDataString(template)}&showinfo={showInfo}&holder={Uri.EscapeDataString(accName)}&amount={(long)totalAmount}&memo={Uri.EscapeDataString(transferContent)}";
 
         return new StaffWalkInBookingResponse(
             ReservationId: reservation.Id,
@@ -521,7 +526,7 @@ public class FacilityStaffService : IFacilityStaffService
                 }
 
                 return new StaffQrVerifyResponse(
-                    ActionType: "check_in",
+                    ActionType: StaffActionConstants.CheckIn,
                     Title: $"Khách {reservation.Customer.FullName} - Nhận kho {reservation.Facility.Name}",
                     Description: $"Đơn đặt chỗ {reservation.ReservationCode} ({reservation.UnitType.Name} - {allocatedUnit?.UnitCode ?? "Chưa chỉ định kho"}).",
                     Customer: customerDto,
@@ -578,7 +583,7 @@ public class FacilityStaffService : IFacilityStaffService
                     );
 
                     return new StaffQrVerifyResponse(
-                        ActionType: "move_out",
+                        ActionType: StaffActionConstants.MoveOut,
                         Title: $"Khách {moveOut.Agreement.Customer.FullName} - Trả kho {moveOut.Agreement.Facility.Name}",
                         Description: $"Yêu cầu dọn kho hợp đồng {moveOut.Agreement.AgreementNo} ngày {moveOut.RequestedMoveOutDate:yyyy-MM-dd}.",
                         Customer: customerDto,
@@ -657,7 +662,7 @@ public class FacilityStaffService : IFacilityStaffService
                 if (activeMoveOut != null)
                 {
                     return new StaffQrVerifyResponse(
-                        ActionType: "move_out",
+                        ActionType: StaffActionConstants.MoveOut,
                         Title: $"Khách {agreement.Customer.FullName} - Trả kho {agreement.Facility.Name}",
                         Description: $"Khách hàng có lịch dọn kho vào ngày {activeMoveOut.RequestedMoveOutDate:yyyy-MM-dd}.",
                         Customer: new StaffCustomerSummaryDto(agreement.CustomerId, agreement.Customer.FullName, agreement.Customer.User?.PhoneNumber, agreement.Customer.User?.Email),
@@ -725,7 +730,7 @@ public class FacilityStaffService : IFacilityStaffService
         if (transfer.Status == TransferRequestStatusConstants.MovedOutInTransit)
         {
             return new StaffQrVerifyResponse(
-                ActionType: "transfer_move_in",
+                ActionType: StaffActionConstants.TransferMoveIn,
                 Title: $"Khách {transfer.Agreement.Customer.FullName} - Nhận kho {requestedFacilityName} khi chuyển cơ sở",
                 Description: $"Đã dọn kho đi từ {transfer.FromUnit.Facility.Name}. Sẵn sàng nhận ô kho tại {requestedFacilityName}.",
                 Customer: customerDto,
@@ -759,20 +764,27 @@ public class FacilityStaffService : IFacilityStaffService
         var now = DateTimeOffset.UtcNow;
         var action = request.ActionType.Trim().ToLowerInvariant();
 
+        // Normalize defensive IDs: treat non-positive values (<= 0) as null
+        long? reservationId = request.ReservationId > 0 ? request.ReservationId : null;
+        long? agreementId = request.AgreementId > 0 ? request.AgreementId : null;
+        long? transferRequestId = request.TransferRequestId > 0 ? request.TransferRequestId : null;
+        long? moveOutId = request.MoveOutId > 0 ? request.MoveOutId : null;
+        long? unitId = request.UnitId > 0 ? request.UnitId : null;
+
         // ----------------------------------------------------
         // ACTION 1: CHECK-IN NHẬN KHO
         // ----------------------------------------------------
-        if (action == "check_in" || action == "confirm_checkin")
+        if (action == StaffActionConstants.CheckIn || action == StaffActionConstants.ConfirmCheckIn)
         {
             RentalAgreement? agreement = null;
             StorageUnit? unit = null;
 
-            if (request.ReservationId.HasValue)
+            if (reservationId.HasValue)
             {
                 var reservation = await _dbContext.Reservations
                     .Include(r => r.RentalAgreement)
                     .Include(r => r.UnitAllocation).ThenInclude(a => a!.StorageUnit)
-                    .FirstOrDefaultAsync(r => r.Id == request.ReservationId.Value, cancellationToken);
+                    .FirstOrDefaultAsync(r => r.Id == reservationId.Value, cancellationToken);
 
                 if (reservation == null) throw AppException.FromError(StaffErrors.ReservationNotFound);
 
@@ -780,9 +792,9 @@ public class FacilityStaffService : IFacilityStaffService
                 reservation.UpdatedAt = now;
 
                 unit = reservation.UnitAllocation?.StorageUnit;
-                if (unit == null && request.UnitId.HasValue)
+                if (unit == null && unitId.HasValue)
                 {
-                    unit = await _dbContext.StorageUnits.FindAsync(request.UnitId.Value);
+                    unit = await _dbContext.StorageUnits.FindAsync(new object[] { unitId.Value }, cancellationToken);
                 }
 
                 agreement = reservation.RentalAgreement;
@@ -811,11 +823,11 @@ public class FacilityStaffService : IFacilityStaffService
                     await _dbContext.SaveChangesAsync(cancellationToken);
                 }
             }
-            else if (request.AgreementId.HasValue)
+            else if (agreementId.HasValue)
             {
                 agreement = await _dbContext.RentalAgreements
                     .Include(a => a.UnitAllocations.Where(ua => ua.Status == AllocationStatusConstants.Active)).ThenInclude(ua => ua.StorageUnit)
-                    .FirstOrDefaultAsync(a => a.Id == request.AgreementId.Value, cancellationToken);
+                    .FirstOrDefaultAsync(a => a.Id == agreementId.Value, cancellationToken);
 
                 if (agreement == null) throw AppException.FromError(StaffErrors.AgreementNotFound);
                 unit = agreement.UnitAllocations.FirstOrDefault()?.StorageUnit;
@@ -857,7 +869,7 @@ public class FacilityStaffService : IFacilityStaffService
 
             return new StaffConfirmQrActionResultDto(
                 Success: true,
-                ActionType: "check_in",
+                ActionType: StaffActionConstants.CheckIn,
                 Message: "Kích hoạt hợp đồng và nhận kho thành công. Ô kho đã chuyển sang trạng thái Occupied.",
                 AgreementId: agreement.Id,
                 AgreementStatus: agreement.Status,
@@ -869,12 +881,29 @@ public class FacilityStaffService : IFacilityStaffService
         // ----------------------------------------------------
         // ACTION 2: DỌN KHO CHUYỂN CƠ SỞ (transfer_move_out)
         // ----------------------------------------------------
-        if (action == "transfer_move_out" || action == "confirm_transfer_moveout" || action == "transfer_out")
+        if (action == StaffActionConstants.TransferMoveOut || action == StaffActionConstants.ConfirmTransferMoveOut || action == StaffActionConstants.TransferOut)
         {
-            var transfer = await _dbContext.UnitTransferRequests
+            var transferQuery = _dbContext.UnitTransferRequests
                 .Include(t => t.FromUnit)
                 .Include(t => t.Agreement)
-                .FirstOrDefaultAsync(t => t.Id == (request.TransferRequestId ?? 0) || t.AgreementId == (request.AgreementId ?? 0), cancellationToken);
+                .AsQueryable();
+
+            UnitTransferRequest? transfer = null;
+            if (transferRequestId.HasValue && agreementId.HasValue)
+            {
+                transfer = await transferQuery.FirstOrDefaultAsync(
+                    t => t.Id == transferRequestId.Value || t.AgreementId == agreementId.Value, cancellationToken);
+            }
+            else if (transferRequestId.HasValue)
+            {
+                transfer = await transferQuery.FirstOrDefaultAsync(
+                    t => t.Id == transferRequestId.Value, cancellationToken);
+            }
+            else if (agreementId.HasValue)
+            {
+                transfer = await transferQuery.FirstOrDefaultAsync(
+                    t => t.AgreementId == agreementId.Value, cancellationToken);
+            }
 
             if (transfer == null) throw AppException.FromError(StaffErrors.TransferNotFound);
             if (transfer.Status != TransferRequestStatusConstants.Paid && transfer.Status != TransferRequestStatusConstants.Scheduled)
@@ -883,7 +912,7 @@ public class FacilityStaffService : IFacilityStaffService
             transfer.Status = TransferRequestStatusConstants.MovedOutInTransit;
 
             // Free origin unit and create cleaning ticket
-            var fromUnit = await _dbContext.StorageUnits.FindAsync(transfer.FromUnitId);
+            var fromUnit = await _dbContext.StorageUnits.FindAsync(new object[] { transfer.FromUnitId }, cancellationToken);
             if (fromUnit != null)
             {
                 fromUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
@@ -896,7 +925,7 @@ public class FacilityStaffService : IFacilityStaffService
                     FacilityId = fromUnit.FacilityId,
                     AgreementId = transfer.AgreementId,
                     StorageUnitId = fromUnit.Id,
-                    Category = "cleaning",
+                    Category = MaintenanceCategoryConstants.Cleaning,
                     Priority = TicketPriorityConstants.Normal,
                     Subject = $"Dọn vệ sinh ô kho {fromUnit.UnitCode} sau khi khách dọn đi",
                     Description = $"Khách hàng đã hoàn tất dọn kho để chuyển cơ sở. Nhân viên cần kiểm tra hiện trạng và dọn dẹp sạch sẽ ô kho {fromUnit.UnitCode}.",
@@ -920,7 +949,7 @@ public class FacilityStaffService : IFacilityStaffService
 
             return new StaffConfirmQrActionResultDto(
                 Success: true,
-                ActionType: "transfer_move_out",
+                ActionType: StaffActionConstants.TransferMoveOut,
                 Message: "Đã xác nhận dọn kho chuyển cơ sở. Trạng thái chuyển sang MovedOut_InTransit, đã nhả kho và tạo ticket dọn vệ sinh.",
                 AgreementId: transfer.AgreementId,
                 AgreementStatus: transfer.Agreement.Status,
@@ -932,12 +961,29 @@ public class FacilityStaffService : IFacilityStaffService
         // ----------------------------------------------------
         // ACTION 3: NHẬN KHO KHI CHUYỂN CƠ SỞ (transfer_move_in)
         // ----------------------------------------------------
-        if (action == "transfer_move_in" || action == "confirm_transfer_movein" || action == "transfer_in" || action == "transfer_check_in")
+        if (action == StaffActionConstants.TransferMoveIn || action == StaffActionConstants.ConfirmTransferMoveIn || action == StaffActionConstants.TransferIn || action == StaffActionConstants.TransferCheckIn)
         {
-            var transfer = await _dbContext.UnitTransferRequests
+            var transferQuery = _dbContext.UnitTransferRequests
                 .Include(t => t.ToUnit)
                 .Include(t => t.Agreement)
-                .FirstOrDefaultAsync(t => t.Id == (request.TransferRequestId ?? 0) || t.AgreementId == (request.AgreementId ?? 0), cancellationToken);
+                .AsQueryable();
+
+            UnitTransferRequest? transfer = null;
+            if (transferRequestId.HasValue && agreementId.HasValue)
+            {
+                transfer = await transferQuery.FirstOrDefaultAsync(
+                    t => t.Id == transferRequestId.Value || t.AgreementId == agreementId.Value, cancellationToken);
+            }
+            else if (transferRequestId.HasValue)
+            {
+                transfer = await transferQuery.FirstOrDefaultAsync(
+                    t => t.Id == transferRequestId.Value, cancellationToken);
+            }
+            else if (agreementId.HasValue)
+            {
+                transfer = await transferQuery.FirstOrDefaultAsync(
+                    t => t.AgreementId == agreementId.Value, cancellationToken);
+            }
 
             if (transfer == null) throw AppException.FromError(StaffErrors.TransferNotFound);
             if (transfer.Status != TransferRequestStatusConstants.MovedOutInTransit)
@@ -947,9 +993,9 @@ public class FacilityStaffService : IFacilityStaffService
             transfer.CompletedAt = now;
 
             StorageUnit? toUnit = transfer.ToUnit;
-            if (toUnit == null && request.UnitId.HasValue)
+            if (toUnit == null && unitId.HasValue)
             {
-                toUnit = await _dbContext.StorageUnits.FindAsync(request.UnitId.Value);
+                toUnit = await _dbContext.StorageUnits.FindAsync(new object[] { unitId.Value }, cancellationToken);
                 transfer.ToUnitId = toUnit?.Id;
             }
 
@@ -991,7 +1037,7 @@ public class FacilityStaffService : IFacilityStaffService
 
             return new StaffConfirmQrActionResultDto(
                 Success: true,
-                ActionType: "transfer_move_in",
+                ActionType: StaffActionConstants.TransferMoveIn,
                 Message: "Đã hoàn tất nhận ô kho tại cơ sở mới khi chuyển kho.",
                 AgreementId: transfer.AgreementId,
                 AgreementStatus: transfer.Agreement.Status,
@@ -1003,96 +1049,112 @@ public class FacilityStaffService : IFacilityStaffService
         // ----------------------------------------------------
         // ACTION 4: MOVE-OUT TRẢ KHO HOÀN TẤT
         // ----------------------------------------------------
-        if (action == "move_out" || action == "confirm_moveout")
+        if (action == StaffActionConstants.MoveOut || action == StaffActionConstants.ConfirmMoveOut)
         {
-            var moveOut = await _dbContext.MoveOutRequests
+            var moveOutQuery = _dbContext.MoveOutRequests
                 .Include(m => m.Agreement)
-                .FirstOrDefaultAsync(m => m.Id == (request.MoveOutId ?? 0) || m.AgreementId == (request.AgreementId ?? 0), cancellationToken);
+                .AsQueryable();
 
-            if (moveOut != null)
+            MoveOutRequest? moveOut = null;
+            if (moveOutId.HasValue && agreementId.HasValue)
             {
-                moveOut.Status = MoveOutStatusConstants.Completed;
-                moveOut.Agreement.Status = RentalAgreementStatusConstants.Terminated;
-                moveOut.Agreement.CheckedOutAt = now;
-                moveOut.Agreement.ActualEndDate = DateOnly.FromDateTime(DateTime.UtcNow);
+                moveOut = await moveOutQuery.FirstOrDefaultAsync(
+                    m => m.Id == moveOutId.Value || m.AgreementId == agreementId.Value, cancellationToken);
+            }
+            else if (moveOutId.HasValue)
+            {
+                moveOut = await moveOutQuery.FirstOrDefaultAsync(
+                    m => m.Id == moveOutId.Value, cancellationToken);
+            }
+            else if (agreementId.HasValue)
+            {
+                moveOut = await moveOutQuery.FirstOrDefaultAsync(
+                    m => m.AgreementId == agreementId.Value, cancellationToken);
+            }
 
-                var allocations = await _dbContext.UnitAllocations
-                    .Include(a => a.StorageUnit)
-                    .Where(a => a.AgreementId == moveOut.AgreementId && a.Status == AllocationStatusConstants.Active)
-                    .ToListAsync(cancellationToken);
+            if (moveOut == null) throw AppException.FromError(StaffErrors.MoveOutNotFound);
 
-                foreach (var a in allocations)
+            moveOut.Status = MoveOutStatusConstants.Completed;
+            moveOut.Agreement.Status = RentalAgreementStatusConstants.Terminated;
+            moveOut.Agreement.CheckedOutAt = now;
+            moveOut.Agreement.ActualEndDate = DateOnly.FromDateTime(DateTime.UtcNow);
+
+            var allocations = await _dbContext.UnitAllocations
+                .Include(a => a.StorageUnit)
+                .Where(a => a.AgreementId == moveOut.AgreementId && a.Status == AllocationStatusConstants.Active)
+                .ToListAsync(cancellationToken);
+
+            foreach (var a in allocations)
+            {
+                a.Status = AllocationStatusConstants.Released;
+                a.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
+                a.StorageUnit.UpdatedAt = now;
+
+                var cleaningTicket = new SupportTicket
                 {
-                    a.Status = AllocationStatusConstants.Released;
-                    a.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
-                    a.StorageUnit.UpdatedAt = now;
+                    TicketNo = TicketConstants.GenerateTicketNo(),
+                    CustomerId = moveOut.Agreement.CustomerId,
+                    FacilityId = moveOut.Agreement.FacilityId,
+                    AgreementId = moveOut.AgreementId,
+                    StorageUnitId = a.StorageUnitId,
+                    Category = MaintenanceCategoryConstants.Cleaning,
+                    Priority = TicketPriorityConstants.Normal,
+                    Subject = $"Dọn vệ sinh ô kho {a.StorageUnit.UnitCode} sau khi khách trả kho",
+                    Description = $"Khách hàng đã hoàn tất trả kho hợp đồng {moveOut.Agreement.AgreementNo}. Nhân viên cần kiểm tra hiện trạng và dọn dẹp sạch sẽ ô kho {a.StorageUnit.UnitCode}.",
+                    Status = TicketStatusConstants.Open,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                _dbContext.SupportTickets.Add(cleaningTicket);
+            }
 
-                    var cleaningTicket = new SupportTicket
+            // Tự động tạo bản ghi Refund trong [operations].[refunds] để Manager duyệt hoàn cọc
+            var depositAmount = moveOut.Agreement.DepositSnapshot > 0 
+                ? moveOut.Agreement.DepositSnapshot 
+                : moveOut.Agreement.DepositBalance;
+
+            if (depositAmount > 0)
+            {
+                var existingRefund = await _dbContext.Refunds
+                    .FirstOrDefaultAsync(r => r.AgreementId == moveOut.AgreementId, cancellationToken);
+
+                if (existingRefund == null)
+                {
+                    var lastPayment = await _dbContext.Payments
+                        .Where(p => p.CustomerId == moveOut.Agreement.CustomerId && p.Status == PaymentConstants.StatusSucceeded)
+                        .OrderByDescending(p => p.CreatedAt)
+                        .FirstOrDefaultAsync(cancellationToken);
+
+                    var paymentId = lastPayment?.Id ?? 1L;
+                    var refund = new Refund
                     {
-                        TicketNo = TicketConstants.GenerateTicketNo(),
-                        CustomerId = moveOut.Agreement.CustomerId,
-                        FacilityId = moveOut.Agreement.FacilityId,
+                        PaymentId = paymentId,
                         AgreementId = moveOut.AgreementId,
-                        StorageUnitId = a.StorageUnitId,
-                        Category = "cleaning",
-                        Priority = TicketPriorityConstants.Normal,
-                        Subject = $"Dọn vệ sinh ô kho {a.StorageUnit.UnitCode} sau khi khách trả kho",
-                        Description = $"Khách hàng đã hoàn tất trả kho hợp đồng {moveOut.Agreement.AgreementNo}. Nhân viên cần kiểm tra hiện trạng và dọn dẹp sạch sẽ ô kho {a.StorageUnit.UnitCode}.",
-                        Status = TicketStatusConstants.Open,
+                        Amount = depositAmount,
+                        Currency = PaymentConstants.CurrencyVnd,
+                        Reason = $"Tự động tạo yêu cầu hoàn cọc sau khi trả kho hợp đồng {moveOut.Agreement.AgreementNo}",
+                        Provider = lastPayment?.Provider ?? PaymentConstants.ProviderManual,
+                        IdempotencyKey = $"{PaymentConstants.RefundMoveOutPrefix}{moveOut.AgreementId}-{now.ToUnixTimeSeconds()}",
+                        Status = RefundStatusConstants.Pending,
+                        RequestedBy = moveOut.Agreement.CustomerId,
                         CreatedAt = now,
                         UpdatedAt = now
                     };
-                    _dbContext.SupportTickets.Add(cleaningTicket);
+                    _dbContext.Refunds.Add(refund);
                 }
-
-                // Tự động tạo bản ghi Refund trong [operations].[refunds] để Manager duyệt hoàn cọc
-                var depositAmount = moveOut.Agreement.DepositSnapshot > 0 
-                    ? moveOut.Agreement.DepositSnapshot 
-                    : moveOut.Agreement.DepositBalance;
-
-                if (depositAmount > 0)
-                {
-                    var existingRefund = await _dbContext.Refunds
-                        .FirstOrDefaultAsync(r => r.AgreementId == moveOut.AgreementId, cancellationToken);
-
-                    if (existingRefund == null)
-                    {
-                        var lastPayment = await _dbContext.Payments
-                            .Where(p => p.CustomerId == moveOut.Agreement.CustomerId && p.Status == PaymentConstants.StatusSucceeded)
-                            .OrderByDescending(p => p.CreatedAt)
-                            .FirstOrDefaultAsync(cancellationToken);
-
-                        var paymentId = lastPayment?.Id ?? 1L;
-                        var refund = new Refund
-                        {
-                            PaymentId = paymentId,
-                            AgreementId = moveOut.AgreementId,
-                            Amount = depositAmount,
-                            Currency = "VND",
-                            Reason = $"Tự động tạo yêu cầu hoàn cọc sau khi trả kho hợp đồng {moveOut.Agreement.AgreementNo}",
-                            Provider = lastPayment?.Provider ?? "manual",
-                            IdempotencyKey = $"REF-MOVEOUT-{moveOut.AgreementId}-{now.ToUnixTimeSeconds()}",
-                            Status = RefundStatusConstants.Pending,
-                            RequestedBy = moveOut.Agreement.CustomerId,
-                            CreatedAt = now,
-                            UpdatedAt = now
-                        };
-                        _dbContext.Refunds.Add(refund);
-                    }
-                }
-
-                await _dbContext.SaveChangesAsync(cancellationToken);
-
-                return new StaffConfirmQrActionResultDto(
-                    Success: true,
-                    ActionType: "move_out",
-                    Message: "Đã xác nhận trả kho thành công. Hợp đồng đã hoàn tất, ô kho chuyển sang Cleaning và đã tạo yêu cầu hoàn cọc chờ duyệt.",
-                    AgreementId: moveOut.AgreementId,
-                    AgreementStatus: moveOut.Agreement.Status,
-                    UnitId: allocations.FirstOrDefault()?.StorageUnitId,
-                    UnitStatus: StorageUnitStatusConstants.Maintenance
-                );
             }
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            return new StaffConfirmQrActionResultDto(
+                Success: true,
+                ActionType: StaffActionConstants.MoveOut,
+                Message: "Đã xác nhận trả kho thành công. Hợp đồng đã hoàn tất, ô kho chuyển sang Cleaning và đã tạo yêu cầu hoàn cọc chờ duyệt.",
+                AgreementId: moveOut.AgreementId,
+                AgreementStatus: moveOut.Agreement.Status,
+                UnitId: allocations.FirstOrDefault()?.StorageUnitId,
+                UnitStatus: StorageUnitStatusConstants.Maintenance
+            );
         }
 
         throw AppException.FromError(StaffErrors.InvalidStatus);
@@ -1296,8 +1358,8 @@ public class FacilityStaffService : IFacilityStaffService
                 ticket.Category.Contains("maint", StringComparison.OrdinalIgnoreCase) ||
                 ticket.Category.Contains("repair", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(unit.PhysicalStatus, StorageUnitStatusConstants.Maintenance, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(unit.PhysicalStatus, "cleaning", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(unit.PhysicalStatus, "under_maintenance", StringComparison.OrdinalIgnoreCase);
+                string.Equals(unit.PhysicalStatus, StorageUnitStatusConstants.Cleaning, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(unit.PhysicalStatus, StorageUnitStatusConstants.UnderMaintenanceValue, StringComparison.OrdinalIgnoreCase);
 
             if (isMaintenanceOrCleaning)
             {
@@ -1545,6 +1607,10 @@ public class FacilityStaffService : IFacilityStaffService
     public async Task<StaffTicketMessageDto> AddStaffTicketMessageAsync(long employeeUserId, long ticketId, AddStaffTicketMessageRequest request, CancellationToken cancellationToken = default)
     {
         var emp = await GetEmployeeProfileAsync(employeeUserId, cancellationToken);
+        var ticket = await _dbContext.SupportTickets.FirstOrDefaultAsync(t => t.Id == ticketId, cancellationToken);
+        if (ticket == null)
+            throw AppException.FromError(StaffErrors.TicketNotFound);
+
         var msg = new TicketMessage { TicketId = ticketId, AuthorUserId = employeeUserId, Body = request.Body, IsInternal = request.IsInternal, CreatedAt = DateTimeOffset.UtcNow };
         _dbContext.TicketMessages.Add(msg);
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -1567,9 +1633,16 @@ public class FacilityStaffService : IFacilityStaffService
     {
         var unit = await _dbContext.StorageUnits.FirstOrDefaultAsync(u => u.Id == unitId, cancellationToken);
         if (unit == null) throw AppException.FromError(StaffErrors.UnitNotFound);
-        unit.PhysicalStatus = request.Status;
-        unit.UpdatedAt = DateTimeOffset.UtcNow;
-        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        await ResolveFacilityIdAsync(employeeUserId, unit.FacilityId, cancellationToken);
+
+        var targetStatus = !string.IsNullOrWhiteSpace(request.PhysicalStatus) ? request.PhysicalStatus : request.Status;
+        if (!string.IsNullOrWhiteSpace(targetStatus))
+        {
+            unit.PhysicalStatus = targetStatus.Trim().ToLowerInvariant();
+            unit.UpdatedAt = DateTimeOffset.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public async Task<MaintenanceWorkOrderDto> CreateMaintenanceOrderAsync(long employeeUserId, long unitId, CreateMaintenanceWorkOrderRequest request, CancellationToken cancellationToken = default)

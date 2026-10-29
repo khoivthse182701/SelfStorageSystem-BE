@@ -128,4 +128,30 @@ public class MediaServiceTests : IDisposable
         Assert.Equal("photo1.png", results[0].OriginalName);
         Assert.Equal("photo2.webp", results[1].OriginalName);
     }
+
+    [Fact]
+    public async Task UploadImage_CustomMediaSettings_ShouldRespectConfiguredSizeAndFolder()
+    {
+        // Arrange
+        var customSettings = new SelfStorageSystem.Application.Settings.MediaSettings
+        {
+            MaxFileSizeBytes = 500,
+            UploadFolder = "custom/assets"
+        };
+        var optionsMock = new Mock<Microsoft.Extensions.Options.IOptions<SelfStorageSystem.Application.Settings.MediaSettings>>();
+        optionsMock.Setup(o => o.Value).Returns(customSettings);
+
+        var customService = new MediaService(optionsMock.Object, _envMock.Object, _httpContextAccessorMock.Object, _loggerMock.Object);
+
+        // 600 bytes should fail
+        var oversizedFile = CreateMockFormFile("too_big.jpg", "image/jpeg", new byte[600]);
+        await Assert.ThrowsAsync<AppValidationException>(() => customService.UploadImageAsync(oversizedFile));
+
+        // 300 bytes should succeed and use custom/assets in url
+        var validFile = CreateMockFormFile("small.jpg", "image/jpeg", new byte[300]);
+        var result = await customService.UploadImageAsync(validFile);
+
+        Assert.NotNull(result);
+        Assert.Contains("/custom/assets/", result.Url);
+    }
 }

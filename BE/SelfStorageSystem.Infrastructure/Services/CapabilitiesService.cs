@@ -113,6 +113,15 @@ public sealed class CapabilitiesService(SelfStorageDbContext db) : ICapabilities
             .Distinct()
             .ToListAsync(cancellationToken);
 
+        if (assignedFacilities.Count == 0 && roles.Any(r => r.Contains("manager", StringComparison.OrdinalIgnoreCase) || r.Contains("admin", StringComparison.OrdinalIgnoreCase)))
+        {
+            assignedFacilities = await db.Facilities
+                .AsNoTracking()
+                .Where(f => f.Status == FacilityStatusConstants.Active)
+                .Select(f => f.Id)
+                .ToListAsync(cancellationToken);
+        }
+
         return new UserCapabilitiesDto(
             UserId: user.Id,
             Email: user.Email,

@@ -13,9 +13,9 @@ public static class RoleConstants
     public const string Admin = "system_administrator";
 
     // Operational staff and facility managers.
-    public const string StaffOrManager = "facility_staff,facility_manager";
-    public const string StaffOrManagerOrAdmin = "facility_staff,facility_manager,system_administrator";
-    public const string OperationsOrManager = FacilityManager + "," + SystemAdministrator;
+    public const string StaffOrManager = "facility_staff,facility_manager,staff,manager,business_operations_manager";
+    public const string StaffOrManagerOrAdmin = "facility_staff,facility_manager,system_administrator,staff,manager,business_operations_manager,admin";
+    public const string OperationsOrManager = "facility_manager,system_administrator,business_operations_manager,manager,admin";
 
     public const string CustomerDisplay = "Customer";
     public const string StaffDisplay = "Staff";

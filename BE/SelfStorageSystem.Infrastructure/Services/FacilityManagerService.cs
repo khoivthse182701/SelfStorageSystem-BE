@@ -1777,7 +1777,10 @@ public class FacilityManagerService : IFacilityManagerService
         var hasAccess = await _dbContext.StaffFacilityAssignments
             .AnyAsync(sfa => sfa.EmployeeId == currentUserId &&
                              sfa.FacilityId == facilityId &&
-                             sfa.AssignmentRole == StaffAssignmentRoles.FacilityManager &&
+                             (sfa.AssignmentRole == StaffAssignmentRoles.FacilityManager ||
+                              sfa.AssignmentRole == RoleConstants.FacilityManager ||
+                              sfa.AssignmentRole.ToLower() == "manager" ||
+                              sfa.AssignmentRole.ToLower() == "facility_manager") &&
                              (sfa.EndsAt == null || sfa.EndsAt > now),
                       cancellationToken);
 
@@ -1848,11 +1851,14 @@ public class FacilityManagerService : IFacilityManagerService
         }
 
         var now = DateTimeOffset.UtcNow;
-        return await _dbContext.StaffFacilityAssignments
+        var assigned = await _dbContext.StaffFacilityAssignments
             .AsNoTracking()
             .Include(sfa => sfa.Facility)
             .Where(sfa => sfa.EmployeeId == currentUserId &&
-                          sfa.AssignmentRole == StaffAssignmentRoles.FacilityManager &&
+                          (sfa.AssignmentRole == StaffAssignmentRoles.FacilityManager ||
+                           sfa.AssignmentRole == RoleConstants.FacilityManager ||
+                           sfa.AssignmentRole.ToLower() == "manager" ||
+                           sfa.AssignmentRole.ToLower() == "facility_manager") &&
                           (sfa.EndsAt == null || sfa.EndsAt > now))
             .OrderBy(sfa => sfa.Facility.Name)
             .Select(sfa => new ManagerFacilityScopeDto
@@ -1863,8 +1869,10 @@ public class FacilityManagerService : IFacilityManagerService
                 AddressLine = sfa.Facility.AddressLine,
                 City = sfa.Facility.City,
                 Status = sfa.Facility.Status,
-                AssignmentRole = sfa.AssignmentRole
+                AssignmentRole = StaffAssignmentRoles.FacilityManager
             })
             .ToListAsync(cancellationToken);
+
+        return assigned;
     }
 }

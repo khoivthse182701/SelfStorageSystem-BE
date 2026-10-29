@@ -7,6 +7,8 @@ using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Domain.Entities;
 
+using SelfStorageSystem.Domain.Constants;
+
 namespace SelfStorageSystem.Infrastructure.Services;
 
 public class JwtTokenService : IJwtTokenService
@@ -41,7 +43,7 @@ public class JwtTokenService : IJwtTokenService
             claims.Add(new Claim(ClaimTypes.Role, role));
         }
 
-        var expires = DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenMinutes > 0 ? _jwtSettings.AccessTokenMinutes : 60);
+        var expires = DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenMinutes > 0 ? _jwtSettings.AccessTokenMinutes : AuthConstants.DefaultAccessTokenMinutes);
 
         var token = new JwtSecurityToken(
             issuer: _jwtSettings.Issuer,

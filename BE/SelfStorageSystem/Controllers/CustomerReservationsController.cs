@@ -4,12 +4,13 @@ using Microsoft.AspNetCore.Mvc;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Customer.Reservations;
+using SelfStorageSystem.Domain.Constants;
 
 namespace SelfStorageSystem.Controllers;
 
 [ApiController]
 [Route("api/customer/reservations")]
-[Authorize(Roles = "storage_customer")]
+[Authorize(Roles = RoleConstants.Customer)]
 public class CustomerReservationsController : ControllerBase
 {
     private readonly ICustomerReservationService _reservationService;

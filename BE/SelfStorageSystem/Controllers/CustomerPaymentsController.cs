@@ -5,6 +5,7 @@ using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Customer.Payments;
+using SelfStorageSystem.Domain.Constants;
 
 namespace SelfStorageSystem.Controllers;
 
@@ -30,7 +31,7 @@ public class CustomerPaymentsController : ControllerBase
     /// Creates checkout payment information and dynamic VietQR details processed via SePay.
     /// </summary>
     [HttpPost("create-checkout")]
-    [Authorize(Roles = "storage_customer")]
+    [Authorize(Roles = RoleConstants.Customer)]
     [ProducesResponseType(typeof(ApiResponse<CheckoutResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
@@ -98,7 +99,7 @@ public class CustomerPaymentsController : ControllerBase
     /// Retrieves payment history and receipts for current authenticated customer.
     /// </summary>
     [HttpGet("my-history")]
-    [Authorize(Roles = "storage_customer")]
+    [Authorize(Roles = RoleConstants.Customer)]
     [ProducesResponseType(typeof(ApiResponse<List<PaymentHistoryDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetMyPaymentHistory(CancellationToken cancellationToken)
     {
@@ -112,7 +113,7 @@ public class CustomerPaymentsController : ControllerBase
     }
 
     [HttpGet("unpaid-invoices")]
-    [Authorize(Roles = "storage_customer")]
+    [Authorize(Roles = RoleConstants.Customer)]
     [ProducesResponseType(typeof(ApiResponse<List<UnpaidInvoiceDto>>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetMyUnpaidInvoices(CancellationToken cancellationToken)
     {

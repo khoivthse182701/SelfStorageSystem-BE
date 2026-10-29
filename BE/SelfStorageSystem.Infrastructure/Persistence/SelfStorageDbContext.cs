@@ -2719,16 +2719,24 @@ public partial class SelfStorageDbContext : DbContext
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.AgreementId).HasColumnName("agreement_id");
             entity.Property(e => e.CompletedAt).HasColumnName("completed_at");
-            entity.Property(e => e.CreditAmount).HasColumnName("credit_amount");
+            entity.Property(e => e.CreditAmount)
+                .HasColumnType("decimal(18, 2)")
+                .HasColumnName("credit_amount");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(sysutcdatetime())")
                 .HasColumnName("created_at");
             entity.Property(e => e.FromUnitId).HasColumnName("from_unit_id");
-            entity.Property(e => e.DiffDepositAmount).HasColumnName("diff_deposit_amount");
-            entity.Property(e => e.DiffRentAmount).HasColumnName("diff_rent_amount");
+            entity.Property(e => e.DiffDepositAmount)
+                .HasColumnType("decimal(18, 2)")
+                .HasColumnName("diff_deposit_amount");
+            entity.Property(e => e.DiffRentAmount)
+                .HasColumnType("decimal(18, 2)")
+                .HasColumnName("diff_rent_amount");
             entity.Property(e => e.MoveInDate).HasColumnName("move_in_date");
             entity.Property(e => e.MoveOutDate).HasColumnName("move_out_date");
-            entity.Property(e => e.PenaltyAmount).HasColumnName("penalty_amount");
+            entity.Property(e => e.PenaltyAmount)
+                .HasColumnType("decimal(18, 2)")
+                .HasColumnName("penalty_amount");
             entity.Property(e => e.Reason)
                 .HasMaxLength(255)
                 .HasColumnName("reason");
@@ -2744,7 +2752,9 @@ public partial class SelfStorageDbContext : DbContext
                 .HasDefaultValue("pending_payment")
                 .HasColumnName("status");
             entity.Property(e => e.ToUnitId).HasColumnName("to_unit_id");
-            entity.Property(e => e.TotalPaidAmount).HasColumnName("total_paid_amount");
+            entity.Property(e => e.TotalPaidAmount)
+                .HasColumnType("decimal(18, 2)")
+                .HasColumnName("total_paid_amount");
 
             entity.HasOne(d => d.Agreement).WithOne(p => p.UnitTransferRequest)
                 .HasForeignKey<UnitTransferRequest>(d => d.AgreementId)

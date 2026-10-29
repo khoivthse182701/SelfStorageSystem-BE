@@ -10,6 +10,11 @@ public static class PaymentConstants
 
     public const string ProviderSePay = "SePay";
     public const string ProviderVnPay = "VNPay";
+    public const string ProviderManual = "manual";
+
+    public const string RefundMoveOutPrefix = "REF-MOVEOUT-";
+    public const string RenewalCheckoutPrefix = "RNW";
+    public const string RenewalInvoicePrefix = "RNW-";
 
     public const string StatusPending = "pending";
     public const string StatusSucceeded = "succeeded";
