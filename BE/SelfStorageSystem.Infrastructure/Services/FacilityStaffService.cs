@@ -771,6 +771,16 @@ public class FacilityStaffService : IFacilityStaffService
         long? moveOutId = request.MoveOutId > 0 ? request.MoveOutId : null;
         long? unitId = request.UnitId > 0 ? request.UnitId : null;
 
+        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? transaction = null;
+        if (_dbContext.Database.IsSqlServer())
+        {
+            transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        }
+
+        try
+        {
+            StaffConfirmQrActionResultDto? result = null;
+
         // ----------------------------------------------------
         // ACTION 1: CHECK-IN NHẬN KHO
         // ----------------------------------------------------
@@ -857,7 +867,7 @@ public class FacilityStaffService : IFacilityStaffService
                     AgreementId = agreement.Id,
                     CredentialType = CredentialTypeConstants.Pin,
                     SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin),
-                    DisplayHint = randomPin,
+                    DisplayHint = PinProtectionHelper.Encrypt(randomPin),
                     IssuedAt = now,
                     ExpiresAt = now.AddYears(1),
                     Status = CredentialStatusConstants.Active,
@@ -867,7 +877,7 @@ public class FacilityStaffService : IFacilityStaffService
 
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            return new StaffConfirmQrActionResultDto(
+            result = new StaffConfirmQrActionResultDto(
                 Success: true,
                 ActionType: StaffActionConstants.CheckIn,
                 Message: "Kích hoạt hợp đồng và nhận kho thành công. Ô kho đã chuyển sang trạng thái Occupied.",
@@ -947,7 +957,7 @@ public class FacilityStaffService : IFacilityStaffService
 
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            return new StaffConfirmQrActionResultDto(
+            result = new StaffConfirmQrActionResultDto(
                 Success: true,
                 ActionType: StaffActionConstants.TransferMoveOut,
                 Message: "Đã xác nhận dọn kho chuyển cơ sở. Trạng thái chuyển sang MovedOut_InTransit, đã nhả kho và tạo ticket dọn vệ sinh.",
@@ -1035,7 +1045,7 @@ public class FacilityStaffService : IFacilityStaffService
 
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            return new StaffConfirmQrActionResultDto(
+            result = new StaffConfirmQrActionResultDto(
                 Success: true,
                 ActionType: StaffActionConstants.TransferMoveIn,
                 Message: "Đã hoàn tất nhận ô kho tại cơ sở mới khi chuyển kho.",
@@ -1146,7 +1156,7 @@ public class FacilityStaffService : IFacilityStaffService
 
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            return new StaffConfirmQrActionResultDto(
+            result = new StaffConfirmQrActionResultDto(
                 Success: true,
                 ActionType: StaffActionConstants.MoveOut,
                 Message: "Đã xác nhận trả kho thành công. Hợp đồng đã hoàn tất, ô kho chuyển sang Cleaning và đã tạo yêu cầu hoàn cọc chờ duyệt.",
@@ -1157,8 +1167,34 @@ public class FacilityStaffService : IFacilityStaffService
             );
         }
 
-        throw AppException.FromError(StaffErrors.InvalidStatus);
+        if (result == null)
+        {
+            throw AppException.FromError(StaffErrors.InvalidStatus);
+        }
+
+        if (transaction != null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        return result;
     }
+    catch
+    {
+        if (transaction != null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+        }
+        throw;
+    }
+    finally
+    {
+        if (transaction != null)
+        {
+            await transaction.DisposeAsync();
+        }
+    }
+}
 
     // ==========================================
     // 🛠️ NHÓM 4: HỖ TRỢ TICKET VỀ LOGISTICS (Dọn dẹp, Sửa chữa, Kiểm tra)

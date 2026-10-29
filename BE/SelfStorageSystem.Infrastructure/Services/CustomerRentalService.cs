@@ -218,7 +218,7 @@ public class CustomerRentalService : ICustomerRentalService
                 AgreementId = agreement.Id,
                 CredentialType = CredentialTypeConstants.Pin,
                 SecretDigest = BCrypt.Net.BCrypt.HashPassword(defaultPin),
-                DisplayHint = defaultPin,
+                DisplayHint = PinProtectionHelper.Encrypt(defaultPin),
                 Status = CredentialStatusConstants.Active,
                 IssuedAt = now,
                 CreatedAt = now
@@ -246,7 +246,7 @@ public class CustomerRentalService : ICustomerRentalService
             UnitCode = unitCode,
             FacilityName = facilityName,
             Status = CredentialStatusConstants.Active,
-            KeypadPin = pinCred.DisplayHint,
+            KeypadPin = PinProtectionHelper.Decrypt(pinCred.DisplayHint),
             GateQrToken = gateQrToken,
             QrExpiresInSeconds = _rentalSettings.QrTtlSeconds,
             QrExpiresAt = qrExpiresAt,
@@ -326,7 +326,7 @@ public class CustomerRentalService : ICustomerRentalService
                 AgreementId = agreement.Id,
                 CredentialType = CredentialTypeConstants.Pin,
                 SecretDigest = BCrypt.Net.BCrypt.HashPassword(request.NewPin),
-                DisplayHint = request.NewPin,
+                DisplayHint = PinProtectionHelper.Encrypt(request.NewPin),
                 Status = CredentialStatusConstants.Pending,
                 IssuedAt = now,
                 CreatedAt = now
@@ -336,7 +336,7 @@ public class CustomerRentalService : ICustomerRentalService
         else
         {
             pinCred.SecretDigest = BCrypt.Net.BCrypt.HashPassword(request.NewPin);
-            pinCred.DisplayHint = request.NewPin;
+            pinCred.DisplayHint = PinProtectionHelper.Encrypt(request.NewPin);
             pinCred.Status = CredentialStatusConstants.Pending;
         }
 
@@ -613,28 +613,57 @@ public class CustomerRentalService : ICustomerRentalService
         if (existingPendingMoveOut)
             throw AppException.FromError(RentalErrors.MoveOutAlreadyRequested);
 
-        var moveOut = new MoveOutRequest
+        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? transaction = null;
+        if (_dbContext.Database.IsSqlServer())
         {
-            AgreementId = agreementId,
-            RequestedBy = customerId,
-            RequestedMoveOutDate = request.RequestedMoveOutDate,
-            Reason = request.Reason?.Trim(),
-            Status = MoveOutStatusConstants.Requested,
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
-        };
+            transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        }
 
-        _dbContext.MoveOutRequests.Add(moveOut);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            var moveOut = new MoveOutRequest
+            {
+                AgreementId = agreementId,
+                RequestedBy = customerId,
+                RequestedMoveOutDate = request.RequestedMoveOutDate,
+                Reason = request.Reason?.Trim(),
+                Status = MoveOutStatusConstants.Requested,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
 
-        return new MoveOutResponseDto(
-            Id: moveOut.Id,
-            AgreementId: moveOut.AgreementId,
-            RequestedMoveOutDate: moveOut.RequestedMoveOutDate,
-            Status: moveOut.Status,
-            Reason: moveOut.Reason,
-            CreatedAt: moveOut.CreatedAt
-        );
+            _dbContext.MoveOutRequests.Add(moveOut);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            if (transaction != null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+
+            return new MoveOutResponseDto(
+                Id: moveOut.Id,
+                AgreementId: moveOut.AgreementId,
+                RequestedMoveOutDate: moveOut.RequestedMoveOutDate,
+                Status: moveOut.Status,
+                Reason: moveOut.Reason,
+                CreatedAt: moveOut.CreatedAt
+            );
+        }
+        catch
+        {
+            if (transaction != null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+            throw;
+        }
+        finally
+        {
+            if (transaction != null)
+            {
+                await transaction.DisposeAsync();
+            }
+        }
     }
 
     public async Task<RefundPreviewDto> GetRefundPreviewAsync(

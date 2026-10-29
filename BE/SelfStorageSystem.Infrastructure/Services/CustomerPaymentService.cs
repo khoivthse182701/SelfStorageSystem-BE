@@ -299,29 +299,6 @@ public class CustomerPaymentService : ICustomerPaymentService
             }
         }
 
-        // 4. Fallback: If bank memo does not contain the invoice or reservation code (e.g. Zalopay/transfer without memo),
-        // match against recent open/pending invoices with exact remaining balance equal to transfer amount.
-        if (invoice == null)
-        {
-            invoice = await _dbContext.Invoices
-                .Include(i => i.Reservation)
-                    .ThenInclude(r => r!.Facility)
-                .Include(i => i.Reservation)
-                    .ThenInclude(r => r!.UnitType)
-                .Include(i => i.Customer)
-                    .ThenInclude(c => c.User)
-                .Where(i => (i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft || i.Status == InvoiceStatusConstants.PartiallyPaid)
-                         && (i.TotalAmount - i.PaidAmount) == payload.TransferAmount)
-                .OrderByDescending(i => i.CreatedAt)
-                .FirstOrDefaultAsync(cancellationToken);
-
-            if (invoice != null)
-            {
-                _logger.LogInformation("Matched open invoice #{InvoiceId} ({InvoiceNo}) via fallback exact transfer amount {Amount:N0} VND.",
-                    invoice.Id, invoice.InvoiceNo, payload.TransferAmount);
-            }
-        }
-
         if (invoice == null)
         {
             // Check if bank memo / content matches a rental renewal (e.g. RNW-1, DH1)
@@ -390,7 +367,7 @@ public class CustomerPaymentService : ICustomerPaymentService
                 return true;
             }
 
-            _logger.LogWarning(PaymentLogMessages.PatternMismatch, prefix, payload.Content);
+            _logger.LogWarning("SePay webhook received transaction without valid invoice/reservation/renewal reference: Content='{Content}', Amount={Amount}, ReferenceCode='{ReferenceCode}', GatewayId={GatewayId}", payload.Content, payload.TransferAmount, payload.ReferenceCode, payload.Id);
             return false;
         }
 

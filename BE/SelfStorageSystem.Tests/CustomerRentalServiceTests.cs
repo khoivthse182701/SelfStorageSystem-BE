@@ -653,7 +653,8 @@ public class CustomerRentalServiceTests
         var updatedCred = await dbContext.AccessCredentials.FirstOrDefaultAsync(c => c.AgreementId == agreement.Id);
         Assert.NotNull(updatedCred);
         Assert.True(BCrypt.Net.BCrypt.Verify(newPin, updatedCred.SecretDigest));
-        Assert.Equal(newPin, updatedCred.DisplayHint);
+        Assert.Equal(newPin, PinProtectionHelper.Decrypt(updatedCred.DisplayHint));
+        Assert.NotEqual(newPin, updatedCred.DisplayHint);
         Assert.Equal(CredentialStatusConstants.Pending, updatedCred.Status);
     }
 

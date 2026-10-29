@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SelfStorageSystem.Application.Interfaces;
@@ -51,6 +53,7 @@ public class CustomerPaymentsController : ControllerBase
 
     /// <summary>
     /// Automatic Webhook from SePay on bank balance credit updates via VietQR.
+    /// Enforces Fail-Closed security: rejects if unconfigured or API key mismatch.
     /// </summary>
     [HttpPost("sepay-webhook")]
     [AllowAnonymous]
@@ -58,32 +61,44 @@ public class CustomerPaymentsController : ControllerBase
         [FromBody] SePayWebhookPayload payload,
         CancellationToken cancellationToken)
     {
-        // Verify API Key / Bearer Token from SePay
+        var expectedKey = _paymentSettings.SePay?.ApiKey?.Trim();
+        if (string.IsNullOrWhiteSpace(expectedKey))
+        {
+            _logger.LogCritical("SePay Webhook rejected: API key is not configured on server.");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { success = false, message = "Webhook service unconfigured." });
+        }
+
+        // Verify API Key / Bearer Token from SePay (Fail-Closed)
         var authHeader = Request.Headers["Authorization"].ToString();
         var apiKeyHeader = Request.Headers["X-Api-Key"].ToString();
-        var expectedKey = _paymentSettings.SePay?.ApiKey;
 
-        if (!string.IsNullOrWhiteSpace(expectedKey))
+        var isValidKey = false;
+        var expectedBytes = Encoding.UTF8.GetBytes(expectedKey);
+
+        if (!string.IsNullOrWhiteSpace(apiKeyHeader))
         {
-            var isValidKey = false;
-            var expectedTrimmed = expectedKey.Trim();
-
-            if (!string.IsNullOrWhiteSpace(apiKeyHeader) && string.Equals(apiKeyHeader.Trim(), expectedTrimmed, StringComparison.Ordinal))
+            var apiKeyBytes = Encoding.UTF8.GetBytes(apiKeyHeader.Trim());
+            if (apiKeyBytes.Length == expectedBytes.Length && CryptographicOperations.FixedTimeEquals(apiKeyBytes, expectedBytes))
             {
                 isValidKey = true;
             }
-            else if (!string.IsNullOrWhiteSpace(authHeader))
-            {
-                var token = authHeader.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase)
-                                      .Replace("Apikey ", "", StringComparison.OrdinalIgnoreCase).Trim();
-                isValidKey = string.Equals(token, expectedTrimmed, StringComparison.Ordinal);
-            }
+        }
 
-            if (!isValidKey)
+        if (!isValidKey && !string.IsNullOrWhiteSpace(authHeader))
+        {
+            var token = authHeader.Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase)
+                                  .Replace("Apikey ", "", StringComparison.OrdinalIgnoreCase).Trim();
+            var tokenBytes = Encoding.UTF8.GetBytes(token);
+            if (tokenBytes.Length == expectedBytes.Length && CryptographicOperations.FixedTimeEquals(tokenBytes, expectedBytes))
             {
-                _logger.LogWarning("SePay Webhook: Access denied due to missing or invalid API Key.");
-                return Unauthorized(new { success = false, message = "Invalid SePay API Key or signature." });
+                isValidKey = true;
             }
+        }
+
+        if (!isValidKey)
+        {
+            _logger.LogWarning("SePay Webhook: Access denied due to missing or invalid API Key.");
+            return Unauthorized(new { success = false, message = "Invalid SePay API Key or signature." });
         }
 
         var processed = await _paymentService.ProcessSePayWebhookAsync(payload, cancellationToken);

@@ -1018,6 +1018,10 @@ public partial class SelfStorageDbContext : DbContext
 
             entity.HasIndex(e => e.ReservationId, "invoices_reservation_id_idx").HasFilter("([reservation_id] IS NOT NULL)");
 
+            entity.HasIndex(e => new { e.Status, e.DueDate }, "ix_invoices_status_due_date");
+
+            entity.HasIndex(e => new { e.Status, e.TotalAmount, e.PaidAmount }, "ix_invoices_status_amounts");
+
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.AgreementId).HasColumnName("agreement_id");
             entity.Property(e => e.BillingPeriod)
@@ -1372,6 +1376,8 @@ public partial class SelfStorageDbContext : DbContext
                 .HasFilter("([provider_transaction_id] IS NOT NULL)");
 
             entity.HasIndex(e => e.TargetInvoiceId, "payments_target_invoice_id_idx");
+
+            entity.HasIndex(e => new { e.CustomerId, e.TargetInvoiceId, e.Status }, "ix_payments_customer_invoice_status");
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.Amount)
@@ -2045,6 +2051,8 @@ public partial class SelfStorageDbContext : DbContext
             entity.HasIndex(e => e.AssignedBy, "staff_facility_assignments_assigned_by_idx").HasFilter("([assigned_by] IS NOT NULL)");
 
             entity.HasIndex(e => new { e.FacilityId, e.AssignmentRole, e.StartsAt, e.EndsAt }, "staff_facility_assignments_facility_idx");
+
+            entity.HasIndex(e => new { e.EmployeeId, e.FacilityId, e.EndsAt }, "ix_staff_facility_assignments_lookup");
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.AssignedBy).HasColumnName("assigned_by");

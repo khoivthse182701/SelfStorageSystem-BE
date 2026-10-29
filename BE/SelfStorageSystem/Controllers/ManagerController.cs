@@ -676,7 +676,9 @@ public class ManagerController : ControllerBase
         isSystemAdmin = User.IsInRole(RoleConstants.SystemAdministrator) ||
                         User.IsInRole("system_administrator") ||
                         User.IsInRole("admin") ||
+#pragma warning disable CS0618 // Type or member is obsolete - retained for backward compatibility with legacy tokens
                         User.IsInRole(RoleConstants.BusinessOperationsManager) ||
+#pragma warning restore CS0618
                         User.IsInRole("business_operations_manager");
         userId = 0;
         var claim = User.FindFirstValue(ClaimTypes.NameIdentifier);
