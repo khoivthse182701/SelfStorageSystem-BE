@@ -25,6 +25,7 @@ public sealed class CapabilitiesService(SelfStorageDbContext db) : ICapabilities
 
     private static readonly IReadOnlyList<string> StaffPermissions = new[]
     {
+        "shift:view",
         "handover:check",
         "qr:verify",
         "qr:confirm",
@@ -41,6 +42,7 @@ public sealed class CapabilitiesService(SelfStorageDbContext db) : ICapabilities
     // Merged facility_manager permissions (includes previous business_operations_manager capabilities)
     private static readonly IReadOnlyList<string> ManagerPermissions = new[]
     {
+        "shift:view",
         "facility:dashboard",
         "facility:rentals",
         "facility:units",
@@ -60,7 +62,8 @@ public sealed class CapabilitiesService(SelfStorageDbContext db) : ICapabilities
 
     private static readonly IReadOnlyList<string> AdminPermissions = new[]
     {
-        "*"
+        "*",
+        "shift:view"
     };
 
     public async Task<UserCapabilitiesDto> GetUserCapabilitiesAsync(long userId, CancellationToken cancellationToken = default)

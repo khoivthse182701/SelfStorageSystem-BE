@@ -56,8 +56,49 @@ public class CapabilitiesServiceTests
         Assert.Contains("promotions:manage", result.Permissions);
         Assert.Contains("pricing:fees_view", result.Permissions);
         Assert.Contains("facility:dashboard", result.Permissions);
+        Assert.Contains("shift:view", result.Permissions);
         Assert.NotNull(result.AssignedFacilityIds);
         Assert.Contains(1L, result.AssignedFacilityIds);
+    }
+
+    [Fact]
+    public async Task GetUserCapabilities_FacilityStaff_ReturnsStaffCapabilitiesIncludingShiftView()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var staffRole = new Role { Id = 2, Code = RoleConstants.FacilityStaff, DisplayName = "Facility Staff" };
+        var user = new User
+        {
+            Id = 15,
+            Email = "staff@storage.local",
+            PasswordHash = "hash",
+            Status = UserStatusConstants.Active
+        };
+        db.Roles.Add(staffRole);
+        db.Users.Add(user);
+        db.UserRoles.Add(new UserRole { UserId = 15, RoleId = 2, Role = staffRole, User = user });
+        db.StaffFacilityAssignments.Add(new StaffFacilityAssignment
+        {
+            EmployeeId = 15,
+            FacilityId = 1,
+            AssignmentRole = StaffAssignmentRoles.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow.AddDays(-5)
+        });
+        await db.SaveChangesAsync();
+
+        var service = new CapabilitiesService(db);
+
+        // Act
+        var result = await service.GetUserCapabilitiesAsync(15);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(15, result.UserId);
+        Assert.Contains(RoleConstants.FacilityStaff, result.Roles);
+        Assert.Contains("shift:view", result.Permissions);
+        Assert.Contains("handover:check", result.Permissions);
+        Assert.Contains("qr:verify", result.Permissions);
+        Assert.DoesNotContain("pricing:rates_manage", result.Permissions);
     }
 
     [Fact]

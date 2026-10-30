@@ -930,7 +930,7 @@ public class AdminManagementService : IAdminManagementService
             u.PhysicalStatus == StorageUnitStatusConstants.PendingInspection, cancellationToken);
 
         var systemOccupancyRate = totalUnits > 0
-            ? Math.Round((double)(occupiedUnits + reservedUnits) / totalUnits * 100.0, 2)
+            ? Math.Round((double)occupiedUnits / totalUnits * 100.0, 2)
             : 0.0;
 
         // 3. User & Staff KPIs
@@ -953,7 +953,7 @@ public class AdminManagementService : IAdminManagementService
             var fReserved = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Reserved);
             var fAvailable = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Available);
             var fRate = fTotalUnits > 0
-                ? Math.Round((double)(fOccupied + fReserved) / fTotalUnits * 100.0, 2)
+                ? Math.Round((double)fOccupied / fTotalUnits * 100.0, 2)
                 : 0.0;
 
             return new AdminFacilityOccupancyBreakdownDto
@@ -1140,7 +1140,7 @@ public class AdminManagementService : IAdminManagementService
                     StorageUnitStatusConstants.OutOfService,
                     StorageUnitStatusConstants.PendingInspection),
                 OccupancyRate = totalUnits > 0
-                    ? Math.Round((double)(occupied + reserved) / totalUnits * 100.0, 2)
+                    ? Math.Round((double)occupied / totalUnits * 100.0, 2)
                     : 0.0
             },
             AssignedStaff = assignments.Select(sfa => new AdminStaffFacilityAssignmentDto

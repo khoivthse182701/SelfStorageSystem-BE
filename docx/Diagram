@@ -464,7 +464,7 @@
             <mxGeometry height="20" width="20" x="948" y="1018" as="geometry" />
           </mxCell>
         </UserObject>
-        <UserObject label="" plantUmlData="{&#xa;  &quot;data&quot;: &quot;@startuml\nskinparam backgroundColor transparent\n\ntitle Flow 3: Quy trình Quản lý Kho Đang Thuê\n\nstart\n:Khách hàng đăng nhập ứng dụng;\n:Xem danh sách kho, hạn hợp đồng &amp; mã PIN;\n\nif (Yêu cầu thao tác tự phục vụ?) then (Có)\n  switch (Chọn thao tác)\n  case ( Đổi mã PIN )\n    :Thực hiện cập nhật mã PIN mới;\n  case ( Thêm người ủy quyền )\n    :Đăng ký thông tin người ra vào;\n  case ( Đổi loại / size kho )\n    :Gửi yêu cầu chuyển ô kho;\n  endswitch\n  :Hệ thống cập nhật thông tin;\nelse (Không)\nendif\n\npartition \&quot;Kiểm tra định kỳ\&quot; {\n  :Nhân viên kiểm tra an ninh &amp; PCCC;\n  if (Có hỏng hóc / sự cố?) then (Có)\n    :Ghi nhận thông tin bảo trì;\n    :Cập nhật trạng thái = Under Maintenance;\n  else (Không)\n    :Tiếp tục vận hành bình thường;\n  endif\n}\n\nend\n@enduml&quot;,&#xa;  &quot;config&quot;: null&#xa;}" id="aU1GvqiS9fsd443_KLBw-70">
+        <UserObject label="" plantUmlData="{&#xa;  &quot;data&quot;: &quot;@startuml\nskinparam backgroundColor transparent\n\ntitle Flow 3: Quy trình Quản lý Kho Đang Thuê\n\nstart\n:Khách hàng đăng nhập ứng dụng;\n:Xem danh sách kho, hạn hợp đồng &amp; mã PIN;\n\nif (Yêu cầu thao tác tự phục vụ?) then (Có)\n  switch (Chọn thao tác)\n  case ( Đổi mã PIN )\n    :Thực hiện cập nhật mã PIN mới;\n  case ( Tự gia hạn hợp đồng )\n    :Gia hạn & thanh toán online;\n  case ( Đổi loại / size kho )\n    :Gửi yêu cầu chuyển ô kho;\n  endswitch\n  :Hệ thống cập nhật thông tin;\nelse (Không)\nendif\n\npartition \&quot;Kiểm tra định kỳ\&quot; {\n  :Nhân viên kiểm tra an ninh &amp; PCCC;\n  if (Có hỏng hóc / sự cố?) then (Có)\n    :Ghi nhận thông tin bảo trì;\n    :Cập nhật trạng thái = Under Maintenance;\n  else (Không)\n    :Tiếp tục vận hành bình thường;\n  endif\n}\n\nend\n@enduml&quot;,&#xa;  &quot;config&quot;: null&#xa;}" id="aU1GvqiS9fsd443_KLBw-70">
           <mxCell connectable="0" parent="1" style="group;transparentBounds=1;editIcon=1;lockedGroup=0;groupPadding=10;align=center;fontStyle=1;fontFamily=Times New Roman;fontSize=11;" vertex="1">
             <mxGeometry as="geometry" />
           </mxCell>
@@ -546,7 +546,7 @@
             <mxGeometry height="36" width="201" x="30" y="1366" as="geometry" />
           </mxCell>
         </UserObject>
-        <UserObject label="Thêm người ủy quyền" plantUmlId="e_15" plantUmlBaseStyle="endArrow=classic;endSize=8;strokeColor=#181818;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;curved=0;rounded=0;sourcePerimeterSpacing=0;targetPerimeterSpacing=0;" plantUmlBaseValue="Thêm người ủy quyền" id="aU1GvqiS9fsd443_KLBw-82">
+        <UserObject label="Tự gia hạn hợp đồng" plantUmlId="e_15" plantUmlBaseStyle="endArrow=classic;endSize=8;strokeColor=#181818;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;curved=0;rounded=0;sourcePerimeterSpacing=0;targetPerimeterSpacing=0;" plantUmlBaseValue="Tự gia hạn hợp đồng" id="aU1GvqiS9fsd443_KLBw-82">
           <mxCell edge="1" parent="aU1GvqiS9fsd443_KLBw-70" source="aU1GvqiS9fsd443_KLBw-79" style="endArrow=classic;endSize=8;strokeColor=#181818;fontSize=11;exitX=0.555;exitY=1.026;exitDx=0;exitDy=0;curved=0;rounded=0;sourcePerimeterSpacing=0;targetPerimeterSpacing=0;align=center;fontStyle=1;fontFamily=Times New Roman;exitPerimeter=0;">
             <mxGeometry relative="1" x="-0.0114" y="-4" as="geometry">
               <mxPoint as="offset" />

@@ -84,7 +84,7 @@ Tài liệu phân tích chi tiết quy trình nghiệp vụ (Main Flows), Ma tr�
 * **Mục tiêu:** Quản lý hoạt động sử dụng kho hàng ngày của khách hàng và công tác bảo trì của điểm kho.
 * **Các bước thực hiện:**
   1. Khách hàng đăng nhập vào ứng dụng để xem danh sách các ô kho đang thuê, thời hạn hợp đồng, mã PIN truy cập và lịch sử giao dịch.
-  2. Khách hàng có thể thực hiện các thao tác tự phục vụ: đổi mã PIN truy cập, đăng ký người được ủy quyền ra vào kho, hoặc gửi yêu cầu thay đổi loại kho/kích thước.
+  2. Khách hàng có thể thực hiện các thao tác tự phục vụ: xem mã QR check-in mở cổng, xem/đổi mã PIN 6 số mở cửa kho cá nhân, tự gia hạn hợp đồng & thanh toán online, hoặc gửi yêu cầu chuyển kho/đổi cơ sở (không có tính năng ủy quyền tài khoản hoặc chia sẻ kho cho người khác).
   3. Facility Staff/Manager thực hiện kiểm tra định kỳ tình trạng an ninh, an toàn PCCC toàn bộ điểm kho.
   4. Nếu phát hiện ô kho cần bảo trì hoặc kiểm tra kỹ thuật, Facility Staff cập nhật ghi chú và trạng thái bảo trì trên hệ thống.
 

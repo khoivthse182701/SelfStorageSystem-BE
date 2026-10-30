@@ -367,10 +367,10 @@ public class AdminManagementServiceTests
         Assert.Equal(2, overview.OccupancyKpi.OccupiedUnits);
         Assert.Equal(1, overview.OccupancyKpi.ReservedUnits);
         Assert.Equal(1, overview.OccupancyKpi.AvailableUnits);
-        Assert.Equal(75.0, overview.OccupancyKpi.SystemOccupancyRate);
+        Assert.Equal(50.0, overview.OccupancyKpi.SystemOccupancyRate);
 
         Assert.Single(overview.FacilityBreakdown);
-        Assert.Equal(75.0, overview.FacilityBreakdown[0].OccupancyRate);
+        Assert.Equal(50.0, overview.FacilityBreakdown[0].OccupancyRate);
     }
 
     [Fact]
@@ -597,7 +597,7 @@ public class AdminManagementServiceTests
         Assert.Equal(1, detail.UnitStats.Occupied);
         Assert.Equal(1, detail.UnitStats.Reserved);
         Assert.Equal(1, detail.UnitStats.Maintenance);
-        Assert.Equal(50.0, detail.UnitStats.OccupancyRate);
+        Assert.Equal(25.0, detail.UnitStats.OccupancyRate);
         Assert.Single(detail.AssignedStaff);
         Assert.Equal("DN Staff", detail.AssignedStaff[0].EmployeeName);
     }

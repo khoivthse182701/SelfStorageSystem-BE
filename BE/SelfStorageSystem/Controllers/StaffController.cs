@@ -247,6 +247,235 @@ public class StaffController : ControllerBase
     }
 
     // ==========================================
+    // 🗓️ NHÓM 5: CA TRỰC & LỊCH LÀM VIỆC (Staff Shifts Schedule)
+    // ==========================================
+
+    /// <summary>
+    /// Lấy danh sách ca trực / lịch làm việc của nhân viên đang đăng nhập.
+    /// </summary>
+    [HttpGet("shifts")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffShiftScheduleDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetShifts(
+        [FromQuery] long? facilityId,
+        [FromQuery] DateTimeOffset? fromDate,
+        [FromQuery] DateTimeOffset? toDate,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.GetStaffShiftsAsync(userId, facilityId, fromDate, toDate, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffShiftScheduleDto>>.Ok(result, "Staff shifts retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Điểm danh vào ca trực.
+    /// </summary>
+    [HttpPost("shifts/{shiftId:long}/check-in")]
+    [ProducesResponseType(typeof(ApiResponse<StaffShiftScheduleDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CheckInShift(
+        [FromRoute] long shiftId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.CheckInShiftAsync(userId, shiftId, cancellationToken);
+        return Ok(ApiResponse<StaffShiftScheduleDto>.Ok(result, "Shift checked in successfully."));
+    }
+
+    /// <summary>
+    /// Điểm danh kết thúc ca trực.
+    /// </summary>
+    [HttpPost("shifts/{shiftId:long}/check-out")]
+    [ProducesResponseType(typeof(ApiResponse<StaffShiftScheduleDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CheckOutShift(
+        [FromRoute] long shiftId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.CheckOutShiftAsync(userId, shiftId, cancellationToken);
+        return Ok(ApiResponse<StaffShiftScheduleDto>.Ok(result, "Shift checked out successfully."));
+    }
+
+    // ==========================================
+    // 📦 NHÓM 6: MOVE-OUTS, TASKS, RESERVATIONS & OPERATIONS
+    // ==========================================
+
+    /// <summary>
+    /// Danh sách yêu cầu trả kho (Move-out requests) theo ngày và cơ sở.
+    /// </summary>
+    [HttpGet("move-outs")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffMoveOutSummaryDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetMoveOuts(
+        [FromQuery] long? facilityId,
+        [FromQuery] DateOnly? date,
+        CancellationToken cancellationToken)
+    {
+        var list = await _staffService.GetMoveOutsAsync(facilityId, date, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffMoveOutSummaryDto>>.Ok(list, "Move-out requests retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Nhân viên nghiệm thu trả kho (Move-out inspection).
+    /// </summary>
+    [HttpPost("move-outs/{id:long}/inspect")]
+    [ProducesResponseType(typeof(ApiResponse<InspectMoveOutResultDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> InspectMoveOut(
+        [FromRoute] long id,
+        [FromBody] InspectMoveOutRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.InspectMoveOutAsync(userId, id, request, cancellationToken);
+        return Ok(ApiResponse<InspectMoveOutResultDto>.Ok(result, "Move-out inspected successfully."));
+    }
+
+    /// <summary>
+    /// Danh sách ô kho theo cơ sở cho Staff.
+    /// </summary>
+    [HttpGet("facilities/{facilityId:long}/units")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffFacilityUnitDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetFacilityUnits(
+        [FromRoute] long facilityId,
+        CancellationToken cancellationToken)
+    {
+        var list = await _staffService.GetFacilityUnitsAsync(facilityId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffFacilityUnitDto>>.Ok(list, "Facility units retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Danh sách nhiệm vụ của nhân viên tại cơ sở.
+    /// </summary>
+    [HttpGet("tasks")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffTaskDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetStaffTasks(
+        [FromQuery] long? facilityId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var list = await _staffService.GetStaffTasksAsync(userId, facilityId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffTaskDto>>.Ok(list, "Staff tasks retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Cập nhật tiến độ hoặc trạng thái nhiệm vụ.
+    /// </summary>
+    [HttpPut("tasks/{id:long}/status")]
+    [ProducesResponseType(typeof(ApiResponse<StaffTaskDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UpdateStaffTaskStatus(
+        [FromRoute] long id,
+        [FromBody] UpdateStaffTaskStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.UpdateStaffTaskStatusAsync(userId, id, request, cancellationToken);
+        return Ok(ApiResponse<StaffTaskDto>.Ok(result, "Staff task status updated successfully."));
+    }
+
+    /// <summary>
+    /// Tra cứu đặt chỗ (reservation lookup).
+    /// </summary>
+    [HttpGet("reservations/lookup")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffReservationLookupDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> LookupReservations(
+        [FromQuery] string? query,
+        [FromQuery] long? facilityId,
+        CancellationToken cancellationToken)
+    {
+        var list = await _staffService.LookupReservationsAsync(query, facilityId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffReservationLookupDto>>.Ok(list, "Reservations retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Phân bổ ô kho cụ thể cho đơn đặt chỗ.
+    /// </summary>
+    [HttpPost("reservations/{id:long}/assign-unit")]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> AssignUnitToReservation(
+        [FromRoute] long id,
+        [FromBody] AssignUnitToReservationRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        await _staffService.AssignUnitToReservationAsync(userId, id, request, cancellationToken);
+        return Ok(ApiResponse.Ok("Unit assigned to reservation successfully."));
+    }
+
+    /// <summary>
+    /// Tạo biên bản bàn giao kho (Handover).
+    /// </summary>
+    [HttpPost("handovers")]
+    [ProducesResponseType(typeof(ApiResponse<StaffHandoverResultDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CreateHandover(
+        [FromBody] CreateStaffHandoverRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.CreateHandoverAsync(userId, request, cancellationToken);
+        return Ok(ApiResponse<StaffHandoverResultDto>.Ok(result, "Handover created successfully."));
+    }
+
+    /// <summary>
+    /// Danh sách hợp đồng quá hạn tại cơ sở.
+    /// </summary>
+    [HttpGet("overdue-agreements")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<OverdueAgreementDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetOverdueAgreements(
+        [FromQuery] long? facilityId,
+        CancellationToken cancellationToken)
+    {
+        var list = await _staffService.GetOverdueAgreementsAsync(facilityId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<OverdueAgreementDto>>.Ok(list, "Overdue agreements retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Khóa quyền truy cập cửa đối với hợp đồng quá hạn nợ.
+    /// </summary>
+    [HttpPost("agreements/{agreementId:long}/lock-access")]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> LockAgreementAccess(
+        [FromRoute] long agreementId,
+        [FromBody] LockAccessRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        await _staffService.LockAgreementAccessAsync(userId, agreementId, request, cancellationToken);
+        return Ok(ApiResponse.Ok("Agreement access locked successfully."));
+    }
+
+    /// <summary>
+    /// Tạo yêu cầu bảo trì / sửa chữa ô kho.
+    /// </summary>
+    [HttpPost("units/{unitId:long}/maintenance-orders")]
+    [ProducesResponseType(typeof(ApiResponse<MaintenanceWorkOrderDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CreateMaintenanceOrder(
+        [FromRoute] long unitId,
+        [FromBody] CreateMaintenanceWorkOrderRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.CreateMaintenanceOrderAsync(userId, unitId, request, cancellationToken);
+        return Ok(ApiResponse<MaintenanceWorkOrderDto>.Ok(result, "Maintenance work order created successfully."));
+    }
+
+    // ==========================================
     // HELPER
     // ==========================================
 

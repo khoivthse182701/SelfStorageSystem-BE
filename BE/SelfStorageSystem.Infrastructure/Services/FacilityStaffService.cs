@@ -925,7 +925,7 @@ public class FacilityStaffService : IFacilityStaffService
             var fromUnit = await _dbContext.StorageUnits.FindAsync(new object[] { transfer.FromUnitId }, cancellationToken);
             if (fromUnit != null)
             {
-                fromUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
+                fromUnit.PhysicalStatus = StorageUnitStatusConstants.Cleaning;
                 fromUnit.UpdatedAt = now;
 
                 var cleaningTicket = new SupportTicket
@@ -1097,7 +1097,7 @@ public class FacilityStaffService : IFacilityStaffService
             foreach (var a in allocations)
             {
                 a.Status = AllocationStatusConstants.Released;
-                a.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
+                a.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Cleaning;
                 a.StorageUnit.UpdatedAt = now;
 
                 var cleaningTicket = new SupportTicket
@@ -1224,13 +1224,27 @@ public class FacilityStaffService : IFacilityStaffService
         if (!string.IsNullOrWhiteSpace(category))
         {
             var cat = category.Trim().ToLowerInvariant();
-            query = query.Where(t => t.Category.ToLower() == cat);
+            if (cat.Contains("damage"))
+            {
+                query = query.Where(t => t.Category.ToLower().Contains("damage") || t.Category.ToLower() == "damage");
+            }
+            else
+            {
+                query = query.Where(t => t.Category.ToLower() == cat);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(status))
         {
             var st = status.Trim().ToLowerInvariant();
-            query = query.Where(t => t.Status.ToLower() == st);
+            if (st == "completed" || st == "resolved")
+            {
+                query = query.Where(t => t.Status.ToLower() == "completed" || t.Status.ToLower() == "resolved" || t.Status.ToLower() == "closed");
+            }
+            else
+            {
+                query = query.Where(t => t.Status.ToLower() == st);
+            }
         }
 
         if (onlyAssignedToMe == true)
@@ -1625,7 +1639,7 @@ public class FacilityStaffService : IFacilityStaffService
     public async Task<InspectMoveOutResultDto> InspectMoveOutAsync(long employeeUserId, long moveOutId, InspectMoveOutRequest request, CancellationToken cancellationToken = default)
     {
         var res = await ConfirmQrActionAsync(employeeUserId, new StaffConfirmQrActionRequest("move_out", MoveOutId: moveOutId), cancellationToken);
-        return new InspectMoveOutResultDto(moveOutId, 1, res.AgreementId ?? 1, 0m, RentalAgreementStatusConstants.Completed, StorageUnitStatusConstants.Available, DateTimeOffset.UtcNow);
+        return new InspectMoveOutResultDto(moveOutId, 1, res.AgreementId ?? 1, 0m, RentalAgreementStatusConstants.Completed, StorageUnitStatusConstants.Cleaning, DateTimeOffset.UtcNow);
     }
 
     public async Task<IReadOnlyList<StaffSupportTicketDto>> GetFacilityTicketsAsync(long? facilityId = null, string? status = null, CancellationToken cancellationToken = default)
@@ -1675,9 +1689,17 @@ public class FacilityStaffService : IFacilityStaffService
         var targetStatus = !string.IsNullOrWhiteSpace(request.PhysicalStatus) ? request.PhysicalStatus : request.Status;
         if (!string.IsNullOrWhiteSpace(targetStatus))
         {
-            unit.PhysicalStatus = targetStatus.Trim().ToLowerInvariant();
-            unit.UpdatedAt = DateTimeOffset.UtcNow;
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            var normalized = targetStatus.Trim().ToLowerInvariant();
+            if (normalized == "under_inspection") normalized = StorageUnitStatusConstants.PendingInspection;
+            if (normalized == "under_maintenance" || normalized == "damaged") normalized = StorageUnitStatusConstants.Maintenance;
+            if (normalized == "vacant") normalized = StorageUnitStatusConstants.Available;
+
+            if (unit.PhysicalStatus != normalized)
+            {
+                unit.PhysicalStatus = normalized;
+                unit.UpdatedAt = DateTimeOffset.UtcNow;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
         }
     }
 

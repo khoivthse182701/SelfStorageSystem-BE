@@ -244,6 +244,10 @@ public class FacilityManagerService : IFacilityManagerService
         if (!string.IsNullOrWhiteSpace(request.PhysicalStatus))
         {
             var targetStatus = request.PhysicalStatus.Trim().ToLowerInvariant();
+            if (targetStatus == "under_inspection") targetStatus = StorageUnitStatusConstants.PendingInspection;
+            if (targetStatus == "under_maintenance" || targetStatus == "damaged") targetStatus = StorageUnitStatusConstants.Maintenance;
+            if (targetStatus == "vacant") targetStatus = StorageUnitStatusConstants.Available;
+
             if ((unit.PhysicalStatus == StorageUnitStatusConstants.Occupied || unit.PhysicalStatus == StorageUnitStatusConstants.Reserved)
                 && targetStatus == StorageUnitStatusConstants.Available)
             {
@@ -307,7 +311,7 @@ public class FacilityManagerService : IFacilityManagerService
 
         var areas = await _dbContext.FacilityAreas
             .AsNoTracking()
-            .Where(a => a.FacilityId == facilityId)
+            .Where(a => a.FacilityId == facilityId && a.AreaType == "zone")
             .OrderBy(a => a.DisplayOrder)
             .Select(a => new ManagerAreaLayoutDto
             {
@@ -639,24 +643,46 @@ public class FacilityManagerService : IFacilityManagerService
             throw AppException.FromError(ManagerErrors.EmployeeNotAssignedToFacility);
         }
 
-        var exists = await _dbContext.ShiftAssignments
-            .AnyAsync(sa => sa.ShiftId == request.ShiftId && sa.EmployeeId == request.EmployeeId, cancellationToken);
-        if (exists)
+        var existing = await _dbContext.ShiftAssignments
+            .Include(sa => sa.Employee)
+            .FirstOrDefaultAsync(sa => sa.ShiftId == request.ShiftId && sa.EmployeeId == request.EmployeeId, cancellationToken);
+        if (existing != null)
         {
-            throw AppException.FromError(ManagerErrors.ShiftAssignmentAlreadyExists);
+            if (!string.IsNullOrWhiteSpace(request.DutyRole))
+            {
+                existing.DutyRole = request.DutyRole.Trim().ToLowerInvariant();
+            }
+            if (!string.IsNullOrWhiteSpace(request.Status))
+            {
+                existing.Status = request.Status.Trim().ToLowerInvariant();
+            }
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            return new ManagerShiftAssignmentDto
+            {
+                ShiftId = existing.ShiftId,
+                EmployeeId = existing.EmployeeId,
+                EmployeeCode = existing.Employee.EmployeeCode,
+                EmployeeName = existing.Employee.FullName,
+                DutyRole = existing.DutyRole,
+                Status = existing.Status,
+                CheckInAt = existing.CheckInAt,
+                CheckOutAt = existing.CheckOutAt
+            };
         }
 
-        var hasOverlap = await _dbContext.ShiftAssignments
+        var overlappingAssignments = await _dbContext.ShiftAssignments
             .Include(sa => sa.Shift)
-            .AnyAsync(sa => sa.EmployeeId == request.EmployeeId
-                         && sa.ShiftId != request.ShiftId
-                         && sa.Shift.Status != StaffShiftStatusConstants.Cancelled
-                         && sa.Status != ShiftAssignmentStatusConstants.Absent
-                         && sa.Shift.StartsAt < shift.EndsAt
-                         && sa.Shift.EndsAt > shift.StartsAt, cancellationToken);
-        if (hasOverlap)
+            .Where(sa => sa.EmployeeId == request.EmployeeId
+                      && sa.ShiftId != request.ShiftId
+                      && sa.Shift.Status != StaffShiftStatusConstants.Cancelled
+                      && sa.Status != ShiftAssignmentStatusConstants.Absent
+                      && sa.Shift.StartsAt < shift.EndsAt
+                      && sa.Shift.EndsAt > shift.StartsAt)
+            .ToListAsync(cancellationToken);
+        if (overlappingAssignments.Count > 0)
         {
-            throw AppException.FromError(ManagerErrors.OverlappingShiftAssignment);
+            _dbContext.ShiftAssignments.RemoveRange(overlappingAssignments);
         }
 
         var status = !string.IsNullOrWhiteSpace(request.Status) 
@@ -1679,17 +1705,18 @@ public class FacilityManagerService : IFacilityManagerService
                                            u.PhysicalStatus == StorageUnitStatusConstants.PendingInspection);
 
         var occupancyRate = totalUnits > 0
-            ? Math.Round((double)(occupied + reserved) / totalUnits * 100.0, 2)
+            ? Math.Round((double)occupied / totalUnits * 100.0, 1)
             : 0.0;
 
         // Daily schedule
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var todayCheckIns = await _dbContext.Reservations
-            .CountAsync(r => r.FacilityId == facilityId && r.StartDate == today, cancellationToken);
+            .CountAsync(r => r.FacilityId == facilityId && 
+                             (r.Status == ReservationStatusConstants.Confirmed || r.Status == ReservationStatusConstants.Pending), cancellationToken);
 
         var todayCheckOuts = await _dbContext.MoveOutRequests
             .CountAsync(m => m.Agreement.FacilityId == facilityId && 
-                             m.RequestedMoveOutDate == today, cancellationToken);
+                             (m.Status == MoveOutStatusConstants.Requested || m.Status == MoveOutStatusConstants.InspectionPending || m.Status == MoveOutStatusConstants.Scheduled || m.RequestedMoveOutDate == today), cancellationToken);
 
         var todayUtcDate = DateTime.UtcNow.Date;
         var todayStart = new DateTimeOffset(todayUtcDate, TimeSpan.Zero);
