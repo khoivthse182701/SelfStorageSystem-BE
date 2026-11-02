@@ -916,6 +916,7 @@ public class ManagerController : ControllerBase
     /// Facility Manager trực tiếp xác nhận đã chuyển khoản ngân hàng hoàn cọc cho khách ngoài đời thực.
     /// </summary>
     [HttpPost("refunds/{refundId:long}/process-payout")]
+    [HttpPost("refund-approvals/{refundId:long}/payout")]
     [ProducesResponseType(typeof(ApiResponse<ManagerProcessRefundPayoutResultDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]

@@ -1258,6 +1258,7 @@ public class FacilityManagerService : IFacilityManagerService
 
             var estimatedDeductions = unpaidDamages + overdueDebt;
             var recommendedRefund = Math.Max(0m, deposit - estimatedDeductions);
+            var (bankName, accNumber, holder, _) = ExtractBankInfo(r.Reason);
 
             return new ManagerRefundApprovalDto
             {
@@ -1276,7 +1277,11 @@ public class FacilityManagerService : IFacilityManagerService
                 DecidedAt = r.RefundApproval?.DecidedAt,
                 OriginalDeposit = deposit,
                 EstimatedDeductions = estimatedDeductions,
-                RecommendedRefundAmount = recommendedRefund
+                RecommendedRefundAmount = recommendedRefund,
+                BankName = bankName,
+                BankAccountNumber = accNumber,
+                BankAccountHolder = holder,
+                PayoutMethod = r.Provider
             };
         }).ToList();
 
@@ -2849,18 +2854,32 @@ public class FacilityManagerService : IFacilityManagerService
 
         var now = DateTimeOffset.UtcNow;
 
+        var txRef = !string.IsNullOrWhiteSpace(request.TransactionReference)
+            ? request.TransactionReference.Trim()
+            : (!string.IsNullOrWhiteSpace(request.TransactionRef)
+                ? request.TransactionRef.Trim()
+                : $"FT{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
+
+        var proofImg = !string.IsNullOrWhiteSpace(request.ProofImageUrl)
+            ? request.ProofImageUrl.Trim()
+            : request.ProofUrl?.Trim();
+
+        var noteText = !string.IsNullOrWhiteSpace(request.Note)
+            ? request.Note.Trim()
+            : request.Notes?.Trim();
+
         refund.Status = RefundStatusConstants.Completed;
         refund.Provider = RefundPayoutMethodConstants.BankTransfer;
-        refund.ProviderRefundId = request.TransactionReference.Trim();
+        refund.ProviderRefundId = txRef;
         refund.RefundedAt = now;
         refund.UpdatedAt = now;
 
         var approvalReason = System.Text.Json.JsonSerializer.Serialize(new
         {
             payoutMethod = RefundPayoutMethodConstants.BankTransfer,
-            transactionRef = request.TransactionReference.Trim(),
-            proofImageUrl = request.ProofImageUrl?.Trim(),
-            note = request.Note?.Trim()
+            transactionRef = txRef,
+            proofImageUrl = proofImg,
+            note = noteText
         });
 
         if (refund.RefundApproval == null)

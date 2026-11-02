@@ -34,13 +34,31 @@ public class ManagerRefundItemDto
 
 public class ManagerProcessRefundPayoutRequest
 {
-    [Required]
-    [MinLength(3)]
-    public string TransactionReference { get; set; } = string.Empty;
+    public string? TransactionReference { get; set; }
+
+    public string? TransactionRef
+    {
+        get => TransactionReference;
+        set => TransactionReference = value;
+    }
 
     public string? ProofImageUrl { get; set; }
 
+    public string? ProofUrl
+    {
+        get => ProofImageUrl;
+        set => ProofImageUrl = value;
+    }
+
     public string? Note { get; set; }
+
+    public string? Notes
+    {
+        get => Note;
+        set => Note = value;
+    }
+
+    public decimal? Amount { get; set; }
 }
 
 public class ManagerProcessRefundPayoutResultDto
