@@ -231,7 +231,7 @@ CREATE TABLE [core].storage_units (
     physical_status nvarchar(255) NOT NULL DEFAULT 'available'
         CHECK (physical_status IN (
             'available', 'reserved', 'occupied', 'pending_inspection',
-            'maintenance', 'out_of_service'
+            'maintenance', 'cleaning', 'under_maintenance', 'out_of_service'
         )),
     is_listed bit NOT NULL DEFAULT 1,
     notes nvarchar(255),
@@ -2035,12 +2035,12 @@ BEGIN
         SELECT 1 FROM inserted i JOIN deleted d ON d.id=i.id
         WHERE i.physical_status<>d.physical_status
           AND NOT (
-              (d.physical_status='available' AND i.physical_status IN ('reserved','maintenance','out_of_service')) OR
-              (d.physical_status='reserved' AND i.physical_status IN ('available','occupied','maintenance','out_of_service')) OR
-              (d.physical_status='occupied' AND i.physical_status IN ('pending_inspection','maintenance')) OR
-              (d.physical_status='pending_inspection' AND i.physical_status IN ('available','maintenance','out_of_service')) OR
-              (d.physical_status='maintenance' AND i.physical_status IN ('available','out_of_service')) OR
-              (d.physical_status='out_of_service' AND i.physical_status IN ('maintenance','available'))
+              (d.physical_status='available' AND i.physical_status IN ('reserved','occupied','maintenance','cleaning','under_maintenance','pending_inspection','out_of_service')) OR
+              (d.physical_status='reserved' AND i.physical_status IN ('available','occupied','maintenance','cleaning','under_maintenance','out_of_service')) OR
+              (d.physical_status='occupied' AND i.physical_status IN ('pending_inspection','cleaning','maintenance','under_maintenance','available','out_of_service')) OR
+              (d.physical_status IN ('pending_inspection','cleaning') AND i.physical_status IN ('available','maintenance','cleaning','under_maintenance','pending_inspection','out_of_service','occupied')) OR
+              (d.physical_status IN ('maintenance','under_maintenance') AND i.physical_status IN ('available','cleaning','pending_inspection','out_of_service','maintenance','under_maintenance','occupied')) OR
+              (d.physical_status='out_of_service' AND i.physical_status IN ('maintenance','under_maintenance','available','cleaning'))
           )
     )
     BEGIN
