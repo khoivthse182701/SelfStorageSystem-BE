@@ -7,6 +7,18 @@ public class ManagerAssignTicketStaffRequest
     [Required]
     public long EmployeeId { get; set; }
 
+    public long StaffId
+    {
+        get => EmployeeId;
+        set => EmployeeId = value;
+    }
+
+    public long AssignedEmployeeId
+    {
+        get => EmployeeId;
+        set => EmployeeId = value;
+    }
+
     public string? Notes { get; set; }
 
     public DateTimeOffset? DueAt { get; set; }
@@ -45,6 +57,24 @@ public class ManagerAssignInspectionRequest
 
     [Required]
     public long EmployeeId { get; set; }
+
+    public long StaffId
+    {
+        get => EmployeeId;
+        set => EmployeeId = value;
+    }
+
+    public long AssignedEmployeeId
+    {
+        get => EmployeeId;
+        set => EmployeeId = value;
+    }
+
+    public long AssignedStaffId
+    {
+        get => EmployeeId;
+        set => EmployeeId = value;
+    }
 
     public string? Notes { get; set; }
 

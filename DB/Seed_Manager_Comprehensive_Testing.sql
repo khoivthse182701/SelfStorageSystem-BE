@@ -104,18 +104,21 @@ BEGIN TRY
     DELETE FROM [core].[payments] WHERE id IN (9301, 9302);
 
     -- Xóa support tickets & staff tasks test
-    DELETE FROM [core].[staff_tasks] WHERE id IN (9201, 9202, 9203);
+    DELETE FROM [core].[ticket_attachments] WHERE ticket_id IN (9101, 9102);
+    DELETE FROM [core].[ticket_messages] WHERE ticket_id IN (9101, 9102);
+    DELETE FROM [core].[ticket_assignments] WHERE ticket_id IN (9101, 9102);
+    DELETE FROM [core].[staff_tasks] WHERE id IN (9201, 9202, 9203) OR ticket_id IN (9101, 9102) OR assigned_employee_id IN (911, 912);
     DELETE FROM [core].[support_tickets] WHERE id IN (9101, 9102);
 
     -- Xóa inspections test
-    DELETE FROM [core].[inspection_items] WHERE inspection_id IN (9401);
-    DELETE FROM [core].[inspections] WHERE id IN (9401);
+    DELETE FROM [core].[inspection_items] WHERE inspection_id IN (9401) OR inspection_id IN (SELECT id FROM [core].[inspections] WHERE agreement_id IN (9001, 9002) OR inspected_by IN (911, 912));
+    DELETE FROM [core].[inspections] WHERE id IN (9401) OR agreement_id IN (9001, 9002) OR inspected_by IN (911, 912);
 
     -- Xóa move-out requests test
     DELETE FROM [core].[move_out_requests] WHERE id IN (9501);
 
     -- Xóa shift assignments test
-    DELETE FROM [core].[shift_assignments] WHERE shift_id IN (9601, 9602);
+    DELETE FROM [core].[shift_assignments] WHERE shift_id IN (9601, 9602) OR employee_id IN (911, 912);
     DELETE FROM [core].[staff_shifts] WHERE id IN (9601, 9602);
 
     -- Xóa access credentials & allocations & invoices & agreements test

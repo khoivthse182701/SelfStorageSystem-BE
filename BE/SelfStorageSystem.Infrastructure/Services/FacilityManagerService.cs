@@ -2485,7 +2485,8 @@ public class FacilityManagerService : IFacilityManagerService
             TicketId = ticket.Id,
             TaskType = "support",
             Title = $"[Sự cố #{ticket.TicketNo}] {ticket.Subject}",
-            Status = "pending",
+            Status = "todo",
+            CreatedBy = currentUserId,
             DueAt = request.DueAt ?? now.AddHours(24),
             ProgressPercent = 0,
             CreatedAt = now,
@@ -2605,14 +2606,14 @@ public class FacilityManagerService : IFacilityManagerService
             AgreementId = agreement.Id,
             StorageUnitId = activeUnit?.Id,
             InspectedBy = request.EmployeeId,
-            InspectionType = "move_out",
+            InspectionType = "check_out",
             Status = InspectionStatusConstants.Draft,
             Summary = request.Notes,
             CreatedAt = now
         };
         _dbContext.Inspections.Add(inspection);
 
-        agreement.Status = RentalAgreementStatusConstants.ExpiringSoon;
+        agreement.Status = RentalAgreementStatusConstants.MoveOutScheduled;
         if (agreement.MoveOutRequest != null)
         {
             agreement.MoveOutRequest.Status = MoveOutStatusConstants.InspectionPending;
@@ -2626,7 +2627,8 @@ public class FacilityManagerService : IFacilityManagerService
             AssignedEmployeeId = request.EmployeeId,
             TaskType = "inspection",
             Title = $"[Nghiệm thu trả kho HĐ #{agreement.AgreementNo}] Ô kho {activeUnit?.UnitCode ?? ""}",
-            Status = "pending",
+            Status = "todo",
+            CreatedBy = currentUserId,
             DueAt = request.ScheduledAt ?? now.AddHours(24),
             ProgressPercent = 0,
             CreatedAt = now,

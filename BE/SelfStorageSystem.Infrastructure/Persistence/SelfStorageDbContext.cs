@@ -271,7 +271,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__appointm__3213E83F154E5845");
 
-            entity.ToTable("appointments", "core");
+            entity.ToTable("appointments", "core", tb => tb.HasTrigger("trg_appointments_validate_scope"));
 
             entity.HasIndex(e => e.AgreementId, "appointments_agreement_id_idx").HasFilter("([agreement_id] IS NOT NULL)");
 
@@ -496,7 +496,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__delinque__3213E83F82280640");
 
-            entity.ToTable("delinquency_cases", "core");
+            entity.ToTable("delinquency_cases", "core", tb => tb.HasTrigger("trg_delinquency_cases_validate_scope"));
 
             entity.HasIndex(e => new { e.AgreementId, e.Status, e.OpenedAt }, "delinquency_cases_agreement_idx").IsDescending(false, false, true);
 
@@ -771,7 +771,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__handover__3213E83F4B215F3D");
 
-            entity.ToTable("handover_records", "core");
+            entity.ToTable("handover_records", "core", tb => tb.HasTrigger("trg_handover_records_validate_scope"));
 
             entity.HasIndex(e => new { e.AgreementId, e.CreatedAt }, "handover_records_agreement_idx").IsDescending(false, true);
 
@@ -869,7 +869,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__inspecti__3213E83F24198D74");
 
-            entity.ToTable("inspections", "core");
+            entity.ToTable("inspections", "core", tb => tb.HasTrigger("trg_inspections_validate_scope"));
 
             entity.HasIndex(e => e.AgreementId, "inspections_agreement_id_idx").HasFilter("([agreement_id] IS NOT NULL)");
 
@@ -1165,7 +1165,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__maintena__3213E83F73AEF50C");
 
-            entity.ToTable("maintenance_work_orders", "core");
+            entity.ToTable("maintenance_work_orders", "core", tb => tb.HasTrigger("trg_maintenance_work_orders_validate_scope"));
 
             entity.HasIndex(e => e.WorkOrderNo, "UQ__maintena__58954FA67EC34FED").IsUnique();
 
@@ -1654,7 +1654,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__refunds__3213E83F6C90B5ED");
 
-            entity.ToTable("refunds", "core");
+            entity.ToTable("refunds", "core", tb => tb.HasTrigger("trg_refunds_guard"));
 
             entity.HasIndex(e => e.IdempotencyKey, "UQ__refunds__A7BA59F4B0FC8B69").IsUnique();
 
@@ -1985,7 +1985,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.TicketId).HasName("PK__service___D596F96B2887DCB4");
 
-            entity.ToTable("service_ratings", "core");
+            entity.ToTable("service_ratings", "core", tb => tb.HasTrigger("trg_service_ratings_validate_scope"));
 
             entity.HasIndex(e => e.CustomerId, "service_ratings_customer_id_idx");
 
@@ -2123,7 +2123,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PK__staff_ta__3213E83FFDB96EA1");
 
-            entity.ToTable("staff_tasks", "core");
+            entity.ToTable("staff_tasks", "core", tb => tb.HasTrigger("trg_staff_tasks_validate_scope"));
 
             entity.HasIndex(e => new { e.AssignedEmployeeId, e.Status, e.DueAt }, "staff_tasks_assigned_employee_id_idx").HasFilter("([assigned_employee_id] IS NOT NULL)");
 
