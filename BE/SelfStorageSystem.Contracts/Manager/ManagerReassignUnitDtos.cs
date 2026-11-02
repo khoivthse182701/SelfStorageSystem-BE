@@ -4,8 +4,16 @@ namespace SelfStorageSystem.Contracts.Manager;
 
 public class ManagerReassignUnitRequest
 {
-    [Required]
     public long NewStorageUnitId { get; set; }
+
+    /// <summary>
+    /// Alias for NewStorageUnitId to support payloads sending newUnitId
+    /// </summary>
+    public long NewUnitId
+    {
+        get => NewStorageUnitId;
+        set => NewStorageUnitId = value;
+    }
 
     [Required]
     [MinLength(3, ErrorMessage = "Reason must be at least 3 characters long.")]
@@ -32,6 +40,8 @@ public class ManagerReassignUnitResponseDto
     public string NewUnitTypeName { get; set; } = string.Empty;
 
     public string? NewPinCode { get; set; }
+    public string? NewPin => NewPinCode;
+
     public string Reason { get; set; } = string.Empty;
     public DateTimeOffset ReassignedAt { get; set; }
     public string Message { get; set; } = string.Empty;
