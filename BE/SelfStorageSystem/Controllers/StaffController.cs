@@ -95,24 +95,10 @@ public class StaffController : ControllerBase
     }
 
     // ==========================================
-    // 🛒 NHÓM 2: ĐẶT THUÊ KHO TẠI QUẦY (Walk-in Booking)
+    // NHOM 2: DAT THUE KHO TAI QUAY (Walk-in Booking) - [DA VO HIEU HOA / CAT BO]
     // ==========================================
-
-    /// <summary>
-    /// Staff tạo đơn thuê tại quầy cho khách (Tìm/tạo tài khoản khách bằng SĐT -> Chọn ô kho Available -> Tính tiền cọc 1 tháng + Tiền thuê -> Trả về mã QR VietQR để khách quét ngay tại quầy).
-    /// </summary>
-    [HttpPost("walk-in-bookings")]
-    [ProducesResponseType(typeof(ApiResponse<StaffWalkInBookingResponse>), StatusCodes.Status201Created)]
-    public async Task<IActionResult> CreateWalkInBooking(
-        [FromBody] StaffWalkInBookingRequest request,
-        CancellationToken cancellationToken)
-    {
-        if (!TryGetUserId(out var userId))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        var result = await _staffService.CreateWalkInBookingAsync(userId, request, cancellationToken);
-        return StatusCode(StatusCodes.Status201Created, ApiResponse<StaffWalkInBookingResponse>.Ok(result, "Walk-in booking created successfully. Present QR to customer for payment."));
-    }
+    // Endpoint POST /api/staff/walk-in-bookings da duoc cat bo theo Module 1: Cat bo tinh nang thua.
+    // Khach hang thuc hien dat giu cho truc tuyen. Nhan vien quay tap trung assign-unit va handovers.
 
     // ==========================================
     // 📷 NHÓM 3: QUÉT QR (Check-in nhận kho / Check-out dọn kho / Ra vào)
@@ -396,19 +382,19 @@ public class StaffController : ControllerBase
     }
 
     /// <summary>
-    /// Phân bổ ô kho cụ thể cho đơn đặt chỗ.
+    /// Phan bo o kho cu the cho don dat cho.
     /// </summary>
-    [HttpPost("reservations/{id:long}/assign-unit")]
+    [HttpPost("reservations/{reservationId:long}/assign-unit")]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
     public async Task<IActionResult> AssignUnitToReservation(
-        [FromRoute] long id,
+        [FromRoute] long reservationId,
         [FromBody] AssignUnitToReservationRequest request,
         CancellationToken cancellationToken)
     {
         if (!TryGetUserId(out var userId))
             return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
 
-        await _staffService.AssignUnitToReservationAsync(userId, id, request, cancellationToken);
+        await _staffService.AssignUnitToReservationAsync(userId, reservationId, request, cancellationToken);
         return Ok(ApiResponse.Ok("Unit assigned to reservation successfully."));
     }
 

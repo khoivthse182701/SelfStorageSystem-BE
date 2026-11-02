@@ -34,6 +34,12 @@ public interface IFacilityManagerService
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
 
+    Task DeleteUnitAsync(
+        long unitId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
     Task<ManagerMapLayoutDto> GetMapLayoutAsync(
         long facilityId,
         long currentUserId,

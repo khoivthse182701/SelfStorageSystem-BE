@@ -65,34 +65,10 @@ public class FacilityStaffServiceTests
     }
 
     [Fact]
-    public async Task WalkInBooking_Success_CreatesUserReservationInvoiceAndReturnsVietQr()
+    public async Task WalkInBooking_Disabled_ThrowsNotSupportedException()
     {
         // Arrange
         await using var db = CreateInMemoryDbContext();
-        var staffUser = new User { Id = 3, Email = "staff@system.local", PasswordHash = "hash", Status = "active" };
-        var employee = new EmployeeProfile { UserId = 3, EmployeeCode = "EMP-003", FullName = "Staff Nguyen", EmploymentStatus = "active" };
-        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "Thu Duc Facility", AddressLine = "123 Street", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
-        var unitType = new UnitType { Id = 1, Code = "SM", Name = "Small Locker", WidthM = 1, LengthM = 1, HeightM = 1, AreaM2 = 1, IsActive = true };
-        var unit = new StorageUnit { Id = 101, FacilityId = 1, UnitTypeId = 1, UnitCode = "U-101", PhysicalStatus = StorageUnitStatusConstants.Available, IsListed = true };
-        var rate = new FacilityRate
-        {
-            Id = 1,
-            FacilityId = 1,
-            UnitTypeId = 1,
-            MonthlyRate = 1000000m,
-            DepositAmount = 1000000m,
-            BookingFee = 0,
-            ValidFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(-1))
-        };
-
-        db.Users.Add(staffUser);
-        db.EmployeeProfiles.Add(employee);
-        db.Facilities.Add(facility);
-        db.UnitTypes.Add(unitType);
-        db.StorageUnits.Add(unit);
-        db.FacilityRates.Add(rate);
-        await db.SaveChangesAsync();
-
         var service = new FacilityStaffService(db);
         var request = new StaffWalkInBookingRequest(
             CustomerPhone: "0901234567",
@@ -104,25 +80,8 @@ public class FacilityStaffServiceTests
             DurationMonths: 3
         );
 
-        // Act
-        var response = await service.CreateWalkInBookingAsync(employeeUserId: 3, request);
-
-        // Assert
-        Assert.NotNull(response);
-        Assert.Equal("Nguyen Van A", response.CustomerName);
-        Assert.Equal("0901234567", response.CustomerPhone);
-        Assert.Equal(2000000m, response.TotalAmount); // 1 month rent + 1 month deposit
-        Assert.Contains("vietqr", response.QrImageUrl);
-        Assert.Equal("awaiting_payment", response.Status);
-
-        // Unit should now be Reserved
-        var updatedUnit = await db.StorageUnits.FindAsync(101L);
-        Assert.Equal(StorageUnitStatusConstants.Reserved, updatedUnit!.PhysicalStatus);
-
-        // Reservation and invoice exist
-        var reservation = await db.Reservations.FindAsync(response.ReservationId);
-        Assert.NotNull(reservation);
-        Assert.Equal(ReservationStatusConstants.Pending, reservation.Status);
+        // Act & Assert
+        await Assert.ThrowsAsync<NotSupportedException>(() => service.CreateWalkInBookingAsync(employeeUserId: 3, request));
     }
 
     [Fact]

@@ -94,6 +94,24 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Lấy dữ liệu tọa độ sơ đồ bản đồ kho (unit_map_positions).
     /// </summary>
+    /// <summary>
+    /// Xóa ô kho khỏi hệ thống.
+    /// </summary>
+    [HttpDelete("units/{unitId:long}")]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteUnit(
+        [FromRoute] long unitId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        await _managerService.DeleteUnitAsync(unitId, userId, isSystemAdmin, cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { unitId }, "Storage unit deleted successfully."));
+    }
+
     [HttpGet("facilities/{facilityId:long}/map-layout")]
     [ProducesResponseType(typeof(ApiResponse<ManagerMapLayoutDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetMapLayout(
@@ -144,6 +162,28 @@ public class ManagerController : ControllerBase
             facilityId, userId, isSystemAdmin, cancellationToken);
 
         return Ok(ApiResponse<IReadOnlyList<ManagerTransferRequestDto>>.Ok(result, "Retrieved transfer requests successfully."));
+    }
+
+
+    /// <summary>
+    /// Phê duyệt hoặc từ chối yêu cầu chuyển kho của khách hàng.
+    /// </summary>
+    [HttpPut("transfer-requests/{id:long}/decide")]
+    [ProducesResponseType(typeof(ApiResponse<ManagerTransferRequestDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DecideTransferRequest(
+        [FromRoute] long id,
+        [FromBody] ManagerDecideTransferRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.DecideTransferRequestAsync(
+            id, request, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<ManagerTransferRequestDto>.Ok(result, "Transfer request decided successfully."));
     }
 
     // ==========================================
@@ -534,9 +574,10 @@ public class ManagerController : ControllerBase
     }
 
     /// <summary>
-    /// Cập nhật / thiết lập biểu giá thuê mới cho loại kho tại cơ sở.
-    /// Giá mới có hiệu lực từ ValidFrom, không sửa đổi hồi tố hợp đồng đang active.
+    /// Cap nhat / thiet lap bieu gia thue moi cho loai kho tai co so.
+    /// Chi danh rieng cho system_administrator (Manager chi co quyen xem GET).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPut("facilities/{facilityId:long}/pricing/rates")]
     [HttpPut("pricing/rates")]
     [ProducesResponseType(typeof(ApiResponse<OperationsRateDto>), StatusCodes.Status200OK)]
@@ -551,6 +592,9 @@ public class ManagerController : ControllerBase
     {
         if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
             return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        if (!isSystemAdmin)
+            return StatusCode(StatusCodes.Status403Forbidden, ApiResponse.Fail("Chi Quan tri vien he thong (system_administrator) moi co quyen chinh sua bieu gia thue."));
 
         if (facilityId.HasValue)
         {
@@ -577,8 +621,10 @@ public class ManagerController : ControllerBase
     }
 
     /// <summary>
-    /// Thiết lập / cập nhật quy tắc tính phí toàn hệ thống hoặc theo cơ sở.
+    /// Thiet lap / cap nhat quy tac tinh phi toan he thong hoac theo co so.
+    /// Chi danh rieng cho system_administrator (Manager chi co quyen xem GET).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpPut("pricing/fees")]
     [ProducesResponseType(typeof(ApiResponse<OperationsFeeDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -591,6 +637,9 @@ public class ManagerController : ControllerBase
     {
         if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
             return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        if (!isSystemAdmin)
+            return StatusCode(StatusCodes.Status403Forbidden, ApiResponse.Fail("Chi Quan tri vien he thong (system_administrator) moi co quyen chinh sua quy tac tinh phi."));
 
         if (!isSystemAdmin && request.FacilityId.HasValue)
         {

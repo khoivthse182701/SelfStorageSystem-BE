@@ -26,14 +26,14 @@ public interface IFacilityStaffService
         CancellationToken cancellationToken = default);
 
     // ==========================================
-    // 2. WALK-IN BOOKING AT COUNTER (Nhóm 2)
     // ==========================================
+    // 2. WALK-IN BOOKING AT COUNTER (Nhom 2) - [DA VO HIEU HOA]
+    // ==========================================
+    [Obsolete("Tinh nang dat thue tai quay (Walk-in booking) da bi vo hieu hoa theo Module 1: Cat bo tinh nang thua.")]
     Task<StaffWalkInBookingResponse> CreateWalkInBookingAsync(
         long employeeUserId,
         StaffWalkInBookingRequest request,
         CancellationToken cancellationToken = default);
-
-    // ==========================================
     // 3. QR VERIFY & CONFIRM ACTION (Nhóm 3)
     // ==========================================
     Task<StaffQrVerifyResponse> VerifyQrAsync(

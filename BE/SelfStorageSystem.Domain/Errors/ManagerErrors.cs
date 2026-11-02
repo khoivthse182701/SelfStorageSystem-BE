@@ -16,6 +16,9 @@ public static class ManagerErrors
     public static readonly Error UnitCodeAlreadyExists =
         Error.Conflict("Manager.UnitCodeAlreadyExists", "A storage unit with this unit code already exists at this facility.");
 
+    public static readonly Error UnitCannotDeleteHasRentals =
+        Error.Conflict("Manager.UnitCannotDeleteHasRentals", "Cannot delete storage unit with active rentals, reservations, or while occupied.");
+
     public static readonly Error UnitOccupiedCannotModify =
         Error.Conflict("Manager.UnitOccupiedCannotModify", "Cannot modify physical status directly while unit is currently occupied or reserved.");
 

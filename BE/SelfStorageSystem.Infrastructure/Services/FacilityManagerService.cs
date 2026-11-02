@@ -293,6 +293,49 @@ public class FacilityManagerService : IFacilityManagerService
         };
     }
 
+    public async Task DeleteUnitAsync(
+        long unitId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        var unit = await _dbContext.StorageUnits
+            .Include(u => u.UnitAllocations)
+            .Include(u => u.UnitMapPosition)
+            .Include(u => u.UnitStatusHistories)
+            .FirstOrDefaultAsync(u => u.Id == unitId, cancellationToken);
+
+        if (unit == null)
+        {
+            throw AppException.FromError(ManagerErrors.UnitNotFound);
+        }
+
+        await EnsureFacilityAccessAsync(unit.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        if (unit.PhysicalStatus == StorageUnitStatusConstants.Occupied ||
+            unit.PhysicalStatus == StorageUnitStatusConstants.Reserved ||
+            unit.UnitAllocations.Any())
+        {
+            throw AppException.FromError(ManagerErrors.UnitCannotDeleteHasRentals);
+        }
+
+        if (unit.UnitStatusHistories.Any())
+        {
+            _dbContext.UnitStatusHistories.RemoveRange(unit.UnitStatusHistories);
+        }
+
+        if (unit.UnitMapPosition != null)
+        {
+            _dbContext.UnitMapPositions.Remove(unit.UnitMapPosition);
+        }
+
+        _dbContext.StorageUnits.Remove(unit);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("User {UserId} deleted storage unit {UnitCode} (Id: {UnitId}) at facility {FacilityId}.",
+            currentUserId, unit.UnitCode, unitId, unit.FacilityId);
+    }
+
     public async Task<ManagerMapLayoutDto> GetMapLayoutAsync(
         long facilityId,
         long currentUserId,
