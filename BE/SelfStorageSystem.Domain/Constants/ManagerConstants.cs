@@ -106,7 +106,14 @@ public static class RefundStatusConstants
     public const string Approved = "approved";
     public const string Rejected = "rejected";
     public const string Completed = "completed";
+    public const string PendingManagerPayout = "pending_manager_payout";
+    public const string PendingCounterPayout = "pending_counter_payout";
 
-    public static readonly string[] All = { Pending, Approved, Rejected, Completed };
+    public static readonly string[] All = { Pending, Approved, Rejected, Completed, PendingManagerPayout, PendingCounterPayout };
 }
 
+public static class RefundPayoutMethodConstants
+{
+    public const string Cash = "cash";
+    public const string BankTransfer = "bank_transfer";
+}

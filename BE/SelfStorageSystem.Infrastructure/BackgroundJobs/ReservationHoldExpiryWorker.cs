@@ -27,33 +27,48 @@ public class ReservationHoldExpiryWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("ReservationHoldExpiryWorker started (Interval: {Interval}s, Max hold: {Hold}m per BR-RSV-01)",
-            _settings.ExpiryCheckIntervalSeconds, _settings.HoldDurationMinutes);
-
-        var interval = TimeSpan.FromSeconds(Math.Max(10, _settings.ExpiryCheckIntervalSeconds));
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            _logger.LogInformation("ReservationHoldExpiryWorker started (Interval: {Interval}s, Max hold: {Hold}m per BR-RSV-01)",
+                _settings.ExpiryCheckIntervalSeconds, _settings.HoldDurationMinutes);
+
+            var interval = TimeSpan.FromSeconds(Math.Max(10, _settings.ExpiryCheckIntervalSeconds));
+
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await ReleaseExpiredReservationsAsync(stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error occurred while sweeping expired reservations: {Message}", ex.Message);
+                try
+                {
+                    await ReleaseExpiredReservationsAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error occurred while sweeping expired reservations: {Message}", ex.Message);
+                }
+
+                try
+                {
+                    await Task.Delay(interval, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
 
-            try
-            {
-                await Task.Delay(interval, stoppingToken);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            _logger.LogInformation("ReservationHoldExpiryWorker stopped.");
         }
-
-        _logger.LogInformation("ReservationHoldExpiryWorker stopped.");
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("ReservationHoldExpiryWorker canceled.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "FATAL unhandled exception in ReservationHoldExpiryWorker: {Message}", ex.Message);
+        }
     }
 
     private async Task ReleaseExpiredReservationsAsync(CancellationToken cancellationToken)

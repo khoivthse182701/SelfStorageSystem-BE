@@ -47,9 +47,12 @@ public static class TicketPriorityConstants
 public static class TicketStatusConstants
 {
     public const string Open = "open";
+    public const string PendingManagerReview = "pending_manager_review";
+    public const string Assigned = "assigned";
     public const string InProgress = "in_progress";
     public const string WaitingForCustomer = "waiting_for_customer";
     public const string WaitingForMaintenance = "waiting_for_maintenance";
+    public const string SevereNeedRelocation = "severe_need_relocation";
     public const string Assessed = "assessed";
     public const string Resolved = "resolved";
     public const string Closed = "closed";
@@ -59,12 +62,14 @@ public static class TicketStatusConstants
 public static class TicketDisplayStatusConstants
 {
     public const string Reported = "Reported";
+    public const string PendingManagerReview = "Pending Manager Review";
+    public const string Assigned = "Assigned";
     public const string Investigating = "Investigating";
     public const string WaitingForCustomer = "Waiting for customer";
     public const string WaitingForMaintenance = "Waiting for maintenance";
+    public const string SevereNeedRelocation = "Severe - Need Relocation";
     public const string Assessed = "Assessed";
     public const string Resolved = "Resolved";
     public const string Closed = "Closed";
     public const string Cancelled = "Cancelled";
 }
-

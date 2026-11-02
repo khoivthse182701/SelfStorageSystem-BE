@@ -72,7 +72,9 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             Priority = priority,
             Subject = request.Subject,
             Description = request.Description,
-            Status = TicketStatusConstants.Open,
+            Status = (category == TicketCategoryConstants.Maintenance || category == TicketCategoryConstants.Unit) 
+                ? TicketStatusConstants.PendingManagerReview 
+                : TicketStatusConstants.Open,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

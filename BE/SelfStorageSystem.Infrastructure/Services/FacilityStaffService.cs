@@ -949,7 +949,7 @@ public class FacilityStaffService : IFacilityStaffService
             var fromUnit = await _dbContext.StorageUnits.FindAsync(new object[] { transfer.FromUnitId }, cancellationToken);
             if (fromUnit != null)
             {
-                fromUnit.PhysicalStatus = StorageUnitStatusConstants.Cleaning;
+                fromUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
                 fromUnit.UpdatedAt = now;
 
                 var cleaningTicket = new SupportTicket
@@ -1715,7 +1715,8 @@ public class FacilityStaffService : IFacilityStaffService
         {
             var normalized = targetStatus.Trim().ToLowerInvariant();
             if (normalized == "under_inspection") normalized = StorageUnitStatusConstants.PendingInspection;
-            if (normalized == "under_maintenance" || normalized == "damaged") normalized = StorageUnitStatusConstants.Maintenance;
+            if (normalized == "under_maintenance") normalized = StorageUnitStatusConstants.UnderMaintenanceValue;
+            if (normalized == "damaged") normalized = StorageUnitStatusConstants.Maintenance;
             if (normalized == "vacant") normalized = StorageUnitStatusConstants.Available;
 
             if (unit.PhysicalStatus != normalized)
@@ -1793,4 +1794,508 @@ public class FacilityStaffService : IFacilityStaffService
 
         throw AppException.FromError(ManagerErrors.EmployeeNotAssignedToFacility);
     }
-}
+
+    // ==========================================
+    // MODULE 3: Staff submits ticket report (Resolved / Severe_Need_Relocation)
+    // ==========================================
+    public async Task<StaffTicketReportResultDto> SubmitTicketReportAsync(
+        long employeeUserId,
+        long ticketId,
+        StaffSubmitTicketReportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var ticket = await _dbContext.SupportTickets
+            .Include(t => t.StorageUnit)
+            .Include(t => t.Customer)
+            .Include(t => t.StaffTasks)
+            .FirstOrDefaultAsync(t => t.Id == ticketId, cancellationToken);
+
+        if (ticket == null)
+            throw AppException.FromError(StaffErrors.TicketNotFound);
+
+        var employee = await _dbContext.EmployeeProfiles
+            .FirstOrDefaultAsync(ep => ep.UserId == employeeUserId, cancellationToken);
+        if (employee == null)
+            throw AppException.FromError(StaffErrors.EmployeeProfileNotFound);
+
+        var now = DateTimeOffset.UtcNow;
+        var isSevere = request.AssessmentLevel.Equals("severe_need_relocation", StringComparison.OrdinalIgnoreCase);
+
+        var reportMessage = new TicketMessage
+        {
+            TicketId = ticket.Id,
+            AuthorUserId = employeeUserId,
+            Body = $"[Staff Inspection Report - {employee.FullName}]\nĐánh giá: {(isSevere ? "HƯ HỎNG NẶNG - CẦN ĐỔI KHO" : "ĐÃ XỬ LÝ XONG (RESOLVED)")}\nChi tiết: {request.ReportNotes}",
+            IsInternal = false,
+            CreatedAt = now
+        };
+        _dbContext.TicketMessages.Add(reportMessage);
+
+        if (request.EvidenceImageUrls != null && request.EvidenceImageUrls.Count > 0)
+        {
+            foreach (var url in request.EvidenceImageUrls)
+            {
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    _dbContext.TicketAttachments.Add(new TicketAttachment
+                    {
+                        TicketId = ticket.Id,
+                        ObjectUrl = url.Trim(),
+                        FileName = Path.GetFileName(url) ?? "evidence.jpg",
+                        MimeType = "image/jpeg",
+                        FileSizeBytes = 1024,
+                        UploadedBy = employeeUserId,
+                        CreatedAt = now
+                    });
+                }
+            }
+        }
+
+        if (isSevere)
+        {
+            ticket.Status = TicketStatusConstants.SevereNeedRelocation;
+            ticket.Resolution = $"[Báo cáo Staff {employee.FullName}] Sự cố kho nghiêm trọng: {request.ReportNotes}. Cần Facility Manager thực hiện đổi kho khẩn cấp cho khách hàng.";
+            if (ticket.StorageUnit != null)
+            {
+                ticket.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.UnderMaintenanceValue;
+                ticket.StorageUnit.UpdatedAt = now;
+            }
+        }
+        else
+        {
+            ticket.Status = TicketStatusConstants.Resolved;
+            ticket.Resolution = request.ReportNotes;
+            ticket.ResolvedAt = now;
+        }
+        ticket.UpdatedAt = now;
+
+        foreach (var task in ticket.StaffTasks.Where(st => st.AssignedEmployeeId == employeeUserId && st.Status != "completed"))
+        {
+            task.Status = "completed";
+            task.ProgressPercent = 100;
+            task.UpdatedAt = now;
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new StaffTicketReportResultDto
+        {
+            TicketId = ticket.Id,
+            TicketNo = ticket.TicketNo,
+            Status = ticket.Status,
+            AssessmentLevel = isSevere ? "severe_need_relocation" : "resolved",
+            Resolution = ticket.Resolution ?? string.Empty,
+            ResolvedAt = ticket.ResolvedAt,
+            Message = isSevere
+                ? "Báo cáo sự cố nghiêm trọng đã gửi tới Facility Manager để kích hoạt chuyển kho khẩn cấp."
+                : "Sự cố đã được xử lý và đánh dấu hoàn thành."
+        };
+    }
+
+    // ==========================================
+    // MODULE 4: Staff submits inspection report & executes deposit settlement
+    // ==========================================
+    public async Task<StaffInspectionResultDto> SubmitInspectionReportAsync(
+        long employeeUserId,
+        long inspectionId,
+        StaffSubmitInspectionReportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var inspection = await _dbContext.Inspections
+            .Include(i => i.Agreement)
+                .ThenInclude(a => a!.Customer)
+            .Include(i => i.Agreement)
+                .ThenInclude(a => a!.UnitAllocations)
+                    .ThenInclude(ua => ua.StorageUnit)
+            .Include(i => i.Agreement)
+                .ThenInclude(a => a!.MoveOutRequest)
+            .FirstOrDefaultAsync(i => i.Id == inspectionId, cancellationToken);
+
+        if (inspection == null)
+            throw AppException.FromError(StaffErrors.InspectionNotFound);
+
+        var agreement = inspection.Agreement;
+        if (agreement == null)
+            throw AppException.FromError(StaffErrors.AgreementNotFound);
+
+        var now = DateTimeOffset.UtcNow;
+        var deposit = agreement.DepositSnapshot;
+        var damage = Math.Max(0m, request.DamageCost);
+
+        decimal refundAmount = 0m;
+        decimal extraPenalty = 0m;
+        long? penaltyInvoiceId = null;
+        string nextUnitStatus = StorageUnitStatusConstants.Available;
+        long? refundRecordId = null;
+        string settlementSummary = string.Empty;
+
+        if (request.DamageItemNames != null && request.DamageItemNames.Count > 0)
+        {
+            foreach (var itemName in request.DamageItemNames)
+            {
+                var photo = request.PhotoUrls?.FirstOrDefault();
+                _dbContext.InspectionItems.Add(new InspectionItem
+                {
+                    InspectionId = inspection.Id,
+                    ItemName = itemName,
+                    Condition = damage > 0 ? "damaged" : "good",
+                    Notes = request.Summary,
+                    PhotoUrl = photo,
+                    ChargeAmount = damage / Math.Max(1, request.DamageItemNames.Count)
+                });
+            }
+        }
+
+        inspection.OverallCondition = request.OverallCondition;
+        inspection.Summary = request.Summary;
+        inspection.Status = InspectionStatusConstants.Completed;
+        inspection.InspectedAt = now;
+
+        var activeAllocation = agreement.UnitAllocations.FirstOrDefault(ua => ua.Status == "active");
+        var unit = activeAllocation?.StorageUnit;
+
+        // TH1: Không hư hại (DamageCost == 0) -> Hoàn 100% cọc
+        if (damage == 0m)
+        {
+            refundAmount = deposit;
+            extraPenalty = 0m;
+            nextUnitStatus = StorageUnitStatusConstants.Available;
+
+            var refund = new Refund
+            {
+                PaymentId = 1,
+                AgreementId = agreement.Id,
+                Amount = refundAmount,
+                Currency = "VND",
+                Reason = $"Hoàn trả 100% tiền cọc cho hợp đồng #{agreement.AgreementNo}. Nghiệm thu hiện trạng tốt, không hư hại.",
+                Provider = "pending_choice",
+                IdempotencyKey = $"REFUND-AGR-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                Status = "pending",
+                RequestedBy = employeeUserId,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.Refunds.Add(refund);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            refundRecordId = refund.Id;
+            settlementSummary = $"Không có hư hại. Kích hoạt quy trình hoàn trả 100% tiền cọc ({refundAmount:N0} đ).";
+        }
+        // TH2: 0 < DamageCost <= deposit -> Khấu trừ cọc
+        else if (damage <= deposit)
+        {
+            refundAmount = deposit - damage;
+            extraPenalty = 0m;
+            nextUnitStatus = StorageUnitStatusConstants.UnderMaintenanceValue;
+
+            var refund = new Refund
+            {
+                PaymentId = 1,
+                AgreementId = agreement.Id,
+                Amount = refundAmount,
+                Currency = "VND",
+                Reason = $"Khấu trừ chi phí thiệt hại hư hại {damage:N0} đ từ tiền cọc {deposit:N0} đ. Số tiền cọc còn lại hoàn cho khách: {refundAmount:N0} đ.",
+                Provider = "pending_choice",
+                IdempotencyKey = $"REFUND-AGR-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                Status = refundAmount > 0 ? "pending" : "completed",
+                RequestedBy = employeeUserId,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.Refunds.Add(refund);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            refundRecordId = refund.Id;
+            settlementSummary = $"Có hư hại {damage:N0} đ. Đã khấu trừ vào cọc {deposit:N0} đ. Số tiền hoàn lại: {refundAmount:N0} đ. Kho chuyển bảo trì.";
+        }
+        // TH3: DamageCost > deposit -> Thu hồi 100% cọc + Xuất hóa đơn phạt
+        else
+        {
+            refundAmount = 0m;
+            extraPenalty = damage - deposit;
+            nextUnitStatus = StorageUnitStatusConstants.UnderMaintenanceValue;
+
+            var penaltyInvoice = new Invoice
+            {
+                InvoiceNo = $"INV-PEN-{now:yyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}",
+                AgreementId = agreement.Id,
+                CustomerId = agreement.CustomerId,
+                BillingPeriod = $"{now:yyyy-MM}",
+                IssueDate = DateOnly.FromDateTime(now.DateTime),
+                DueDate = DateOnly.FromDateTime(now.AddDays(7).DateTime),
+                SubtotalAmount = extraPenalty,
+                TaxAmount = 0m,
+                TotalAmount = extraPenalty,
+                PaidAmount = 0m,
+                Status = InvoiceStatusConstants.Open,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            penaltyInvoice.InvoiceLines.Add(new InvoiceLine
+            {
+                LineType = "penalty",
+                Description = $"Phạt hư hỏng kho vượt quá tiền cọc (Tổng thiệt hại {damage:N0} đ - Cọc thu hồi {deposit:N0} đ)",
+                Quantity = 1,
+                UnitPrice = extraPenalty,
+                LineAmount = extraPenalty,
+                Metadata = "{}"
+            });
+            _dbContext.Invoices.Add(penaltyInvoice);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            penaltyInvoiceId = penaltyInvoice.Id;
+
+            var refund = new Refund
+            {
+                PaymentId = 1,
+                AgreementId = agreement.Id,
+                Amount = 0m,
+                Currency = "VND",
+                Reason = $"Tiền cọc {deposit:N0} đ đã bị thu hồi 100% do chi phí hư hại {damage:N0} đ vượt quá cọc. Xuất hóa đơn phạt thu thêm: {extraPenalty:N0} đ (#{penaltyInvoice.InvoiceNo}).",
+                Provider = "forfeited",
+                IdempotencyKey = $"REFUND-AGR-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                Status = "completed",
+                RequestedBy = employeeUserId,
+                RefundedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.Refunds.Add(refund);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            refundRecordId = refund.Id;
+            settlementSummary = $"Thiệt hại {damage:N0} đ vượt quá cọc {deposit:N0} đ. Thu hồi 100% cọc và tạo hóa đơn phạt thu thêm {extraPenalty:N0} đ (#{penaltyInvoice.InvoiceNo}).";
+        }
+
+        if (unit != null)
+        {
+            unit.PhysicalStatus = nextUnitStatus;
+            unit.UpdatedAt = now;
+        }
+
+        if (activeAllocation != null)
+        {
+            activeAllocation.Status = AllocationStatusConstants.Released;
+            activeAllocation.EndedAt = now;
+        }
+
+        agreement.Status = RentalAgreementStatusConstants.Terminated;
+        agreement.UpdatedAt = now;
+
+        if (agreement.MoveOutRequest != null)
+        {
+            agreement.MoveOutRequest.Status = "completed";
+            agreement.MoveOutRequest.FinalizedAt = now;
+            agreement.MoveOutRequest.UpdatedAt = now;
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new StaffInspectionResultDto
+        {
+            InspectionId = inspection.Id,
+            AgreementId = agreement.Id,
+            AgreementNo = agreement.AgreementNo,
+            OriginalDeposit = deposit,
+            DamageCost = damage,
+            RefundAmount = refundAmount,
+            ExtraPenalty = extraPenalty,
+            PenaltyInvoiceId = penaltyInvoiceId,
+            NextUnitStatus = nextUnitStatus,
+            RefundId = refundRecordId,
+            SettlementSummary = settlementSummary,
+            CompletedAt = now
+        };
+    }
+
+    public async Task<IReadOnlyList<StaffRefundQueueItemDto>> GetPendingRefundsQueueAsync(
+        long employeeUserId,
+        long? facilityId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, facilityId, cancellationToken);
+
+        var refunds = await _dbContext.Refunds
+            .AsNoTracking()
+            .Include(r => r.Agreement)
+                .ThenInclude(a => a!.Customer)
+                    .ThenInclude(c => c.User)
+            .Where(r => r.Agreement != null && r.Agreement.FacilityId == targetFacilityId && r.Amount > 0 && r.Status != "cancelled")
+            .OrderByDescending(r => r.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        return refunds.Select(r =>
+        {
+            string? bankName = null;
+            string? accountNumber = null;
+            string? accountHolder = null;
+            var reasonStr = r.Reason ?? string.Empty;
+            if (reasonStr.Contains("Ngân hàng:"))
+            {
+                var parts = reasonStr.Split(new[] { '|' }, StringSplitOptions.RemoveEmptyEntries);
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    var trimmed = parts[i].Trim();
+                    if (trimmed.StartsWith("Ngân hàng:")) bankName = trimmed.Replace("Ngân hàng:", "").Trim();
+                    else if (trimmed.StartsWith("STK:")) accountNumber = trimmed.Replace("STK:", "").Trim();
+                    else if (trimmed.StartsWith("Chủ TK:")) accountHolder = trimmed.Replace("Chủ TK:", "").Trim();
+                }
+            }
+
+            return new StaffRefundQueueItemDto
+            {
+                RefundId = r.Id,
+                AgreementId = r.AgreementId,
+                AgreementNo = r.Agreement?.AgreementNo,
+                CustomerId = r.Agreement?.CustomerId ?? 0,
+                CustomerName = r.Agreement?.Customer.FullName ?? string.Empty,
+                CustomerPhone = r.Agreement?.Customer.User.PhoneNumber ?? string.Empty,
+                Amount = r.Amount,
+                Currency = r.Currency,
+                Status = r.Status,
+                Provider = r.Provider,
+                Reason = r.Reason,
+                BankName = bankName,
+                BankAccountNumber = accountNumber,
+                BankAccountHolder = accountHolder,
+                CreatedAt = r.CreatedAt,
+                RefundedAt = r.RefundedAt
+            };
+        }).ToList();
+    }
+
+    public async Task<StaffRefundQueueItemDto> ConfirmRefundPaymentAsync(
+        long employeeUserId,
+        StaffConfirmRefundPaymentRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var refund = await _dbContext.Refunds
+            .Include(r => r.Agreement)
+                .ThenInclude(a => a!.Customer)
+                    .ThenInclude(c => c.User)
+            .FirstOrDefaultAsync(r => r.Id == request.RefundId, cancellationToken);
+
+        if (refund == null)
+            throw AppException.FromError(StaffErrors.RefundNotFound);
+
+        var now = DateTimeOffset.UtcNow;
+        refund.Status = "completed";
+        refund.RefundedAt = now;
+        refund.Provider = request.PaymentMethod;
+        refund.Reason += $" | [Đã thanh toán bởi NV #{employeeUserId}] Phương thức: {request.PaymentMethod}, Số tiền: {request.AmountPaid:N0} đ. Ghi chú: {request.Note}. Minh chứng bill: {request.ReceiptPhotoUrl}";
+        refund.UpdatedAt = now;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new StaffRefundQueueItemDto
+        {
+            RefundId = refund.Id,
+            AgreementId = refund.AgreementId,
+            AgreementNo = refund.Agreement?.AgreementNo,
+            CustomerId = refund.Agreement?.CustomerId ?? 0,
+            CustomerName = refund.Agreement?.Customer?.FullName ?? string.Empty,
+            CustomerPhone = refund.Agreement?.Customer?.User?.PhoneNumber ?? string.Empty,
+            Amount = refund.Amount,
+            Currency = refund.Currency,
+            Status = refund.Status,
+            Provider = refund.Provider,
+            Reason = refund.Reason ?? string.Empty,
+            ReceiptPhotoUrl = request.ReceiptPhotoUrl,
+            CreatedAt = refund.CreatedAt,
+            RefundedAt = refund.RefundedAt
+        };
+    }
+
+    public async Task<StaffCounterCashPayoutResultDto> ProcessCounterCashPayoutAsync(
+        long employeeUserId,
+        long refundId,
+        StaffCounterCashPayoutRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var refund = await _dbContext.Refunds
+            .Include(r => r.Agreement)
+                .ThenInclude(a => a!.Customer)
+                    .ThenInclude(c => c.User)
+            .Include(r => r.Agreement)
+                .ThenInclude(a => a!.Facility)
+            .Include(r => r.Agreement)
+                .ThenInclude(a => a!.MoveOutRequest)
+            .Include(r => r.RefundApproval)
+            .FirstOrDefaultAsync(r => r.Id == refundId, cancellationToken);
+
+        if (refund == null)
+            throw AppException.FromError(StaffErrors.RefundNotFound);
+
+        if (refund.Agreement == null)
+            throw AppException.FromError(StaffErrors.AgreementNotFound);
+
+        await ResolveFacilityIdAsync(employeeUserId, refund.Agreement.FacilityId, cancellationToken);
+
+        if (refund.Amount <= 0m)
+            throw AppException.FromError(StaffErrors.RefundAmountInvalid);
+
+        if (refund.Status == RefundStatusConstants.Completed)
+            throw AppException.FromError(StaffErrors.RefundAlreadyCompleted);
+
+        // Chặn không cho Staff chi tiền mặt nếu khách đã đăng ký chuyển khoản ngân hàng (do Manager phụ trách)
+        if (refund.Status == RefundStatusConstants.PendingManagerPayout)
+            throw AppException.FromError(StaffErrors.RefundAlreadyInBankTransferFlow);
+
+        var now = DateTimeOffset.UtcNow;
+
+        refund.Status = RefundStatusConstants.Completed;
+        refund.Provider = RefundPayoutMethodConstants.Cash;
+        refund.ProviderRefundId = $"CASH-{refund.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}";
+        refund.RefundedAt = now;
+        refund.UpdatedAt = now;
+
+        var approvalReason = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            payoutMethod = RefundPayoutMethodConstants.Cash,
+            proofImageUrl = request.ProofImageUrl?.Trim(),
+            note = request.Note?.Trim()
+        });
+
+        if (refund.RefundApproval == null)
+        {
+            refund.RefundApproval = new RefundApproval
+            {
+                RefundId = refund.Id,
+                Decision = "completed",
+                DecidedBy = employeeUserId,
+                Reason = approvalReason,
+                DecidedAt = now
+            };
+            _dbContext.RefundApprovals.Add(refund.RefundApproval);
+        }
+        else
+        {
+            refund.RefundApproval.Decision = "completed";
+            refund.RefundApproval.DecidedBy = employeeUserId;
+            refund.RefundApproval.Reason = approvalReason;
+            refund.RefundApproval.DecidedAt = now;
+        }
+
+        // Complete Agreement & MoveOutRequest
+        refund.Agreement.Status = RentalAgreementStatusConstants.Completed;
+        refund.Agreement.DepositBalance = 0m;
+        refund.Agreement.UpdatedAt = now;
+
+        if (refund.Agreement.MoveOutRequest != null)
+        {
+            refund.Agreement.MoveOutRequest.Status = MoveOutStatusConstants.Completed;
+            refund.Agreement.MoveOutRequest.UpdatedAt = now;
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return new StaffCounterCashPayoutResultDto
+        {
+            RefundId = refund.Id,
+            AgreementId = refund.AgreementId,
+            Amount = refund.Amount,
+            Status = refund.Status,
+            PayoutMethod = refund.Provider,
+            ProofImageUrl = request.ProofImageUrl,
+            ProcessedByUserId = employeeUserId,
+            ProcessedAt = now,
+            Message = "Đã chi trả tiền mặt tại quầy và tất toán hợp đồng thành công."
+        };
+    }
+}

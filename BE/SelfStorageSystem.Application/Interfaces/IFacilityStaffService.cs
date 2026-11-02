@@ -74,6 +74,13 @@ public interface IFacilityStaffService
         StaffCompleteTicketRequest request,
         CancellationToken cancellationToken = default);
 
+    // MODULE 3: Staff submits ticket report (Resolved / Severe_Need_Relocation)
+    Task<StaffTicketReportResultDto> SubmitTicketReportAsync(
+        long employeeUserId,
+        long ticketId,
+        StaffSubmitTicketReportRequest request,
+        CancellationToken cancellationToken = default);
+
     // ==========================================
     // 5. SHIFTS & WORK SCHEDULE
     // ==========================================
@@ -86,6 +93,31 @@ public interface IFacilityStaffService
 
     Task<StaffShiftScheduleDto> CheckInShiftAsync(long employeeUserId, long shiftId, CancellationToken cancellationToken = default);
     Task<StaffShiftScheduleDto> CheckOutShiftAsync(long employeeUserId, long shiftId, CancellationToken cancellationToken = default);
+
+    // ==========================================
+    // 6. INSPECTION & DEPOSIT SETTLEMENT (MODULE 4)
+    // ==========================================
+    Task<StaffInspectionResultDto> SubmitInspectionReportAsync(
+        long employeeUserId,
+        long inspectionId,
+        StaffSubmitInspectionReportRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<StaffRefundQueueItemDto>> GetPendingRefundsQueueAsync(
+        long employeeUserId,
+        long? facilityId = null,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffRefundQueueItemDto> ConfirmRefundPaymentAsync(
+        long employeeUserId,
+        StaffConfirmRefundPaymentRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffCounterCashPayoutResultDto> ProcessCounterCashPayoutAsync(
+        long employeeUserId,
+        long refundId,
+        StaffCounterCashPayoutRequest request,
+        CancellationToken cancellationToken = default);
 
     // ==========================================
     // LEGACY METHODS (Kept for compatibility)

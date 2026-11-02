@@ -70,6 +70,15 @@ public static class ManagerErrors
     public static readonly Error RefundAlreadyReviewed =
         Error.Conflict("Manager.RefundAlreadyReviewed", "Refund request has already been reviewed.");
 
+    public static readonly Error RefundAlreadyCompleted =
+        Error.Conflict("Manager.RefundAlreadyCompleted", "Khoản hoàn cọc này đã được xử lý hoàn tất trước đó.");
+
+    public static readonly Error RefundMissingBankInfo =
+        Error.Validation("Manager.RefundMissingBankInfo", "Khách hàng chưa cung cấp thông tin tài khoản ngân hàng để chuyển khoản.");
+
+    public static readonly Error RefundAmountInvalid =
+        Error.Validation("Manager.RefundAmountInvalid", "Số tiền hoàn cọc phải lớn hơn 0.");
+
     public static readonly Error AgreementNotFound =
         Error.NotFound("Manager.AgreementNotFound", "Rental agreement was not found.");
 
@@ -84,4 +93,28 @@ public static class ManagerErrors
 
     public static readonly Error ManagerEmployeeProfileNotFound =
         Error.NotFound("Manager.EmployeeProfileNotFound", "The employee profile for the authenticated manager was not found.");
+
+    public static readonly Error AgreementNotActive =
+        Error.Conflict("Manager.AgreementNotActive", "Only active or expiring soon agreements can have their storage unit reassigned.");
+
+    public static readonly Error TargetUnitNotAvailable =
+        Error.Conflict("Manager.TargetUnitNotAvailable", "The target storage unit is not available for assignment.");
+
+    public static readonly Error TargetUnitDifferentFacility =
+        Error.Conflict("Manager.TargetUnitDifferentFacility", "The target storage unit must be in the same facility as the rental agreement.");
+
+    public static readonly Error DuplicateEmail =
+        Error.Conflict("Manager.DuplicateEmail", "A user with this email address already exists.");
+
+    public static readonly Error StaffNotFound =
+        Error.NotFound("Manager.StaffNotFound", "Staff member was not found at this facility.");
+
+    public static readonly Error TicketNotFound =
+        Error.NotFound("Manager.TicketNotFound", "Support ticket was not found at this facility.");
+
+    public static readonly Error StaffNotAssignedToFacility =
+        Error.Validation("Manager.StaffNotAssignedToFacility", "The staff member is not assigned to this facility.");
+
+    public static readonly Error InspectionNotFound =
+        Error.NotFound("Manager.InspectionNotFound", "Move-out inspection was not found.");
 }

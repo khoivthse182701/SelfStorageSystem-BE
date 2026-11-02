@@ -4,7 +4,45 @@ using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Infrastructure.Extensions;
 using SelfStorageSystem.Middlewares;
 
-var builder = WebApplication.CreateBuilder(args);
+// Global process exception traps to diagnose silent crashes (exit code -1 / 0xffffffff)
+AppDomain.CurrentDomain.UnhandledException += (sender, eventArgs) =>
+{
+    Console.ForegroundColor = ConsoleColor.Red;
+    Console.Error.WriteLine($"[FATAL CRASH] AppDomain.CurrentDomain.UnhandledException: {eventArgs.ExceptionObject}");
+    Console.ResetColor();
+};
+
+TaskScheduler.UnobservedTaskException += (sender, eventArgs) =>
+{
+    Console.ForegroundColor = ConsoleColor.Red;
+    Console.Error.WriteLine($"[FATAL CRASH] TaskScheduler.UnobservedTaskException: {eventArgs.Exception}");
+    Console.ResetColor();
+    eventArgs.SetObserved();
+};
+
+// Robust content root detection: if current working directory doesn't have appsettings.json,
+// fallback to AppContext.BaseDirectory so executing SelfStorageSystem.exe from any folder finds appsettings.json
+var contentRoot = File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json"))
+    ? Directory.GetCurrentDirectory()
+    : AppContext.BaseDirectory;
+
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = contentRoot
+});
+
+builder.Configuration
+    .SetBasePath(contentRoot)
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
+    .AddEnvironmentVariables();
+
+// In .NET 8, prevent an unhandled exception in background worker from crashing the entire host process with exit code -1
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore;
+});
 
 // Hide server technology banner from HTTP response headers
 builder.WebHost.ConfigureKestrel(options =>
@@ -19,7 +57,6 @@ if (!Directory.Exists(wwwRootPath))
     Directory.CreateDirectory(wwwRootPath);
 }
 builder.Environment.WebRootPath = wwwRootPath;
-
 
 // Add services to the container.
 builder.Services.AddControllers();
@@ -78,17 +115,17 @@ builder.Services.AddCors(options =>
         else if (builder.Environment.IsDevelopment())
         {
             policy.SetIsOriginAllowed(origin =>
-                  {
-                      if (Uri.TryCreate(origin, UriKind.Absolute, out var uri))
-                      {
-                          return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-                              || uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
-                      }
-                      return false;
-                  })
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
+            {
+                if (Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                {
+                    return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                        || uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase);
+                }
+                return false;
+            })
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
         }
         else
         {
@@ -145,7 +182,22 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-app.Run();
+try
+{
+    Console.WriteLine($"Starting SelfStorageSystem API on environment: {app.Environment.EnvironmentName} (Root: {app.Environment.ContentRootPath})...");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Console.ForegroundColor = ConsoleColor.Red;
+    Console.Error.WriteLine($"[FATAL CRASH] Application host terminated unexpectedly: {ex}");
+    Console.ResetColor();
+    throw;
+}
+finally
+{
+    Console.WriteLine("SelfStorageSystem API stopped.");
+}
 
 public partial class Program
 {

@@ -101,17 +101,15 @@ public class StaffController : ControllerBase
     /// <summary>
     /// Staff tạo đơn thuê tại quầy cho khách (Tìm/tạo tài khoản khách bằng SĐT -> Chọn ô kho Available -> Tính tiền cọc 1 tháng + Tiền thuê -> Trả về mã QR VietQR để khách quét ngay tại quầy).
     /// </summary>
+    /// <summary>
+    /// [VÔ HIỆU HÓA] Bỏ tính năng tạo đơn thuê kho trực tiếp tại quầy của Staff. Khách hàng bắt buộc đặt trực tuyến.
+    /// </summary>
+    [Obsolete("Walk-in booking creation by staff has been disabled. Customers must book online.")]
     [HttpPost("walk-in-bookings")]
-    [ProducesResponseType(typeof(ApiResponse<StaffWalkInBookingResponse>), StatusCodes.Status201Created)]
-    public async Task<IActionResult> CreateWalkInBooking(
-        [FromBody] StaffWalkInBookingRequest request,
-        CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status403Forbidden)]
+    public IActionResult CreateWalkInBooking([FromBody] StaffWalkInBookingRequest request)
     {
-        if (!TryGetUserId(out var userId))
-            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
-
-        var result = await _staffService.CreateWalkInBookingAsync(userId, request, cancellationToken);
-        return StatusCode(StatusCodes.Status201Created, ApiResponse<StaffWalkInBookingResponse>.Ok(result, "Walk-in booking created successfully. Present QR to customer for payment."));
+        return StatusCode(StatusCodes.Status403Forbidden, ApiResponse.Fail("Tính năng đăng ký thuê kho tại quầy của Staff đã được vô hiệu hóa. Khách hàng vui lòng đặt online qua website hoặc ứng dụng."));
     }
 
     // ==========================================
@@ -484,5 +482,110 @@ public class StaffController : ControllerBase
         userId = 0;
         var claim = User.FindFirstValue(ClaimTypes.NameIdentifier);
         return !string.IsNullOrEmpty(claim) && long.TryParse(claim, out userId);
+    }
+
+    // ==========================================
+    // MODULE 3: Báo Cáo Xử Lý Sự Cố Ticket
+    // ==========================================
+
+    /// <summary>
+    /// Staff kiểm tra thực tế sự cố và gửi báo cáo (Resolved hoặc Severe_Need_Relocation).
+    /// </summary>
+    [HttpPost("tickets/{ticketId:long}/report")]
+    [ProducesResponseType(typeof(ApiResponse<StaffTicketReportResultDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SubmitTicketReport(
+        [FromRoute] long ticketId,
+        [FromBody] StaffSubmitTicketReportRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.SubmitTicketReportAsync(userId, ticketId, request, cancellationToken);
+        return Ok(ApiResponse<StaffTicketReportResultDto>.Ok(result, "Ticket report submitted successfully."));
+    }
+
+    // ==========================================
+    // MODULE 4: Biên Bản Nghiệm Thu Trả Kho & Hoàn Cọc
+    // ==========================================
+
+    /// <summary>
+    /// Staff gửi biên bản nghiệm thu hiện trạng ô kho (0đ, hỏng trong cọc, hoặc hỏng vượt cọc).
+    /// </summary>
+    [HttpPost("inspections/{inspectionId:long}/submit")]
+    [ProducesResponseType(typeof(ApiResponse<StaffInspectionResultDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SubmitInspectionReport(
+        [FromRoute] long inspectionId,
+        [FromBody] StaffSubmitInspectionReportRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.SubmitInspectionReportAsync(userId, inspectionId, request, cancellationToken);
+        return Ok(ApiResponse<StaffInspectionResultDto>.Ok(result, "Inspection report and deposit settlement processed successfully."));
+    }
+
+    /// <summary>
+    /// Danh sách chờ hoàn cọc tại cơ sở (bao gồm hoàn tiền mặt tại quầy hoặc thông tin bank khách đã nhập).
+    /// </summary>
+    [HttpGet("refunds/queue")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffRefundQueueItemDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetPendingRefundsQueue(
+        [FromQuery] long? facilityId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.GetPendingRefundsQueueAsync(userId, facilityId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffRefundQueueItemDto>>.Ok(result, "Pending refunds queue retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Staff (hoặc Manager) xác nhận chi trả tiền mặt trực tiếp tại quầy cho khách hàng.
+    /// Chỉ thực hiện khi khách nhận tiền mặt tại quầy (chưa chuyển sang luồng Manager chuyển khoản ngân hàng).
+    /// </summary>
+    [HttpPost("refunds/{refundId:long}/counter-cash-payout")]
+    [ProducesResponseType(typeof(ApiResponse<StaffCounterCashPayoutResultDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> CounterCashPayout(
+        [FromRoute] long refundId,
+        [FromBody] StaffCounterCashPayoutRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.ProcessCounterCashPayoutAsync(userId, refundId, request, cancellationToken);
+        return Ok(ApiResponse<StaffCounterCashPayoutResultDto>.Ok(result, result.Message));
+    }
+
+    /// <summary>
+    /// [Legacy Fallback] Xác nhận chi trả hoàn cọc.
+    /// LƯU Ý: Nếu paymentMethod là bank_transfer, hệ thống từ chối (403 Forbidden) vì luồng chuyển khoản do Facility Manager trực tiếp thực hiện ngoài đời thực.
+    /// </summary>
+    [HttpPost("refunds/confirm-payment")]
+    [ProducesResponseType(typeof(ApiResponse<StaffCounterCashPayoutResultDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> ConfirmRefundPayment(
+        [FromBody] StaffConfirmRefundPaymentRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        if (string.Equals(request.PaymentMethod, "bank_transfer", StringComparison.OrdinalIgnoreCase))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, ApiResponse.Fail("Nhân viên không có quyền chuyển khoản ngân hàng. Luồng chuyển khoản do Quản lý cơ sở (Facility Manager) trực tiếp thực hiện ngoài đời thực."));
+        }
+
+        var result = await _staffService.ProcessCounterCashPayoutAsync(
+            userId, request.RefundId, new StaffCounterCashPayoutRequest { ProofImageUrl = request.ReceiptPhotoUrl, Note = request.Note }, cancellationToken);
+        return Ok(ApiResponse<StaffCounterCashPayoutResultDto>.Ok(result, "Đã chi trả tiền mặt tại quầy và tất toán hợp đồng thành công."));
     }
 }

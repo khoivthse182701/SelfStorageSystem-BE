@@ -45,12 +45,26 @@ public class OperationsAuthorizationTests : IClassFixture<OperationsAuthorizatio
     public static IEnumerable<object[]> AnonymousRoutes() => Routes().Select(route => route.Take(3).ToArray());
 
     public static IEnumerable<object[]> ForbiddenRoutes() => Routes().SelectMany(route =>
-        new[] { RoleConstants.Customer, RoleConstants.FacilityStaff }
-            .Select(role => route.Take(3).Concat(new object[] { role }).ToArray()));
+    {
+        var method = (string)route[0];
+        var path = (string)route[1];
+        var roles = new List<string> { RoleConstants.Customer, RoleConstants.FacilityStaff };
+        if (method == "PUT" && path.Contains("/pricing/"))
+        {
+            roles.Add(RoleConstants.FacilityManager);
+        }
+        return roles.Select(role => route.Take(3).Concat(new object[] { role }).ToArray());
+    });
 
     public static IEnumerable<object[]> AllowedRoutes() => Routes().SelectMany(route =>
-        new[] { RoleConstants.FacilityManager, RoleConstants.SystemAdministrator }
-            .Select(role => route.Concat(new object[] { role }).ToArray()));
+    {
+        var method = (string)route[0];
+        var path = (string)route[1];
+        var roles = (method == "PUT" && path.Contains("/pricing/"))
+            ? new[] { RoleConstants.SystemAdministrator }
+            : new[] { RoleConstants.FacilityManager, RoleConstants.SystemAdministrator };
+        return roles.Select(role => route.Concat(new object[] { role }).ToArray());
+    });
 
     [Theory]
     [MemberData(nameof(AnonymousRoutes))]
