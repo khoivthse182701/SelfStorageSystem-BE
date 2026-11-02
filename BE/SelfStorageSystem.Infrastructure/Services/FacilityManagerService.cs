@@ -1600,13 +1600,10 @@ public class FacilityManagerService : IFacilityManagerService
         activeAlloc.Status = AllocationStatusConstants.Released;
         activeAlloc.AllocationEndDate = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        var oldUnitNewStatus = request.SetOldUnitUnderMaintenance
-            ? StorageUnitStatusConstants.UnderMaintenanceValue
-            : StorageUnitStatusConstants.Cleaning;
+        var oldUnitNewStatus = StorageUnitStatusConstants.Maintenance;
 
         var previousOldUnitStatus = oldUnit.PhysicalStatus;
         oldUnit.PhysicalStatus = oldUnitNewStatus;
-        oldUnit.IsListed = false;
         oldUnit.UpdatedAt = now;
 
         _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
@@ -1622,7 +1619,6 @@ public class FacilityManagerService : IFacilityManagerService
         // 2. Occupy new unit and allocate to agreement
         var previousNewUnitStatus = newUnit.PhysicalStatus;
         newUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
-        newUnit.IsListed = false;
         newUnit.UpdatedAt = now;
 
         _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
@@ -1671,6 +1667,17 @@ public class FacilityManagerService : IFacilityManagerService
                 Status = CredentialStatusConstants.Active,
                 CreatedAt = now
             });
+        }
+
+        if (request.TicketId.HasValue && request.TicketId.Value > 0)
+        {
+            var ticket = await _dbContext.SupportTickets.FirstOrDefaultAsync(t => t.Id == request.TicketId.Value, cancellationToken);
+            if (ticket != null)
+            {
+                ticket.Status = TicketStatusConstants.Resolved;
+                ticket.ResolvedAt = now;
+                ticket.UpdatedAt = now;
+            }
         }
 
         agreement.UpdatedAt = now;

@@ -20,6 +20,10 @@ public class ManagerReassignUnitRequest
     public string Reason { get; set; } = string.Empty;
 
     public bool SetOldUnitUnderMaintenance { get; set; } = true;
+
+    public long? TicketId { get; set; }
+
+    public string? Notes { get; set; }
 }
 
 public class ManagerReassignUnitResponseDto
