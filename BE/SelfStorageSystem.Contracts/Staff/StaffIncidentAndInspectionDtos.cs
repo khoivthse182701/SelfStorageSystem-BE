@@ -28,12 +28,33 @@ public class StaffTicketReportResultDto
     public string Message { get; set; } = string.Empty;
 }
 
+public class StaffInspectionDamageItemDto
+{
+    public string ItemName { get; set; } = string.Empty;
+    public string Condition { get; set; } = "damaged";
+    public decimal Cost { get; set; } = 0m;
+    public decimal ChargeAmount { get; set; } = 0m;
+    public string? Notes { get; set; }
+}
+
 public class StaffSubmitInspectionReportRequest
 {
     [Range(0, 1000000000)]
     public decimal DamageCost { get; set; } = 0m;
 
     public string OverallCondition { get; set; } = "Good";
+
+    public string? Condition
+    {
+        get => OverallCondition;
+        set
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                OverallCondition = value;
+            }
+        }
+    }
 
     public string? Summary { get; set; }
 
@@ -48,6 +69,8 @@ public class StaffSubmitInspectionReportRequest
     public decimal? RefundAmount { get; set; }
 
     public decimal? PenaltyAmount { get; set; }
+
+    public List<StaffInspectionDamageItemDto>? DamageItems { get; set; }
 
     public List<string>? DamageItemNames { get; set; }
 

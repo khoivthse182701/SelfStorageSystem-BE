@@ -5,6 +5,7 @@ public static class RentalAgreementStatusConstants
     public const string Draft = "draft";
     public const string Active = "active";
     public const string ExpiringSoon = "expiring_soon";
+    public const string Overdue = "overdue";
     public const string MoveOutScheduled = "move_out_scheduled";
     public const string CheckoutPending = "checkout_pending";
     public const string Terminated = "terminated";

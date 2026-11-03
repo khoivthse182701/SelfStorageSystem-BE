@@ -1940,7 +1940,24 @@ public class FacilityStaffService : IFacilityStaffService
         long? refundRecordId = null;
         string settlementSummary = string.Empty;
 
-        if (request.DamageItemNames != null && request.DamageItemNames.Count > 0)
+        if (request.DamageItems != null && request.DamageItems.Count > 0)
+        {
+            foreach (var item in request.DamageItems)
+            {
+                var photo = request.PhotoUrls?.FirstOrDefault();
+                var itemCost = item.Cost > 0 ? item.Cost : item.ChargeAmount;
+                _dbContext.InspectionItems.Add(new InspectionItem
+                {
+                    InspectionId = inspection.Id,
+                    ItemName = string.IsNullOrWhiteSpace(item.ItemName) ? "Hạng mục hư hại" : item.ItemName.Trim(),
+                    Condition = !string.IsNullOrWhiteSpace(item.Condition) ? item.Condition : (damage > 0 ? "damaged" : "good"),
+                    Notes = item.Notes ?? request.Summary,
+                    PhotoUrl = photo,
+                    ChargeAmount = itemCost > 0 ? itemCost : (damage / Math.Max(1, request.DamageItems.Count))
+                });
+            }
+        }
+        else if (request.DamageItemNames != null && request.DamageItemNames.Count > 0)
         {
             foreach (var itemName in request.DamageItemNames)
             {
@@ -1966,40 +1983,51 @@ public class FacilityStaffService : IFacilityStaffService
         var unit = activeAllocation?.StorageUnit;
 
         // Ensure valid PaymentId and invoice reference to satisfy trigger trg_refunds_guard
-        var existingPaidInvoice = await _dbContext.Invoices
-            .Include(inv => inv.Payments)
-            .FirstOrDefaultAsync(inv => (inv.AgreementId == agreement.Id || (agreement.ReservationId > 0 && inv.ReservationId == agreement.ReservationId)) 
-                && inv.Payments.Any(p => p.Status == PaymentConstants.StatusSucceeded), cancellationToken);
+        var validPayment = await _dbContext.Payments
+            .Include(p => p.TargetInvoice)
+            .FirstOrDefaultAsync(p => p.Status == PaymentConstants.StatusSucceeded && 
+                (p.TargetInvoice.AgreementId == agreement.Id || (agreement.ReservationId > 0 && p.TargetInvoice.ReservationId == agreement.ReservationId)), cancellationToken);
 
-        var validPayment = existingPaidInvoice?.Payments.FirstOrDefault(p => p.Status == PaymentConstants.StatusSucceeded);
         long resolvedPaymentId = validPayment?.Id ?? 0;
 
         if (resolvedPaymentId == 0)
         {
-            var depInvoice = new Invoice
+            var existingInv = await _dbContext.Invoices
+                .FirstOrDefaultAsync(inv => inv.AgreementId == agreement.Id && inv.BillingPeriod == $"{now:yyyy-MM}", cancellationToken);
+
+            long invoiceId;
+            if (existingInv != null)
             {
-                InvoiceNo = $"INV-DEP-{agreement.AgreementNo}",
-                AgreementId = agreement.Id,
-                CustomerId = agreement.CustomerId,
-                BillingPeriod = $"{now:yyyy-MM}",
-                IssueDate = DateOnly.FromDateTime(now.DateTime),
-                DueDate = DateOnly.FromDateTime(now.DateTime),
-                SubtotalAmount = deposit > 0 ? deposit : 2000000m,
-                TaxAmount = 0m,
-                TotalAmount = deposit > 0 ? deposit : 2000000m,
-                PaidAmount = deposit > 0 ? deposit : 2000000m,
-                Status = InvoiceStatusConstants.Paid,
-                CreatedAt = now,
-                UpdatedAt = now
-            };
-            _dbContext.Invoices.Add(depInvoice);
-            await _dbContext.SaveChangesAsync(cancellationToken);
+                invoiceId = existingInv.Id;
+            }
+            else
+            {
+                var depInvoice = new Invoice
+                {
+                    InvoiceNo = $"INV-DEP-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                    AgreementId = agreement.Id,
+                    CustomerId = agreement.CustomerId,
+                    BillingPeriod = $"DEP-{now:yyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}",
+                    IssueDate = DateOnly.FromDateTime(now.DateTime),
+                    DueDate = DateOnly.FromDateTime(now.DateTime),
+                    SubtotalAmount = deposit > 0 ? deposit : 2000000m,
+                    TaxAmount = 0m,
+                    TotalAmount = deposit > 0 ? deposit : 2000000m,
+                    PaidAmount = deposit > 0 ? deposit : 2000000m,
+                    Status = InvoiceStatusConstants.Paid,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                _dbContext.Invoices.Add(depInvoice);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                invoiceId = depInvoice.Id;
+            }
 
             var depPayment = new Payment
             {
                 CustomerId = agreement.CustomerId,
-                TargetInvoiceId = depInvoice.Id,
-                Amount = depInvoice.TotalAmount,
+                TargetInvoiceId = invoiceId,
+                Amount = deposit > 0 ? deposit : 2000000m,
                 Currency = PaymentConstants.CurrencyVnd,
                 Method = PaymentConstants.MethodBankTransfer,
                 Provider = PaymentConstants.ProviderManual,
@@ -2048,23 +2076,26 @@ public class FacilityStaffService : IFacilityStaffService
             extraPenalty = 0m;
             nextUnitStatus = StorageUnitStatusConstants.UnderMaintenanceValue;
 
-            var refund = new Refund
+            if (refundAmount > 0)
             {
-                PaymentId = resolvedPaymentId,
-                AgreementId = agreement.Id,
-                Amount = refundAmount,
-                Currency = "VND",
-                Reason = $"Khấu trừ chi phí thiệt hại hư hại {damage:N0} đ từ tiền cọc {deposit:N0} đ. Số tiền cọc còn lại hoàn cho khách: {refundAmount:N0} đ.",
-                Provider = "pending_choice",
-                IdempotencyKey = $"REFUND-AGR-{agreement.Id}-{now.ToUnixTimeSeconds()}",
-                Status = refundAmount > 0 ? "pending" : "completed",
-                RequestedBy = employeeUserId,
-                CreatedAt = now,
-                UpdatedAt = now
-            };
-            _dbContext.Refunds.Add(refund);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-            refundRecordId = refund.Id;
+                var refund = new Refund
+                {
+                    PaymentId = resolvedPaymentId,
+                    AgreementId = agreement.Id,
+                    Amount = refundAmount,
+                    Currency = "VND",
+                    Reason = $"Khấu trừ chi phí thiệt hại hư hại {damage:N0} đ từ tiền cọc {deposit:N0} đ. Số tiền cọc còn lại hoàn cho khách: {refundAmount:N0} đ.",
+                    Provider = "pending_choice",
+                    IdempotencyKey = $"REFUND-AGR-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                    Status = "pending",
+                    RequestedBy = employeeUserId,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                _dbContext.Refunds.Add(refund);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                refundRecordId = refund.Id;
+            }
             settlementSummary = $"Có hư hại {damage:N0} đ. Đã khấu trừ vào cọc {deposit:N0} đ. Số tiền hoàn lại: {refundAmount:N0} đ. Kho chuyển bảo trì.";
         }
         // TH3: DamageCost > deposit -> Thu hồi 100% cọc + Xuất hóa đơn phạt
@@ -2079,7 +2110,7 @@ public class FacilityStaffService : IFacilityStaffService
                 InvoiceNo = $"INV-PEN-{now:yyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}",
                 AgreementId = agreement.Id,
                 CustomerId = agreement.CustomerId,
-                BillingPeriod = $"{now:yyyy-MM}",
+                BillingPeriod = $"PEN-{now:yyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}",
                 IssueDate = DateOnly.FromDateTime(now.DateTime),
                 DueDate = DateOnly.FromDateTime(now.AddDays(7).DateTime),
                 SubtotalAmount = extraPenalty,
@@ -2092,7 +2123,7 @@ public class FacilityStaffService : IFacilityStaffService
             };
             penaltyInvoice.InvoiceLines.Add(new InvoiceLine
             {
-                LineType = "penalty",
+                LineType = InvoiceLineTypeConstants.Damage,
                 Description = $"Phạt hư hỏng kho vượt quá tiền cọc (Tổng thiệt hại {damage:N0} đ - Cọc thu hồi {deposit:N0} đ)",
                 Quantity = 1,
                 UnitPrice = extraPenalty,
@@ -2103,24 +2134,9 @@ public class FacilityStaffService : IFacilityStaffService
             await _dbContext.SaveChangesAsync(cancellationToken);
             penaltyInvoiceId = penaltyInvoice.Id;
 
-            var refund = new Refund
-            {
-                PaymentId = resolvedPaymentId,
-                AgreementId = agreement.Id,
-                Amount = 0m,
-                Currency = "VND",
-                Reason = $"Tiền cọc {deposit:N0} đ đã bị thu hồi 100% do chi phí hư hại {damage:N0} đ vượt quá cọc. Xuất hóa đơn phạt thu thêm: {extraPenalty:N0} đ (#{penaltyInvoice.InvoiceNo}).",
-                Provider = "forfeited",
-                IdempotencyKey = $"REFUND-AGR-{agreement.Id}-{now.ToUnixTimeSeconds()}",
-                Status = "completed",
-                RequestedBy = employeeUserId,
-                RefundedAt = now,
-                CreatedAt = now,
-                UpdatedAt = now
-            };
-            _dbContext.Refunds.Add(refund);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-            refundRecordId = refund.Id;
+            // When damage exceeds deposit, deposit is completely forfeited and refund is 0. 
+            // Do not insert into core.refunds because CK__refunds__amount requires amount > 0.
+            refundRecordId = null;
             settlementSummary = $"Thiệt hại {damage:N0} đ vượt quá cọc {deposit:N0} đ. Thu hồi 100% cọc và tạo hóa đơn phạt thu thêm {extraPenalty:N0} đ (#{penaltyInvoice.InvoiceNo}).";
         }
 

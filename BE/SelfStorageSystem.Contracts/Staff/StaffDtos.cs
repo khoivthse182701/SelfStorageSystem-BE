@@ -330,7 +330,7 @@ public record AssignUnitToReservationRequest(
 
 public record CreateHandoverInspectionItemRequest(
     string ItemName,
-    string Condition,
+    string? Condition = "damaged",
     string? Notes = null,
     string? PhotoUrl = null,
     decimal ChargeAmount = 0m
@@ -374,9 +374,9 @@ public record StaffMoveOutSummaryDto(
 );
 
 public record InspectMoveOutRequest(
-    string OverallCondition,
-    string? Summary,
-    List<CreateHandoverInspectionItemRequest>? InspectionItems,
+    string OverallCondition = "Good",
+    string? Summary = null,
+    List<CreateHandoverInspectionItemRequest>? InspectionItems = null,
     string NextUnitStatus = "available"
 );
 

@@ -2624,27 +2624,37 @@ public class FacilityManagerService : IFacilityManagerService
 
         var now = DateTimeOffset.UtcNow;
         var staffAssigned = await _dbContext.StaffFacilityAssignments
-            .AnyAsync(sfa => sfa.EmployeeId == request.EmployeeId && sfa.FacilityId == agreement.FacilityId && (sfa.EndsAt == null || sfa.EndsAt > now), cancellationToken);
+            .AnyAsync(sfa => (sfa.EmployeeId == request.EmployeeId || sfa.Employee.UserId == request.EmployeeId) 
+                && sfa.FacilityId == agreement.FacilityId && (sfa.EndsAt == null || sfa.EndsAt > now), cancellationToken);
 
         if (!staffAssigned)
             throw AppException.FromError(ManagerErrors.StaffNotAssignedToFacility);
 
-        var activeUnit = agreement.UnitAllocations.FirstOrDefault(ua => ua.Status == "active")?.StorageUnit;
+        var activeAlloc = agreement.UnitAllocations.FirstOrDefault(ua => ua.Status == "active")
+            ?? agreement.UnitAllocations.OrderByDescending(ua => ua.Id).FirstOrDefault();
+        var activeUnit = activeAlloc?.StorageUnit;
+        var storageUnitId = activeAlloc?.StorageUnitId ?? (agreement.UnitAllocations.FirstOrDefault()?.StorageUnitId);
 
         var inspection = new Inspection
         {
             FacilityId = agreement.FacilityId,
             AgreementId = agreement.Id,
-            StorageUnitId = activeUnit?.Id,
+            StorageUnitId = storageUnitId,
             InspectedBy = request.EmployeeId,
             InspectionType = "check_out",
             Status = InspectionStatusConstants.Draft,
+            OverallCondition = "good",
             Summary = request.Notes,
             CreatedAt = now
         };
         _dbContext.Inspections.Add(inspection);
 
-        agreement.Status = RentalAgreementStatusConstants.MoveOutScheduled;
+        if (agreement.Status == RentalAgreementStatusConstants.Active ||
+            agreement.Status == RentalAgreementStatusConstants.ExpiringSoon ||
+            agreement.Status == RentalAgreementStatusConstants.Overdue)
+        {
+            agreement.Status = RentalAgreementStatusConstants.MoveOutScheduled;
+        }
         if (agreement.MoveOutRequest != null)
         {
             agreement.MoveOutRequest.Status = MoveOutStatusConstants.InspectionPending;
