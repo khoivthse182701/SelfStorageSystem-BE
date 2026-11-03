@@ -60,6 +60,8 @@ builder.Environment.WebRootPath = wwwRootPath;
 
 // Add services to the container.
 builder.Services.AddControllers();
+builder.Services.AddSignalR();
+builder.Services.AddScoped<SelfStorageSystem.Application.Interfaces.IRealtimeNotifier, SelfStorageSystem.Services.RealtimeNotifier>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -181,6 +183,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<SelfStorageSystem.Hubs.NotificationHub>("/hubs/notifications");
 
 try
 {
