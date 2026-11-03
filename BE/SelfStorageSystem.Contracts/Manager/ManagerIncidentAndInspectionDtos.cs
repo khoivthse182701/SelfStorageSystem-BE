@@ -24,6 +24,27 @@ public class ManagerAssignTicketStaffRequest
     public DateTimeOffset? DueAt { get; set; }
 }
 
+public class ManagerCreateTicketRequest
+{
+    [Required]
+    public long FacilityId { get; set; }
+    public long? CustomerId { get; set; }
+    public long? AgreementId { get; set; }
+    public long? StorageUnitId { get; set; }
+    public string Category { get; set; } = "incident";
+    public string Priority { get; set; } = "normal";
+    [Required]
+    public string Subject { get; set; } = string.Empty;
+    [Required]
+    public string Description { get; set; } = string.Empty;
+    public long? AssignToEmployeeId { get; set; }
+    public long? AssignToStaffId
+    {
+        get => AssignToEmployeeId;
+        set => AssignToEmployeeId = value;
+    }
+}
+
 public class ManagerTicketDetailDto
 {
     public long Id { get; set; }

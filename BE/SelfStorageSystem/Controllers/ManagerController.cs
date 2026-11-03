@@ -1,3 +1,4 @@
+using SelfStorageSystem.Contracts.Staff;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -144,6 +145,27 @@ public class ManagerController : ControllerBase
             facilityId, userId, isSystemAdmin, cancellationToken);
 
         return Ok(ApiResponse<IReadOnlyList<ManagerTransferRequestDto>>.Ok(result, "Retrieved transfer requests successfully."));
+    }
+
+    /// <summary>
+    /// Phê duyệt hoặc từ chối yêu cầu chuyển kho.
+    /// </summary>
+    [HttpPut("transfer-requests/{id:long}/decide")]
+    [ProducesResponseType(typeof(ApiResponse<ManagerTransferRequestDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DecideTransferRequest(
+        [FromRoute] long id,
+        [FromBody] ManagerDecideTransferRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.DecideTransferRequestAsync(
+            id, request, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<ManagerTransferRequestDto>.Ok(result, "Transfer request decided successfully."));
     }
 
     // ==========================================
@@ -451,6 +473,27 @@ public class ManagerController : ControllerBase
             agreementId, request, userId, isSystemAdmin, cancellationToken);
 
         return Ok(ApiResponse<ManagerReassignUnitResponseDto>.Ok(result, result.Message));
+    }
+
+    /// <summary>
+    /// Hủy hợp đồng và hoàn tiền 100% khi kho gặp sự cố nặng và cơ sở hết sạch kho thay thế.
+    /// </summary>
+    [HttpPost("agreements/{agreementId:long}/emergency-cancel-refund")]
+    [ProducesResponseType(typeof(ApiResponse<ManagerEmergencyCancelRefundResponseDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> EmergencyCancelAndRefund(
+        [FromRoute] long agreementId,
+        [FromBody] ManagerEmergencyCancelRefundRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.EmergencyCancelAndRefundAgreementAsync(
+            agreementId, request, userId, isSystemAdmin, cancellationToken);
+
+        return Ok(ApiResponse<ManagerEmergencyCancelRefundResponseDto>.Ok(result, result.Message));
     }
 
     /// <summary>
@@ -836,6 +879,22 @@ public class ManagerController : ControllerBase
     /// <summary>
     /// Manager phân công nhân viên xử lý Ticket sự cố.
     /// </summary>
+    /// <summary>
+    /// Manager tạo ticket sự cố/hỗ trợ mới tại cơ sở và tùy chọn giao việc ngay cho Staff.
+    /// </summary>
+    [HttpPost("tickets")]
+    [ProducesResponseType(typeof(ApiResponse<ManagerTicketDetailDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CreateTicket(
+        [FromBody] ManagerCreateTicketRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.CreateTicketAsync(request, userId, isSystemAdmin, cancellationToken);
+        return Ok(ApiResponse<ManagerTicketDetailDto>.Ok(result, "Tạo ticket sự cố thành công."));
+    }
+
     [HttpPost("tickets/{ticketId:long}/assign-staff")]
     [ProducesResponseType(typeof(ApiResponse<ManagerTicketDetailDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> AssignTicketStaff(
@@ -848,6 +907,54 @@ public class ManagerController : ControllerBase
 
         var result = await _managerService.AssignTicketStaffAsync(ticketId, request, userId, isSystemAdmin, cancellationToken);
         return Ok(ApiResponse<ManagerTicketDetailDto>.Ok(result, "Staff assigned to ticket successfully."));
+    }
+
+    /// <summary>
+    /// Manager đóng Ticket sự cố sau khi đã xử lý xong (Resolved -> Closed).
+    /// </summary>
+    /// <summary>
+    /// Lấy lịch sử tin nhắn / ghi chú nội bộ của ticket cho Manager.
+    /// </summary>
+    [HttpGet("tickets/{ticketId:long}/messages")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffTicketMessageDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTicketMessages(
+        [FromRoute] long ticketId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.GetTicketMessagesAsync(ticketId, userId, isSystemAdmin, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffTicketMessageDto>>.Ok(result, "Retrieved ticket messages successfully."));
+    }
+
+    /// <summary>
+    /// Lấy danh sách đề xuất phụ phí của một ticket cụ thể cho Manager duyệt.
+    /// </summary>
+    [HttpGet("tickets/{ticketId:long}/charge-proposals")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ManagerChargeProposalDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTicketChargeProposals(
+        [FromRoute] long ticketId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.GetTicketChargeProposalsAsync(ticketId, userId, isSystemAdmin, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ManagerChargeProposalDto>>.Ok(result, "Retrieved ticket charge proposals successfully."));
+    }
+
+    [HttpPost("tickets/{ticketId:long}/close")]
+    [ProducesResponseType(typeof(ApiResponse<ManagerTicketDetailDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> CloseTicket(
+        [FromRoute] long ticketId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _managerService.CloseTicketAsync(ticketId, userId, isSystemAdmin, cancellationToken);
+        return Ok(ApiResponse<ManagerTicketDetailDto>.Ok(result, "Ticket closed successfully."));
     }
 
     // ==========================================

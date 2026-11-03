@@ -174,6 +174,23 @@ public class StaffController : ControllerBase
     }
 
     /// <summary>
+    /// Staff hoặc lễ tân báo sự cố kho lúc Check-in tạo Ticket khẩn cấp đẩy lên Manager điều phối.
+    /// </summary>
+    [HttpPost("tickets")]
+    [ProducesResponseType(typeof(ApiResponse<StaffLogisticsTicketDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> CreateCheckInIncidentTicket(
+        [FromBody] StaffCreateCheckInIncidentTicketRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.CreateCheckInIncidentTicketAsync(userId, request, cancellationToken);
+        return Ok(ApiResponse<StaffLogisticsTicketDto>.Ok(result, "Tạo ticket sự cố kho thành công. Đã gửi thông báo khẩn cấp đến Quản lý cơ sở."));
+    }
+
+    /// <summary>
     /// Staff nhận xử lý Ticket (hoặc xem Ticket đã được hệ thống/Manager gán cho mình).
     /// </summary>
     [HttpPut("tickets/{id:long}/assign")]
@@ -192,6 +209,19 @@ public class StaffController : ControllerBase
     /// <summary>
     /// Staff gửi phản hồi hoặc ghi chú nội bộ cho Ticket.
     /// </summary>
+    /// <summary>
+    /// Lấy lịch sử tin nhắn / ghi chú nội bộ của ticket.
+    /// </summary>
+    [HttpGet("tickets/{id:long}/messages")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffTicketMessageDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTicketMessages(
+        [FromRoute] long id,
+        CancellationToken cancellationToken)
+    {
+        var result = await _staffService.GetTicketMessagesAsync(id, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffTicketMessageDto>>.Ok(result, "Ticket messages retrieved successfully."));
+    }
+
     [HttpPost("tickets/{id:long}/messages")]
     [HttpPost("support-tickets/{id:long}/messages")]
     [ProducesResponseType(typeof(ApiResponse<StaffTicketMessageDto>), StatusCodes.Status200OK)]

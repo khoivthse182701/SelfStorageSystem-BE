@@ -1,3 +1,4 @@
+using SelfStorageSystem.Contracts.Staff;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Manager;
 
@@ -49,6 +50,13 @@ public interface IFacilityManagerService
 
     Task<IReadOnlyList<ManagerTransferRequestDto>> GetTransferRequestsAsync(
         long facilityId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerTransferRequestDto> DecideTransferRequestAsync(
+        long transferRequestId,
+        ManagerDecideTransferRequest request,
         long currentUserId,
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
@@ -205,6 +213,13 @@ public interface IFacilityManagerService
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
 
+    Task<ManagerEmergencyCancelRefundResponseDto> EmergencyCancelAndRefundAgreementAsync(
+        long agreementId,
+        ManagerEmergencyCancelRefundRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
 
 
     // ==========================================
@@ -263,9 +278,33 @@ public interface IFacilityManagerService
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
 
+    Task<ManagerTicketDetailDto> CreateTicketAsync(
+        ManagerCreateTicketRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
     Task<ManagerTicketDetailDto> AssignTicketStaffAsync(
         long ticketId,
         ManagerAssignTicketStaffRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<StaffTicketMessageDto>> GetTicketMessagesAsync(
+        long ticketId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ManagerChargeProposalDto>> GetTicketChargeProposalsAsync(
+        long ticketId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerTicketDetailDto> CloseTicketAsync(
+        long ticketId,
         long currentUserId,
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);

@@ -1,4 +1,4 @@
-﻿-- =====================================================================================
+-- =====================================================================================
 -- KỊCH BẢN SEED DỮ LIỆU TOÀN DIỆN ĐỂ TEST MỌI TÍNH NĂNG CỦA FACILITY MANAGER
 -- Database: [SelfStoragePRN222]
 -- Facility ID: 1 (Cơ sở Thủ Đức / HCM)
@@ -345,6 +345,10 @@ BEGIN TRY
          N'Nước ngấm từ trần tầng 2 chảy xuống thành dòng, có nguy cơ làm ướt hàng hóa điện tử của khách.',
          N'severe_need_relocation', DATEADD(hour, -2, @Now), @Now);
     SET IDENTITY_INSERT [core].[support_tickets] OFF;
+
+    -- Phân công Staff kiểm tra cho Ticket 9102
+    INSERT INTO [core].[ticket_assignments] (ticket_id, employee_id, assigned_by, assigned_at)
+    VALUES (9102, 911, 13, DATEADD(hour, -2, @Now));
 
     -- =================================================================================
     -- 9. TẠO HÓA ĐƠN & THANH TOÁN & HOÀN TIỀN CỌC ĐỂ TEST MANAGER CHUYỂN KHOẢN NGÂN HÀNG (MODULE 4)

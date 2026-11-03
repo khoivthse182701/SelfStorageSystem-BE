@@ -6,6 +6,8 @@ using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Customer.Rentals;
 using SelfStorageSystem.Contracts.Manager;
+using SelfStorageSystem.Contracts.Staff;
+using SelfStorageSystem.Domain.Common;
 using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
 using SelfStorageSystem.Domain.Errors;
@@ -18,13 +20,16 @@ public class FacilityManagerService : IFacilityManagerService
 {
     private readonly SelfStorageDbContext _dbContext;
     private readonly ILogger<FacilityManagerService> _logger;
+    private readonly IRealtimeNotifier? _realtimeNotifier;
 
     public FacilityManagerService(
         SelfStorageDbContext dbContext,
-        ILogger<FacilityManagerService> logger)
+        ILogger<FacilityManagerService> logger,
+        IRealtimeNotifier? realtimeNotifier = null)
     {
         _dbContext = dbContext;
         _logger = logger;
+        _realtimeNotifier = realtimeNotifier;
     }
 
     // ==========================================
@@ -456,6 +461,207 @@ public class FacilityManagerService : IFacilityManagerService
             .ToListAsync(cancellationToken);
 
         return requests;
+    }
+
+    public async Task<ManagerTransferRequestDto> DecideTransferRequestAsync(
+        long transferRequestId,
+        ManagerDecideTransferRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        var transferReq = await _dbContext.UnitTransferRequests
+            .Include(r => r.Agreement)
+                .ThenInclude(a => a.Customer)
+                    .ThenInclude(c => c.User)
+            .Include(r => r.FromUnit)
+            .Include(r => r.ToUnit)
+            .Include(r => r.RequestedUnitType)
+            .FirstOrDefaultAsync(r => r.Id == transferRequestId, cancellationToken);
+
+        if (transferReq == null)
+            throw new AppException(Error.NotFound("TransferRequest.NotFound", "Không tìm thấy yêu cầu chuyển kho."));
+
+        await EnsureFacilityAccessAsync(transferReq.FromUnit.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        var decision = request.Decision.Trim().ToLowerInvariant();
+        var now = DateTimeOffset.UtcNow;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        if (decision == "approved")
+        {
+            StorageUnit? targetUnit = null;
+            if (request.TargetUnitId.HasValue && request.TargetUnitId.Value > 0)
+            {
+                targetUnit = await _dbContext.StorageUnits
+                    .Include(u => u.UnitType)
+                    .FirstOrDefaultAsync(u => u.Id == request.TargetUnitId.Value, cancellationToken);
+
+                if (targetUnit == null)
+                    throw new AppException(Error.NotFound("StorageUnit.NotFound", "Không tìm thấy ô kho chỉ định."));
+
+                if (targetUnit.FacilityId != transferReq.RequestedFacilityId && targetUnit.FacilityId != transferReq.FromUnit.FacilityId)
+                    throw new AppException(Error.Validation("StorageUnit.DifferentFacility", "Ô kho chỉ định không thuộc cơ sở chuyển đổi."));
+
+                if (!string.Equals(targetUnit.PhysicalStatus, StorageUnitStatusConstants.Available, StringComparison.OrdinalIgnoreCase))
+                    throw new AppException(Error.Validation("StorageUnit.NotAvailable", "Ô kho chỉ định hiện không sẵn sàng (Available)."));
+            }
+            else
+            {
+                targetUnit = await _dbContext.StorageUnits
+                    .Include(u => u.UnitType)
+                    .Where(u => (u.FacilityId == transferReq.RequestedFacilityId || u.FacilityId == transferReq.FromUnit.FacilityId)
+                                && u.UnitTypeId == transferReq.RequestedUnitTypeId
+                                && u.PhysicalStatus.ToLower() == StorageUnitStatusConstants.Available
+                                && u.Id != transferReq.FromUnitId)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                if (targetUnit == null)
+                {
+                    targetUnit = await _dbContext.StorageUnits
+                        .Include(u => u.UnitType)
+                        .Where(u => (u.FacilityId == transferReq.RequestedFacilityId || u.FacilityId == transferReq.FromUnit.FacilityId)
+                                    && u.PhysicalStatus.ToLower() == StorageUnitStatusConstants.Available
+                                    && u.Id != transferReq.FromUnitId)
+                        .FirstOrDefaultAsync(cancellationToken);
+                }
+
+                if (targetUnit == null)
+                    throw new AppException(Error.Validation("StorageUnit.NoneAvailable", "Không còn ô kho trống phù hợp tại cơ sở để thực hiện chuyển đổi."));
+            }
+
+            await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+            var activeAlloc = await _dbContext.UnitAllocations
+                .Where(ua => ua.AgreementId == transferReq.AgreementId && ua.Status == AllocationStatusConstants.Active)
+                .OrderByDescending(ua => ua.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (activeAlloc != null)
+            {
+                activeAlloc.Status = AllocationStatusConstants.Released;
+                activeAlloc.EndedAt = now;
+                if (today > activeAlloc.AllocationStartDate)
+                {
+                    activeAlloc.AllocationEndDate = today;
+                }
+                else if (activeAlloc.AllocationEndDate <= activeAlloc.AllocationStartDate)
+                {
+                    activeAlloc.AllocationEndDate = activeAlloc.AllocationStartDate.AddDays(1);
+                }
+            }
+
+            var oldUnit = transferReq.FromUnit;
+            if (oldUnit != null)
+            {
+                if (oldUnit.PhysicalStatus != StorageUnitStatusConstants.Maintenance &&
+                    oldUnit.PhysicalStatus != StorageUnitStatusConstants.UnderMaintenanceValue)
+                {
+                    oldUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
+                }
+                oldUnit.UpdatedAt = now;
+            }
+
+            targetUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
+            targetUnit.UpdatedAt = now;
+
+            var newAllocStartDate = today;
+            var agreement = transferReq.Agreement;
+            var newAllocEndDate = agreement.EndDate > newAllocStartDate ? agreement.EndDate : newAllocStartDate.AddDays(1);
+
+            _dbContext.UnitAllocations.Add(new UnitAllocation
+            {
+                StorageUnitId = targetUnit.Id,
+                AgreementId = agreement.Id,
+                AllocationKind = AllocationKindConstants.Rental,
+                AllocationStartDate = newAllocStartDate,
+                AllocationEndDate = newAllocEndDate,
+                Status = AllocationStatusConstants.Active,
+                CreatedAt = now,
+                EndedAt = null
+            });
+
+            var randomPin = Random.Shared.Next(100000, 999999).ToString("D6");
+            var pinCred = await _dbContext.AccessCredentials
+                .FirstOrDefaultAsync(c => c.AgreementId == agreement.Id && c.CredentialType == CredentialTypeConstants.Pin, cancellationToken);
+
+            if (pinCred != null)
+            {
+                pinCred.SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin);
+                pinCred.DisplayHint = PinProtectionHelper.Encrypt(randomPin);
+                pinCred.IssuedAt = now;
+                pinCred.Status = CredentialStatusConstants.Active;
+            }
+            else
+            {
+                _dbContext.AccessCredentials.Add(new AccessCredential
+                {
+                    AgreementId = agreement.Id,
+                    CredentialType = CredentialTypeConstants.Pin,
+                    SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin),
+                    DisplayHint = PinProtectionHelper.Encrypt(randomPin),
+                    IssuedAt = now,
+                    ExpiresAt = now.AddYears(1),
+                    Status = CredentialStatusConstants.Active,
+                    CreatedAt = now
+                });
+            }
+
+            transferReq.Status = "approved";
+            transferReq.ToUnitId = targetUnit.Id;
+            transferReq.ReviewedBy = currentUserId;
+            transferReq.ReviewedAt = now;
+            transferReq.CompletedAt = now;
+            transferReq.Reason = !string.IsNullOrWhiteSpace(request.ReviewNotes)
+                ? $"{transferReq.Reason} | Phê duyệt: {request.ReviewNotes}"
+                : transferReq.Reason;
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            transferReq.ToUnit = targetUnit;
+        }
+        else
+        {
+            transferReq.Status = "rejected";
+            transferReq.ReviewedBy = currentUserId;
+            transferReq.ReviewedAt = now;
+            transferReq.Reason = !string.IsNullOrWhiteSpace(request.ReviewNotes)
+                ? $"{transferReq.Reason} | Từ chối: {request.ReviewNotes}"
+                : transferReq.Reason;
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        return new ManagerTransferRequestDto
+        {
+            Id = transferReq.Id,
+            AgreementId = transferReq.AgreementId,
+            AgreementNo = transferReq.Agreement.AgreementNo,
+            CustomerId = transferReq.Agreement.CustomerId,
+            CustomerName = transferReq.Agreement.Customer.FullName,
+            CustomerPhone = transferReq.Agreement.Customer.User.PhoneNumber ?? string.Empty,
+            FromUnitId = transferReq.FromUnitId,
+            FromUnitCode = transferReq.FromUnit.UnitCode,
+            RequestedUnitTypeId = transferReq.RequestedUnitTypeId,
+            RequestedUnitTypeName = transferReq.RequestedUnitType.Name,
+            RequestedFacilityId = transferReq.RequestedFacilityId,
+            MoveOutDate = transferReq.MoveOutDate,
+            MoveInDate = transferReq.MoveInDate,
+            DiffRentAmount = transferReq.DiffRentAmount,
+            DiffDepositAmount = transferReq.DiffDepositAmount,
+            TotalPaidAmount = transferReq.TotalPaidAmount,
+            RescheduleCount = transferReq.RescheduleCount,
+            ToUnitId = transferReq.ToUnitId,
+            ToUnitCode = transferReq.ToUnit != null ? transferReq.ToUnit.UnitCode : null,
+            RequestedEffectiveDate = transferReq.RequestedEffectiveDate,
+            Reason = transferReq.Reason,
+            Status = transferReq.Status,
+            RequestedBy = transferReq.RequestedBy,
+            ReviewedBy = transferReq.ReviewedBy,
+            ReviewedAt = transferReq.ReviewedAt,
+            CreatedAt = transferReq.CreatedAt
+        };
     }
 
     public async Task ValidateFacilityAccessAsync(
@@ -1613,19 +1819,27 @@ public class FacilityManagerService : IFacilityManagerService
 
         var oldUnitNewStatus = StorageUnitStatusConstants.Maintenance;
 
-        var previousOldUnitStatus = oldUnit.PhysicalStatus;
-        oldUnit.PhysicalStatus = oldUnitNewStatus;
-        oldUnit.UpdatedAt = now;
-
-        _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
+        if (oldUnit.PhysicalStatus != StorageUnitStatusConstants.Maintenance &&
+            oldUnit.PhysicalStatus != StorageUnitStatusConstants.UnderMaintenanceValue)
         {
-            StorageUnitId = oldUnit.Id,
-            OldStatus = previousOldUnitStatus,
-            NewStatus = oldUnitNewStatus,
-            Reason = $"Manager unit re-assignment for agreement #{agreement.AgreementNo}: {request.Reason}",
-            ChangedBy = currentUserId,
-            ChangedAt = now
-        });
+            var previousOldUnitStatus = oldUnit.PhysicalStatus;
+            oldUnit.PhysicalStatus = oldUnitNewStatus;
+            oldUnit.UpdatedAt = now;
+
+            _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
+            {
+                StorageUnitId = oldUnit.Id,
+                OldStatus = previousOldUnitStatus,
+                NewStatus = oldUnitNewStatus,
+                Reason = $"Manager unit re-assignment for agreement #{agreement.AgreementNo}: {request.Reason}",
+                ChangedBy = currentUserId,
+                ChangedAt = now
+            });
+        }
+        else
+        {
+            oldUnit.UpdatedAt = now;
+        }
 
         // Persist the release of the old allocation first inside the transaction
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -1724,6 +1938,245 @@ public class FacilityManagerService : IFacilityManagerService
             Reason = request.Reason,
             ReassignedAt = now,
             Message = $"Customer successfully reassigned from unit {oldUnit.UnitCode} to equivalent unit {newUnit.UnitCode}. New PIN: {randomPin}."
+        };
+    }
+
+    public async Task<ManagerEmergencyCancelRefundResponseDto> EmergencyCancelAndRefundAgreementAsync(
+        long agreementId,
+        ManagerEmergencyCancelRefundRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        var agreement = await _dbContext.RentalAgreements
+            .Include(a => a.Customer)
+                .ThenInclude(c => c.User)
+            .Include(a => a.UnitAllocations.Where(ua => ua.Status == AllocationStatusConstants.Active))
+                .ThenInclude(ua => ua.StorageUnit)
+            .FirstOrDefaultAsync(a => a.Id == agreementId, cancellationToken);
+
+        if (agreement == null)
+            throw AppException.FromError(ManagerErrors.AgreementNotFound);
+
+        await EnsureFacilityAccessAsync(agreement.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        var activeAlloc = agreement.UnitAllocations.FirstOrDefault(ua => ua.Status == AllocationStatusConstants.Active);
+        var oldUnit = activeAlloc?.StorageUnit ?? await _dbContext.StorageUnits.FirstOrDefaultAsync(u => u.Id == (activeAlloc != null ? activeAlloc.StorageUnitId : 0), cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        // 1. Release active allocation
+        if (activeAlloc != null)
+        {
+            activeAlloc.Status = AllocationStatusConstants.Released;
+            activeAlloc.EndedAt = now;
+            if (today > activeAlloc.AllocationStartDate)
+            {
+                activeAlloc.AllocationEndDate = today;
+            }
+            else if (activeAlloc.AllocationEndDate <= activeAlloc.AllocationStartDate)
+            {
+                activeAlloc.AllocationEndDate = activeAlloc.AllocationStartDate.AddDays(1);
+            }
+        }
+
+        // 2. Put unit into maintenance with lock notes
+        if (oldUnit != null)
+        {
+            if (oldUnit.PhysicalStatus != StorageUnitStatusConstants.Maintenance &&
+                oldUnit.PhysicalStatus != StorageUnitStatusConstants.UnderMaintenanceValue)
+            {
+                var previousStatus = oldUnit.PhysicalStatus;
+                oldUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
+                _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
+                {
+                    StorageUnitId = oldUnit.Id,
+                    OldStatus = previousStatus,
+                    NewStatus = StorageUnitStatusConstants.Maintenance,
+                    Reason = $"Emergency cancel & full refund: {request.Reason}",
+                    ChangedBy = currentUserId,
+                    ChangedAt = now
+                });
+            }
+            var cancelNote = $"[LOCKED_BY:{currentUserId}:Manager] Sự cố Check-in - Hết kho thay thế: {request.Reason}".Trim();
+            if (cancelNote.Length > 250) cancelNote = cancelNote.Substring(0, 250);
+            oldUnit.Notes = cancelNote;
+            oldUnit.UpdatedAt = now;
+        }
+
+        // 3. Mark agreement cancelled
+        agreement.Status = RentalAgreementStatusConstants.Cancelled;
+        agreement.ActualEndDate = today;
+        agreement.UpdatedAt = now;
+
+        // 4. Revoke active access credentials
+        var credentials = await _dbContext.AccessCredentials
+            .Where(c => c.AgreementId == agreement.Id && c.Status == CredentialStatusConstants.Active)
+            .ToListAsync(cancellationToken);
+        foreach (var cred in credentials)
+        {
+            cred.Status = CredentialStatusConstants.Revoked;
+            cred.RevokedAt = now;
+        }
+
+        // 5. Resolve ticket if provided
+        if (request.TicketId.HasValue && request.TicketId.Value > 0)
+        {
+            var ticket = await _dbContext.SupportTickets.FirstOrDefaultAsync(t => t.Id == request.TicketId.Value, cancellationToken);
+            if (ticket != null)
+            {
+                ticket.Status = TicketStatusConstants.Resolved;
+                ticket.Resolution = $"Đã xử lý: Hủy hợp đồng #{agreement.AgreementNo} và phê duyệt hoàn tiền 100% cho khách do cơ sở không còn kho thay thế ({request.Reason}).";
+                ticket.ResolvedAt = now;
+                ticket.UpdatedAt = now;
+            }
+        }
+
+        // 6. Calculate total paid amount and create refund record satisfying trg_refunds_guard
+        var validPayment = await _dbContext.Payments
+            .Include(p => p.TargetInvoice)
+            .FirstOrDefaultAsync(p => p.Status == PaymentConstants.StatusSucceeded &&
+                ((p.TargetInvoice != null && p.TargetInvoice.AgreementId == agreement.Id) ||
+                 (agreement.ReservationId > 0 && p.TargetInvoice != null && p.TargetInvoice.ReservationId == agreement.ReservationId)), cancellationToken);
+
+        decimal refundAmount = 0m;
+        if (validPayment != null)
+        {
+            refundAmount = validPayment.Amount;
+        }
+        else
+        {
+            var deposit = agreement.DepositSnapshot > 0 ? agreement.DepositSnapshot : agreement.DepositBalance;
+            var rent = agreement.MonthlyRateSnapshot;
+            refundAmount = deposit + rent;
+            if (refundAmount <= 0) refundAmount = 2000000m;
+        }
+
+        long resolvedPaymentId = validPayment?.Id ?? 0;
+        if (resolvedPaymentId == 0)
+        {
+            var depInvoice = new Invoice
+            {
+                InvoiceNo = $"INV-CANC-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                AgreementId = agreement.Id,
+                CustomerId = agreement.CustomerId,
+                BillingPeriod = $"REF-{now:yyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}",
+                IssueDate = today,
+                DueDate = today,
+                Currency = PaymentConstants.CurrencyVnd,
+                SubtotalAmount = refundAmount,
+                TaxAmount = 0m,
+                TotalAmount = refundAmount,
+                PaidAmount = refundAmount,
+                Status = InvoiceStatusConstants.Paid,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.Invoices.Add(depInvoice);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            var payment = new Payment
+            {
+                CustomerId = agreement.CustomerId,
+                TargetInvoiceId = depInvoice.Id,
+                Amount = refundAmount,
+                Currency = PaymentConstants.CurrencyVnd,
+                Method = PaymentConstants.MethodBankTransfer,
+                Provider = PaymentConstants.ProviderManual,
+                IdempotencyKey = $"PAY-CANC-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                Status = PaymentConstants.StatusSucceeded,
+                PaidAt = now,
+                Metadata = "{}",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.Payments.Add(payment);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            resolvedPaymentId = payment.Id;
+        }
+
+        var refund = new Refund
+        {
+            PaymentId = resolvedPaymentId,
+            AgreementId = agreement.Id,
+            Amount = refundAmount,
+            Currency = PaymentConstants.CurrencyVnd,
+            Reason = $"Hủy HĐ #{agreement.AgreementNo} & hoàn tiền 100% do sự cố kho và cơ sở hết kho thay thế: {request.Reason}",
+            Provider = PaymentConstants.ProviderManual,
+            IdempotencyKey = $"REFUND-EMERGENCY-CANCEL-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+            Status = RefundStatusConstants.Approved,
+            RequestedBy = currentUserId,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _dbContext.Refunds.Add(refund);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        var empProfile = await _dbContext.EmployeeProfiles.FirstOrDefaultAsync(ep => ep.UserId == currentUserId, cancellationToken);
+        long decidedByEmpId = empProfile != null ? currentUserId : (await _dbContext.EmployeeProfiles.Select(ep => ep.UserId).FirstOrDefaultAsync(cancellationToken));
+
+        var refundApproval = new RefundApproval
+        {
+            RefundId = refund.Id,
+            Decision = "approved",
+            DecidedBy = decidedByEmpId,
+            Reason = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                decision = "approved",
+                emergencyCancel = true,
+                reason = request.Reason,
+                notes = request.Notes
+            }),
+            DecidedAt = now
+        };
+        _dbContext.RefundApprovals.Add(refundApproval);
+
+        // 7. Send in-app notification to customer
+        var customerUserId = agreement.Customer?.UserId;
+        if (customerUserId.HasValue)
+        {
+            _dbContext.Notifications.Add(new Notification
+            {
+                UserId = customerUserId.Value,
+                Channel = "in_app",
+                TemplateCode = "AGREEMENT_CANCELLED_FULL_REFUND",
+                Subject = $"[Hủy hợp đồng & Hoàn tiền 100%] HĐ #{agreement.AgreementNo}",
+                Payload = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    agreementId = agreement.Id,
+                    agreementNo = agreement.AgreementNo,
+                    amount = refundAmount,
+                    message = $"Hợp đồng #{agreement.AgreementNo} đã được hủy do cơ sở không còn kho thay thế sự cố. Khoản tiền {refundAmount:N0} VND đã được duyệt hoàn 100% cho bạn."
+                }),
+                Status = "pending",
+                ScheduledAt = now,
+                CreatedAt = now
+            });
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        _logger.LogInformation("Manager {UserId} emergency-cancelled agreement #{AgreementNo} with 100% refund {Amount} VND due to no replacement units. Unit {UnitCode} put into maintenance.",
+            currentUserId, agreement.AgreementNo, refundAmount, oldUnit?.UnitCode);
+
+        return new ManagerEmergencyCancelRefundResponseDto
+        {
+            AgreementId = agreement.Id,
+            AgreementNo = agreement.AgreementNo,
+            CustomerId = agreement.CustomerId,
+            CustomerName = agreement.Customer?.FullName ?? "Khách hàng",
+            StorageUnitId = oldUnit?.Id ?? 0,
+            UnitCode = oldUnit?.UnitCode ?? "—",
+            TotalRefundAmount = refundAmount,
+            RefundId = refund.Id,
+            AgreementStatus = agreement.Status,
+            UnitStatus = oldUnit?.PhysicalStatus ?? StorageUnitStatusConstants.Maintenance,
+            CancelledAt = now,
+            Message = $"Đã hủy hợp đồng #{agreement.AgreementNo} và phê duyệt hoàn trả 100% ({refundAmount:N0} VNĐ) cho khách hàng thành công."
         };
     }
 
@@ -2456,7 +2909,144 @@ public class FacilityManagerService : IFacilityManagerService
             })
             .ToListAsync(cancellationToken);
 
+        if (items.Count > 0)
+        {
+            var ticketIds = items.Select(x => x.Id).ToList();
+            var assignments = await _dbContext.TicketAssignments
+                .AsNoTracking()
+                .Include(ta => ta.Employee)
+                .Where(ta => ticketIds.Contains(ta.TicketId))
+                .OrderByDescending(ta => ta.AssignedAt)
+                .ToListAsync(cancellationToken);
+
+            var staffTasks = await _dbContext.StaffTasks
+                .AsNoTracking()
+                .Include(st => st.AssignedEmployee)
+                .Where(st => st.TicketId.HasValue && ticketIds.Contains(st.TicketId.Value))
+                .OrderByDescending(st => st.UpdatedAt)
+                .ToListAsync(cancellationToken);
+
+            foreach (var item in items)
+            {
+                if (string.IsNullOrWhiteSpace(item.AssignedEmployeeName))
+                {
+                    var ta = assignments.FirstOrDefault(a => a.TicketId == item.Id);
+                    if (ta != null && ta.Employee != null)
+                    {
+                        item.AssignedEmployeeId = ta.EmployeeId;
+                        item.AssignedEmployeeName = ta.Employee.FullName;
+                        item.AssignedAt = ta.AssignedAt;
+                    }
+                    else
+                    {
+                        var task = staffTasks.FirstOrDefault(st => st.TicketId == item.Id);
+                        if (task != null && task.AssignedEmployee != null)
+                        {
+                            item.AssignedEmployeeId = task.AssignedEmployeeId;
+                            item.AssignedEmployeeName = task.AssignedEmployee.FullName;
+                            item.AssignedAt = task.CreatedAt;
+                        }
+                    }
+                }
+            }
+        }
+
         return new PagedResult<ManagerTicketDetailDto>(items, total, pageNumber, pageSize);
+    }
+
+    public async Task<ManagerTicketDetailDto> CreateTicketAsync(
+        ManagerCreateTicketRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        await ValidateFacilityAccessAsync(request.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        long customerId = request.CustomerId ?? 1;
+
+        if (request.AgreementId.HasValue && request.AgreementId.Value > 0)
+        {
+            var agr = await _dbContext.RentalAgreements.FirstOrDefaultAsync(a => a.Id == request.AgreementId.Value, cancellationToken);
+            if (agr != null) customerId = agr.CustomerId;
+        }
+
+        var ticket = new SupportTicket
+        {
+            TicketNo = TicketConstants.GenerateTicketNo(),
+            FacilityId = request.FacilityId,
+            CustomerId = customerId,
+            AgreementId = request.AgreementId > 0 ? request.AgreementId : null,
+            StorageUnitId = request.StorageUnitId > 0 ? request.StorageUnitId : null,
+            Category = string.IsNullOrWhiteSpace(request.Category) ? "incident" : request.Category.Trim().ToLowerInvariant(),
+            Priority = string.IsNullOrWhiteSpace(request.Priority) ? "normal" : request.Priority.Trim().ToLowerInvariant(),
+            Subject = request.Subject.Trim(),
+            Description = request.Description.Trim(),
+            Status = request.AssignToEmployeeId.HasValue && request.AssignToEmployeeId.Value > 0
+                ? TicketStatusConstants.Assigned
+                : TicketStatusConstants.Open,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        _dbContext.SupportTickets.Add(ticket);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        if (request.AssignToEmployeeId.HasValue && request.AssignToEmployeeId.Value > 0)
+        {
+            var assignRequest = new ManagerAssignTicketStaffRequest
+            {
+                EmployeeId = request.AssignToEmployeeId.Value,
+                Notes = "Manager tạo ticket và giao việc trực tiếp.",
+                DueAt = now.AddHours(24)
+            };
+            return await AssignTicketStaffAsync(ticket.Id, assignRequest, currentUserId, isSystemAdmin, cancellationToken);
+        }
+
+        if (_realtimeNotifier != null)
+        {
+            try
+            {
+                await _realtimeNotifier.SendTicketUpdateAsync(ticket.FacilityId, new
+                {
+                    ticketId = ticket.Id,
+                    ticketNo = ticket.TicketNo,
+                    status = ticket.Status,
+                    subject = ticket.Subject,
+                    facilityId = ticket.FacilityId
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to broadcast realtime ticket creation {TicketId}", ticket.Id);
+            }
+        }
+
+        var customer = await _dbContext.CustomerProfiles.FirstOrDefaultAsync(cp => cp.UserId == customerId, cancellationToken);
+        var unit = request.StorageUnitId.HasValue ? await _dbContext.StorageUnits.FirstOrDefaultAsync(u => u.Id == request.StorageUnitId.Value, cancellationToken) : null;
+        var agrRef = request.AgreementId.HasValue ? await _dbContext.RentalAgreements.FirstOrDefaultAsync(a => a.Id == request.AgreementId.Value, cancellationToken) : null;
+        var fac = await _dbContext.Facilities.FirstOrDefaultAsync(f => f.Id == request.FacilityId, cancellationToken);
+
+        return new ManagerTicketDetailDto
+        {
+            Id = ticket.Id,
+            TicketNo = ticket.TicketNo,
+            FacilityId = ticket.FacilityId,
+            FacilityName = fac?.Name ?? string.Empty,
+            CustomerId = ticket.CustomerId,
+            CustomerName = customer?.FullName ?? string.Empty,
+            AgreementId = ticket.AgreementId,
+            AgreementNo = agrRef?.AgreementNo,
+            StorageUnitId = ticket.StorageUnitId,
+            UnitCode = unit?.UnitCode,
+            Category = ticket.Category,
+            Priority = ticket.Priority,
+            Subject = ticket.Subject,
+            Description = ticket.Description,
+            Status = ticket.Status,
+            CreatedAt = ticket.CreatedAt,
+            UpdatedAt = ticket.UpdatedAt
+        };
     }
 
     public async Task<ManagerTicketDetailDto> AssignTicketStaffAsync(
@@ -2527,6 +3117,30 @@ public class FacilityManagerService : IFacilityManagerService
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
+        if (_realtimeNotifier != null)
+        {
+            try
+            {
+                await _realtimeNotifier.SendNotificationToUserAsync(
+                    request.EmployeeId,
+                    "Phân công sự cố mới",
+                    $"Bạn vừa được Quản lý phân công xử lý Ticket #{ticket.TicketNo}: {ticket.Subject}",
+                    new { ticketId = ticket.Id, ticketNo = ticket.TicketNo, facilityId = ticket.FacilityId }
+                );
+                await _realtimeNotifier.SendTicketUpdateAsync(ticket.FacilityId, new
+                {
+                    ticketId = ticket.Id,
+                    ticketNo = ticket.TicketNo,
+                    status = ticket.Status,
+                    assignedEmployeeId = request.EmployeeId
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to send realtime notification for ticket assignment {TicketId}", ticket.Id);
+            }
+        }
+
         var employee = await _dbContext.EmployeeProfiles.FindAsync(new object[] { request.EmployeeId }, cancellationToken);
 
         return new ManagerTicketDetailDto
@@ -2549,6 +3163,178 @@ public class FacilityManagerService : IFacilityManagerService
             AssignedEmployeeId = request.EmployeeId,
             AssignedEmployeeName = employee?.FullName,
             AssignedAt = now,
+            Resolution = ticket.Resolution,
+            ResolvedAt = ticket.ResolvedAt,
+            CreatedAt = ticket.CreatedAt,
+            UpdatedAt = ticket.UpdatedAt
+        };
+    }
+
+    public async Task<IReadOnlyList<StaffTicketMessageDto>> GetTicketMessagesAsync(
+        long ticketId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        var ticket = await _dbContext.SupportTickets.AsNoTracking().FirstOrDefaultAsync(t => t.Id == ticketId, cancellationToken);
+        if (ticket == null) throw AppException.FromError(ManagerErrors.TicketNotFound);
+
+        await EnsureFacilityAccessAsync(ticket.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        var messages = await _dbContext.TicketMessages
+            .AsNoTracking()
+            .Include(m => m.AuthorUser)
+                .ThenInclude(u => u.EmployeeProfile)
+            .Include(m => m.AuthorUser)
+                .ThenInclude(u => u.CustomerProfile)
+            .Include(m => m.AuthorUser)
+                .ThenInclude(u => u.UserRoleUsers)
+                    .ThenInclude(ur => ur.Role)
+            .Where(m => m.TicketId == ticketId)
+            .OrderBy(m => m.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        return messages.Select(msg =>
+        {
+            var authorName = msg.AuthorUser.EmployeeProfile?.FullName
+                ?? msg.AuthorUser.CustomerProfile?.FullName
+                ?? msg.AuthorUser.Email;
+
+            var roleCode = msg.AuthorUser.UserRoleUsers.FirstOrDefault()?.Role.Code ?? "User";
+            var roleDisplayName = roleCode switch
+            {
+                RoleConstants.FacilityStaff => "Nhân viên vận hành",
+                RoleConstants.FacilityManager => "Quản lý cơ sở",
+                RoleConstants.SystemAdministrator => "Quản trị viên",
+                RoleConstants.Customer => "Khách hàng",
+                _ => roleCode
+            };
+
+            return new StaffTicketMessageDto(
+                msg.Id,
+                ticketId,
+                msg.AuthorUserId,
+                authorName,
+                roleDisplayName,
+                msg.Body,
+                msg.IsInternal,
+                msg.CreatedAt
+            );
+        }).ToList();
+    }
+
+    public async Task<IReadOnlyList<ManagerChargeProposalDto>> GetTicketChargeProposalsAsync(
+        long ticketId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        var ticket = await _dbContext.SupportTickets.AsNoTracking().FirstOrDefaultAsync(t => t.Id == ticketId, cancellationToken);
+        if (ticket == null) throw AppException.FromError(ManagerErrors.TicketNotFound);
+
+        await EnsureFacilityAccessAsync(ticket.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        var proposals = await _dbContext.TicketChargeProposals
+            .AsNoTracking()
+            .Include(p => p.Ticket)
+                .ThenInclude(t => t.Customer)
+            .Include(p => p.Ticket)
+                .ThenInclude(t => t.Agreement)
+            .Include(p => p.ProposedByNavigation)
+            .Include(p => p.TicketChargeApproval)
+            .Where(p => p.TicketId == ticketId)
+            .OrderByDescending(p => p.CreatedAt)
+            .Select(p => new ManagerChargeProposalDto
+            {
+                Id = p.Id,
+                TicketId = p.TicketId,
+                TicketTitle = p.Ticket.Subject,
+                CustomerId = p.Ticket.CustomerId,
+                CustomerName = p.Ticket.Customer.FullName,
+                AgreementId = p.Ticket.AgreementId,
+                AgreementNo = p.Ticket.Agreement != null ? p.Ticket.Agreement.AgreementNo : null,
+                ProposedBy = p.ProposedBy,
+                ProposedByStaffName = p.ProposedByNavigation.FullName,
+                Description = p.Description,
+                Amount = p.Amount,
+                Status = p.Status,
+                CreatedAt = p.CreatedAt,
+                Decision = p.TicketChargeApproval != null ? p.TicketChargeApproval.Decision : null,
+                DecisionReason = p.TicketChargeApproval != null ? p.TicketChargeApproval.Reason : null,
+                DecidedAt = p.TicketChargeApproval != null ? p.TicketChargeApproval.DecidedAt : null
+            })
+            .ToListAsync(cancellationToken);
+
+        return proposals;
+    }
+
+    public async Task<ManagerTicketDetailDto> CloseTicketAsync(
+        long ticketId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        var ticket = await _dbContext.SupportTickets
+            .Include(t => t.Facility)
+            .Include(t => t.Customer)
+            .Include(t => t.StorageUnit)
+            .Include(t => t.Agreement)
+            .Include(t => t.TicketAssignment)
+                .ThenInclude(ta => ta!.Employee)
+            .FirstOrDefaultAsync(t => t.Id == ticketId, cancellationToken);
+
+        if (ticket == null)
+            throw AppException.FromError(ManagerErrors.TicketNotFound);
+
+        await EnsureFacilityAccessAsync(ticket.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        ticket.Status = TicketStatusConstants.Closed;
+        ticket.UpdatedAt = now;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        // Retrieve latest assigned employee if available
+        string? assignedName = ticket.TicketAssignment?.Employee?.FullName;
+        long? assignedId = ticket.TicketAssignment?.EmployeeId;
+        DateTimeOffset? assignedAt = ticket.TicketAssignment?.AssignedAt;
+
+        if (string.IsNullOrWhiteSpace(assignedName))
+        {
+            var latestTa = await _dbContext.TicketAssignments
+                .Include(ta => ta.Employee)
+                .Where(ta => ta.TicketId == ticket.Id)
+                .OrderByDescending(ta => ta.AssignedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (latestTa != null)
+            {
+                assignedId = latestTa.EmployeeId;
+                assignedName = latestTa.Employee?.FullName;
+                assignedAt = latestTa.AssignedAt;
+            }
+        }
+
+        return new ManagerTicketDetailDto
+        {
+            Id = ticket.Id,
+            TicketNo = ticket.TicketNo,
+            FacilityId = ticket.FacilityId,
+            FacilityName = ticket.Facility?.Name ?? "Facility",
+            CustomerId = ticket.CustomerId,
+            CustomerName = ticket.Customer?.FullName ?? "Customer",
+            AgreementId = ticket.AgreementId,
+            AgreementNo = ticket.Agreement?.AgreementNo,
+            StorageUnitId = ticket.StorageUnitId,
+            UnitCode = ticket.StorageUnit?.UnitCode,
+            Category = ticket.Category,
+            Priority = ticket.Priority,
+            Subject = ticket.Subject,
+            Description = ticket.Description,
+            Status = ticket.Status,
+            AssignedEmployeeId = assignedId,
+            AssignedEmployeeName = assignedName,
+            AssignedAt = assignedAt,
             Resolution = ticket.Resolution,
             ResolvedAt = ticket.ResolvedAt,
             CreatedAt = ticket.CreatedAt,

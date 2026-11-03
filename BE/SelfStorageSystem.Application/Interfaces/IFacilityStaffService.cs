@@ -81,6 +81,11 @@ public interface IFacilityStaffService
         StaffSubmitTicketReportRequest request,
         CancellationToken cancellationToken = default);
 
+    Task<StaffLogisticsTicketDto> CreateCheckInIncidentTicketAsync(
+        long employeeUserId,
+        StaffCreateCheckInIncidentTicketRequest request,
+        CancellationToken cancellationToken = default);
+
     // ==========================================
     // 5. SHIFTS & WORK SCHEDULE
     // ==========================================
@@ -132,6 +137,7 @@ public interface IFacilityStaffService
     Task<IReadOnlyList<StaffSupportTicketDto>> GetFacilityTicketsAsync(long? facilityId = null, string? status = null, CancellationToken cancellationToken = default);
     Task AssignTicketToMeAsync(long employeeUserId, long ticketId, CancellationToken cancellationToken = default);
     Task<StaffTicketMessageDto> AddStaffTicketMessageAsync(long employeeUserId, long ticketId, AddStaffTicketMessageRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<StaffTicketMessageDto>> GetTicketMessagesAsync(long ticketId, CancellationToken cancellationToken = default);
     Task<TicketChargeProposalDto> ProposeTicketChargeAsync(long employeeUserId, long ticketId, ProposeTicketChargeRequest request, CancellationToken cancellationToken = default);
     Task ResolveTicketAsync(long employeeUserId, long ticketId, ResolveTicketRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<StaffFacilityUnitDto>> GetFacilityUnitsAsync(long facilityId, CancellationToken cancellationToken = default);
