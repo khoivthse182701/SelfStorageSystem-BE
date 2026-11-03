@@ -2936,6 +2936,7 @@ public class FacilityManagerService : IFacilityManagerService
         if (refund.Agreement.MoveOutRequest != null)
         {
             refund.Agreement.MoveOutRequest.Status = MoveOutStatusConstants.Completed;
+            refund.Agreement.MoveOutRequest.FinalizedAt = now;
             refund.Agreement.MoveOutRequest.UpdatedAt = now;
         }
 

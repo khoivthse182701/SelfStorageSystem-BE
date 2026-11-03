@@ -33,14 +33,31 @@ public class StaffSubmitInspectionReportRequest
     [Range(0, 1000000000)]
     public decimal DamageCost { get; set; } = 0m;
 
-    [Required]
     public string OverallCondition { get; set; } = "Good";
 
     public string? Summary { get; set; }
 
+    public string? Notes
+    {
+        get => Summary;
+        set => Summary = value;
+    }
+
+    public bool? HasDamage { get; set; }
+
+    public decimal? RefundAmount { get; set; }
+
+    public decimal? PenaltyAmount { get; set; }
+
     public List<string>? DamageItemNames { get; set; }
 
     public List<string>? PhotoUrls { get; set; }
+
+    public List<string>? EvidenceUrls
+    {
+        get => PhotoUrls;
+        set => PhotoUrls = value;
+    }
 }
 
 public class StaffInspectionResultDto
