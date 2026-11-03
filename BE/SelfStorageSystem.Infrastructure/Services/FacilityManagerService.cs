@@ -1595,10 +1595,21 @@ public class FacilityManagerService : IFacilityManagerService
             throw AppException.FromError(ManagerErrors.TargetUnitNotAvailable);
 
         var now = DateTimeOffset.UtcNow;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
         // 1. Release old allocation and set old unit status
         activeAlloc.Status = AllocationStatusConstants.Released;
-        activeAlloc.AllocationEndDate = DateOnly.FromDateTime(DateTime.UtcNow);
+        activeAlloc.EndedAt = now;
+        if (today > activeAlloc.AllocationStartDate)
+        {
+            activeAlloc.AllocationEndDate = today;
+        }
+        else if (activeAlloc.AllocationEndDate <= activeAlloc.AllocationStartDate)
+        {
+            activeAlloc.AllocationEndDate = activeAlloc.AllocationStartDate.AddDays(1);
+        }
 
         var oldUnitNewStatus = StorageUnitStatusConstants.Maintenance;
 
@@ -1616,6 +1627,9 @@ public class FacilityManagerService : IFacilityManagerService
             ChangedAt = now
         });
 
+        // Persist the release of the old allocation first inside the transaction
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
         // 2. Occupy new unit and allocate to agreement
         var previousNewUnitStatus = newUnit.PhysicalStatus;
         newUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
@@ -1631,15 +1645,19 @@ public class FacilityManagerService : IFacilityManagerService
             ChangedAt = now
         });
 
+        var newAllocStartDate = today;
+        var newAllocEndDate = agreement.EndDate > newAllocStartDate ? agreement.EndDate : newAllocStartDate.AddDays(1);
+
         _dbContext.UnitAllocations.Add(new UnitAllocation
         {
             StorageUnitId = newUnit.Id,
             AgreementId = agreement.Id,
             AllocationKind = AllocationKindConstants.Rental,
-            AllocationStartDate = DateOnly.FromDateTime(DateTime.UtcNow),
-            AllocationEndDate = agreement.EndDate,
+            AllocationStartDate = newAllocStartDate,
+            AllocationEndDate = newAllocEndDate,
             Status = AllocationStatusConstants.Active,
-            CreatedAt = now
+            CreatedAt = now,
+            EndedAt = null
         });
 
         // 3. Issue fresh 6-digit PIN credential for new unit
@@ -1683,6 +1701,7 @@ public class FacilityManagerService : IFacilityManagerService
         agreement.UpdatedAt = now;
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         _logger.LogInformation("Manager {UserId} reassigned agreement #{AgreementNo} from unit {OldUnit} to unit {NewUnit}. Reason: {Reason}",
             currentUserId, agreement.AgreementNo, oldUnit.UnitCode, newUnit.UnitCode, request.Reason);

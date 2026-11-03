@@ -976,7 +976,8 @@ public class FacilityStaffService : IFacilityStaffService
                 .ToListAsync(cancellationToken);
             foreach (var alloc in oldAllocations)
             {
-                alloc.Status = AllocationStatusConstants.Released;
+                alloc.Status = AllocationStatusConstants.Released;
+                alloc.EndedAt = now;
             }
 
             await _dbContext.SaveChangesAsync(cancellationToken);
@@ -1120,7 +1121,8 @@ public class FacilityStaffService : IFacilityStaffService
 
             foreach (var a in allocations)
             {
-                a.Status = AllocationStatusConstants.Released;
+                a.Status = AllocationStatusConstants.Released;
+                a.EndedAt = now;
                 a.StorageUnit.PhysicalStatus = StorageUnitStatusConstants.Cleaning;
                 a.StorageUnit.UpdatedAt = now;
 
