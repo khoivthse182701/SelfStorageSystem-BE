@@ -381,7 +381,7 @@ public partial class FacilityStaffService : IFacilityStaffService
 
 
 
-        assignment.Status = "completed";
+        assignment.Status = ShiftAssignmentStatusConstants.CheckedOut;
 
 
 
