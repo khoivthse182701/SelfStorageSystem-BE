@@ -2678,7 +2678,7 @@ public partial class SelfStorageDbContext : DbContext
         {
             entity.HasKey(e => e.UnitId).HasName("PK__unit_map__D3AF5BD7302169A8");
 
-            entity.ToTable("unit_map_positions", "core");
+            entity.ToTable("unit_map_positions", "core", tb => tb.HasTrigger("trg_unit_map_positions_validate_scope"));
 
             entity.HasIndex(e => e.AreaId, "unit_map_positions_area_id_idx");
 
@@ -2785,7 +2785,11 @@ public partial class SelfStorageDbContext : DbContext
             entity.Property(e => e.FromUnitId).HasColumnName("from_unit_id");
             entity.Property(e => e.DiffDepositAmount)
                 .HasColumnType("decimal(18, 2)")
-                .HasColumnName("diff_deposit_amount");
+                .HasColumnName("diff_deposit_amount");
+
+            entity.Property(e => e.CleaningFee)
+                .HasColumnType("decimal(18, 2)")
+                .HasColumnName("cleaning_fee");
             entity.Property(e => e.DiffRentAmount)
                 .HasColumnType("decimal(18, 2)")
                 .HasColumnName("diff_rent_amount");
@@ -2813,8 +2817,8 @@ public partial class SelfStorageDbContext : DbContext
                 .HasColumnType("decimal(18, 2)")
                 .HasColumnName("total_paid_amount");
 
-            entity.HasOne(d => d.Agreement).WithOne(p => p.UnitTransferRequest)
-                .HasForeignKey<UnitTransferRequest>(d => d.AgreementId)
+            entity.HasOne(d => d.Agreement).WithMany()
+                .HasForeignKey(d => d.AgreementId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK__unit_tran__agree__61316BF4");
 

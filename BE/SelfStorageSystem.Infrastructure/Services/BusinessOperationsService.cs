@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Operations;
@@ -95,6 +96,75 @@ public sealed class BusinessOperationsService(SelfStorageDbContext db) : IBusine
         await SaveWithAuditAsync(actorUserId, nameof(FacilityRate), existing?.Id.ToString() ??
             $"{rate.FacilityId}:{rate.UnitTypeId}:{rate.ValidFrom:yyyy-MM-dd}", old, MapRate(rate), ct);
         return MapRate(rate);
+    }
+
+    public async Task<IReadOnlyList<OperationsRateDto>> BulkUpsertRatesAsync(
+        BulkUpsertRatesRequest request, long actorUserId, CancellationToken ct = default)
+    {
+        if (request == null || request.Rates == null || request.Rates.Count == 0)
+            throw AppException.FromError(OperationsErrors.InvalidRequest);
+
+        await EnsureActorAsync(actorUserId, ct);
+        var facility = await GetFacilityAsync(request.FacilityId, ct);
+
+        // Pre-validate all unit types exist in 1 batch query
+        var unitTypeIds = request.Rates.Select(r => r.UnitTypeId).Distinct().ToList();
+        var existingUnitTypeIds = await db.UnitTypes
+            .Where(t => unitTypeIds.Contains(t.Id) && t.IsActive)
+            .Select(t => t.Id)
+            .ToListAsync(ct);
+
+        if (existingUnitTypeIds.Count != unitTypeIds.Count)
+            throw AppException.FromError(OperationsErrors.UnitTypeNotFound);
+
+        // Atomic transaction boundary for the entire bulk batch
+        IDbContextTransaction? transaction = null;
+        if (db.Database.IsSqlServer())
+        {
+            transaction = await db.Database.BeginTransactionAsync(ct);
+        }
+
+        try
+        {
+            var results = new List<OperationsRateDto>();
+            foreach (var rateItem in request.Rates)
+            {
+                var singleRequest = new OperationsUpsertRateRequest
+                {
+                    FacilityId = request.FacilityId,
+                    UnitTypeId = rateItem.UnitTypeId,
+                    MonthlyRate = rateItem.MonthlyRate,
+                    DepositAmount = rateItem.DepositAmount,
+                    BookingFee = rateItem.BookingFee,
+                    ValidFrom = request.ValidFrom,
+                    ValidTo = request.ValidTo
+                };
+                var result = await UpsertRateAsync(singleRequest, actorUserId, ct);
+                results.Add(result);
+            }
+
+            if (transaction != null)
+            {
+                await transaction.CommitAsync(ct);
+            }
+
+            return results;
+        }
+        catch
+        {
+            if (transaction != null)
+            {
+                await transaction.RollbackAsync(ct);
+            }
+            throw;
+        }
+        finally
+        {
+            if (transaction != null)
+            {
+                await transaction.DisposeAsync();
+            }
+        }
     }
 
     public async Task<PagedResult<OperationsFeeDto>> GetFeesAsync(

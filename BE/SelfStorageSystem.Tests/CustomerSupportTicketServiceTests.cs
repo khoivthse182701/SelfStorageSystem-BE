@@ -339,4 +339,57 @@ public class CustomerSupportTicketServiceTests
         Assert.Equal(TicketConstants.DefaultCustomerResolution, updatedTicket.Resolution);
         Assert.NotNull(updatedTicket.ResolvedAt);
     }
+
+    [Fact]
+    public async Task CreateTicket_AgreementSelectedWithoutUnit_AutoPopulatesActiveStorageUnitId()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        db.Facilities.Add(new Facility { Id = 1, Code = "F1", Name = "Facility 1", AddressLine = "123 Street", City = "HCM", Timezone = "SE Asia Standard Time", Status = "active" });
+        db.RentalAgreements.Add(new RentalAgreement
+        {
+            Id = 10,
+            AgreementNo = "AGR-001",
+            CustomerId = 100,
+            FacilityId = 1,
+            PolicyVersionId = 1,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-10)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(20)),
+            Status = RentalAgreementStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        db.StorageUnits.Add(new StorageUnit { Id = 50, FacilityId = 1, UnitCode = "U-50", UnitTypeId = 1, PhysicalStatus = StorageUnitStatusConstants.Occupied });
+        db.UnitAllocations.Add(new UnitAllocation
+        {
+            Id = 1,
+            AgreementId = 10,
+            StorageUnitId = 50,
+            AllocationKind = "primary",
+            Status = AllocationStatusConstants.Active,
+            AllocationStartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-10)),
+            AllocationEndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(20))
+        });
+        await db.SaveChangesAsync();
+
+        var service = new CustomerSupportTicketService(db);
+        var request = new CreateSupportTicketRequest(
+            FacilityId: 1,
+            AgreementId: 10,
+            StorageUnitId: null,
+            Category: TicketCategoryConstants.Access,
+            Priority: TicketPriorityConstants.Normal,
+            Subject: "Door issue",
+            Description: "Door cannot open"
+        );
+
+        // Act
+        var result = await service.CreateTicketAsync(customerId: 100, request);
+
+        // Assert
+        Assert.NotNull(result);
+        var created = await db.SupportTickets.FindAsync(result.Id);
+        Assert.NotNull(created);
+        Assert.Equal(50L, created.StorageUnitId);
+    }
 }

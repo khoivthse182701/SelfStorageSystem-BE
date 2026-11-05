@@ -7,6 +7,7 @@ public interface IBusinessOperationsService
 {
     Task<PagedResult<OperationsRateDto>> GetRatesAsync(OperationsRateQueryParameters query, CancellationToken cancellationToken = default);
     Task<OperationsRateDto> UpsertRateAsync(OperationsUpsertRateRequest request, long actorUserId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<OperationsRateDto>> BulkUpsertRatesAsync(BulkUpsertRatesRequest request, long actorUserId, CancellationToken cancellationToken = default);
     Task<PagedResult<OperationsFeeDto>> GetFeesAsync(OperationsFeeQueryParameters query, CancellationToken cancellationToken = default);
     Task<OperationsFeeDto> UpsertFeeAsync(OperationsUpsertFeeRequest request, long actorUserId, CancellationToken cancellationToken = default);
     Task<PagedResult<OperationsPromotionDto>> GetPromotionsAsync(OperationsPromotionQueryParameters query, CancellationToken cancellationToken = default);

@@ -20,6 +20,8 @@ public class RentalSettings
     public int TransferExpiryCheckIntervalMinutes { get; set; } = RentalPolicyConstants.DefaultTransferExpiryCheckIntervalMinutes;
     public decimal TransferOverduePenaltyRate { get; set; } = RentalPolicyConstants.DefaultTransferOverduePenaltyRate;
     public int TransferRescheduleCutoffHours { get; set; } = RentalPolicyConstants.DefaultTransferRescheduleCutoffHours;
+    public int MaxTransfersPerAgreement { get; set; } = RentalPolicyConstants.MaxTransfersPerAgreement;
+    public decimal CrossFacilityCleaningFee { get; set; } = RentalPolicyConstants.DefaultCrossFacilityCleaningFee;
     public decimal DowngradeVoucherDiscountPercent { get; set; } = RentalPolicyConstants.DefaultDowngradeVoucherDiscountPercent;
     public decimal DowngradeVoucherMaxAmount { get; set; } = RentalPolicyConstants.DefaultDowngradeVoucherMaxAmount;
     public int DowngradeVoucherValidityDays { get; set; } = RentalPolicyConstants.DefaultDowngradeVoucherValidityDays;

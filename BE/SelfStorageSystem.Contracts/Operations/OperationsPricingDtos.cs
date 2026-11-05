@@ -141,3 +141,30 @@ public class OperationsUpsertFeeRequest : IValidatableObject
         catch (JsonException) { return false; }
     }
 }
+
+
+public class BulkUpsertRatesRequest
+{
+    [Range(OperationsConstants.MinEntityId, long.MaxValue)]
+    public long FacilityId { get; set; }
+
+    public DateOnly ValidFrom { get; set; }
+
+    public DateOnly? ValidTo { get; set; }
+
+    [Required]
+    public List<BulkRateItemRequest> Rates { get; set; } = new();
+}
+
+public class BulkRateItemRequest
+{
+    [Range(OperationsConstants.MinEntityId, long.MaxValue)]
+    public long UnitTypeId { get; set; }
+
+    [Range(typeof(decimal), OperationsConstants.MinMoneyText, OperationsConstants.MaxMoneyText, ParseLimitsInInvariantCulture = true, ConvertValueInInvariantCulture = true)]
+    public decimal MonthlyRate { get; set; }
+
+    public decimal? DepositAmount { get; set; }
+
+    public decimal BookingFee { get; set; }
+}

@@ -223,6 +223,8 @@ public static class RentalPolicyConstants
 {
     public const int MaxTransferTransitDays = 7;
     public const int MaxTransferReschedules = 2;
+    public const int MaxTransfersPerAgreement = 2;
+    public const decimal DefaultCrossFacilityCleaningFee = 50000m;
     public const int DefaultMaxFailedPinAttempts = 5;
     public const int DefaultPinLockoutDurationMinutes = 15;
     public const int DefaultQrTtlSeconds = 120;

@@ -635,6 +635,36 @@ public class ManagerController : ControllerBase
     }
 
     /// <summary>
+    /// Đồng bộ biểu giá hàng loạt cho cơ sở theo diện tích / loại kho.
+    /// </summary>
+    [HttpPost("facilities/{facilityId:long}/pricing/rates/bulk-sync")]
+    [HttpPost("pricing/rates/bulk-sync")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<OperationsRateDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> BulkUpsertFacilityRates(
+        [FromRoute] long? facilityId,
+        [FromBody] BulkUpsertRatesRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUser(out var userId, out var isSystemAdmin))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        if (!isSystemAdmin)
+            return StatusCode(StatusCodes.Status403Forbidden, ApiResponse.Fail("Chỉ Quản trị viên hệ thống (System Administrator) mới có quyền chỉnh sửa biểu giá hàng loạt."));
+
+        if (facilityId.HasValue && facilityId.Value > 0)
+        {
+            request.FacilityId = facilityId.Value;
+        }
+
+        await _managerService.ValidateFacilityAccessAsync(request.FacilityId, userId, isSystemAdmin, cancellationToken);
+
+        var result = await _operationsService.BulkUpsertRatesAsync(request, userId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<OperationsRateDto>>.Ok(result, "Bulk facility rates synchronized successfully."));
+    }
+
+    /// <summary>
     /// Tra cứu danh mục quy tắc phí chuẩn hệ thống (phí vệ sinh, quá hạn, hư hỏng).
     /// </summary>
     [HttpGet("pricing/fees")]

@@ -4,17 +4,66 @@ namespace SelfStorageSystem.Contracts.Staff;
 
 public class StaffSubmitTicketReportRequest
 {
-    [Required]
-    [MinLength(3)]
-    public string ReportNotes { get; set; } = string.Empty;
+    private string _reportNotes = string.Empty;
+
+    public string ReportNotes
+    {
+        get => _reportNotes;
+        set => _reportNotes = value ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Alias for ReportNotes to safely support payload sending "note"
+    /// </summary>
+    public string? Note
+    {
+        get => _reportNotes;
+        set
+        {
+            if (!string.IsNullOrWhiteSpace(value) && string.IsNullOrWhiteSpace(_reportNotes))
+            {
+                _reportNotes = value.Trim();
+            }
+        }
+    }
+
+    private string _assessmentLevel = "resolved";
 
     /// <summary>
     /// "resolved" if incident is fixed/cleaned, or "severe_need_relocation" if unit is damaged and needs customer relocation.
     /// </summary>
-    [Required]
-    public string AssessmentLevel { get; set; } = "resolved";
+    public string AssessmentLevel
+    {
+        get => _assessmentLevel;
+        set => _assessmentLevel = value ?? "resolved";
+    }
+
+    /// <summary>
+    /// Alias for AssessmentLevel to safely support payload sending "result"
+    /// </summary>
+    public string? Result
+    {
+        get => _assessmentLevel;
+        set
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                var val = value.Trim().ToLowerInvariant();
+                _assessmentLevel = val.Contains("severe") ? "severe_need_relocation" : "resolved";
+            }
+        }
+    }
 
     public List<string>? EvidenceImageUrls { get; set; }
+
+    /// <summary>
+    /// Alias for EvidenceImageUrls to safely support payload sending "evidenceUrls"
+    /// </summary>
+    public List<string>? EvidenceUrls
+    {
+        get => EvidenceImageUrls;
+        set => EvidenceImageUrls = value;
+    }
 }
 
 public class StaffTicketReportResultDto

@@ -218,7 +218,10 @@ public class StaffController : ControllerBase
         [FromRoute] long id,
         CancellationToken cancellationToken)
     {
-        var result = await _staffService.GetTicketMessagesAsync(id, cancellationToken);
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var result = await _staffService.GetTicketMessagesAsync(userId, id, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<StaffTicketMessageDto>>.Ok(result, "Ticket messages retrieved successfully."));
     }
 
