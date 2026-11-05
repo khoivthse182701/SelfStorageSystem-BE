@@ -77,5 +77,5 @@ public partial class RentalAgreement
 
     public virtual ICollection<StoredItem> StoredItems { get; set; } = new List<StoredItem>();
 
-    public virtual UnitTransferRequest? UnitTransferRequest { get; set; }
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped] public virtual UnitTransferRequest? UnitTransferRequest { get; set; }
 }

@@ -32,7 +32,8 @@ public record StaffUnitGridDto(
     decimal? CurrentRate,
     string? CurrentAgreementNo,
     string? CustomerName,
-    StaffUnitMapPositionDto? MapPosition
+    StaffUnitMapPositionDto? MapPosition,
+    string? Notes = null
 );
 
 public record StaffUnitMapPositionDto(
@@ -330,7 +331,7 @@ public record AssignUnitToReservationRequest(
 
 public record CreateHandoverInspectionItemRequest(
     string ItemName,
-    string Condition,
+    string? Condition = "damaged",
     string? Notes = null,
     string? PhotoUrl = null,
     decimal ChargeAmount = 0m
@@ -374,9 +375,9 @@ public record StaffMoveOutSummaryDto(
 );
 
 public record InspectMoveOutRequest(
-    string OverallCondition,
-    string? Summary,
-    List<CreateHandoverInspectionItemRequest>? InspectionItems,
+    string OverallCondition = "Good",
+    string? Summary = null,
+    List<CreateHandoverInspectionItemRequest>? InspectionItems = null,
     string NextUnitStatus = "available"
 );
 
@@ -454,12 +455,15 @@ public record StaffFacilityUnitDto(
     string Status,
     decimal? CurrentRate,
     string? CurrentAgreementNo,
-    string? CustomerName
+    string? CustomerName,
+    string? Notes = null
 );
 
 public record UpdateUnitStatusRequest(
     string? Status = null,
-    string? PhysicalStatus = null
+    string? PhysicalStatus = null,
+    string? Notes = null,
+    string? Reason = null
 );
 
 public record CreateMaintenanceWorkOrderRequest(
@@ -499,6 +503,18 @@ public record OverdueAgreementDto(
     string AgreementStatus,
     string CredentialStatus
 );
+
+public class StaffCreateCheckInIncidentTicketRequest
+{
+    public long FacilityId { get; set; }
+    public long? AgreementId { get; set; }
+    public long? StorageUnitId { get; set; }
+    public string? UnitCode { get; set; }
+    public string? AgreementNo { get; set; }
+    public string? CustomerName { get; set; }
+    public string Description { get; set; } = string.Empty;
+    public string Priority { get; set; } = "urgent";
+}
 
 public record LockAccessRequest(
     string Reason

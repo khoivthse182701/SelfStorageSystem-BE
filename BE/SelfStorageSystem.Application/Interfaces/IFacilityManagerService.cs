@@ -1,3 +1,4 @@
+using SelfStorageSystem.Contracts.Staff;
 using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Manager;
 
@@ -55,6 +56,13 @@ public interface IFacilityManagerService
 
     Task<IReadOnlyList<ManagerTransferRequestDto>> GetTransferRequestsAsync(
         long facilityId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerTransferRequestDto> DecideTransferRequestAsync(
+        long transferRequestId,
+        ManagerDecideTransferRequest request,
         long currentUserId,
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
@@ -200,6 +208,141 @@ public interface IFacilityManagerService
         CancellationToken cancellationToken = default);
 
     Task<List<ManagerFacilityScopeDto>> GetMyFacilitiesAsync(
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerReassignUnitResponseDto> ReassignAgreementUnitAsync(
+        long agreementId,
+        ManagerReassignUnitRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerEmergencyCancelRefundResponseDto> EmergencyCancelAndRefundAgreementAsync(
+        long agreementId,
+        ManagerEmergencyCancelRefundRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+
+
+    // ==========================================
+    // 6. Quản Lý Nhân Sự & Khách Hàng Cơ Sở (Facility Scope)
+    // ==========================================
+
+    Task<PagedResult<ManagerStaffItemDto>> GetFacilityStaffsAsync(
+        long? facilityId,
+        string? search,
+        int pageNumber,
+        int pageSize,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerStaffItemDto> CreateFacilityStaffAsync(
+        ManagerCreateStaffRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerStaffItemDto> UpdateFacilityStaffAsync(
+        long staffUserId,
+        ManagerUpdateStaffRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerStaffItemDto> UpdateFacilityStaffStatusAsync(
+        long staffUserId,
+        ManagerUpdateStaffStatusRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<PagedResult<ManagerCustomerItemDto>> GetFacilityCustomersAsync(
+        long? facilityId,
+        string? search,
+        int pageNumber,
+        int pageSize,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    // ==========================================
+    // 7. Quản Lý Sự Cố Ticket & Phân Công Kiểm Tra Hết Hạn
+    // ==========================================
+
+    Task<PagedResult<ManagerTicketDetailDto>> GetFacilityTicketsAsync(
+        long? facilityId,
+        string? status,
+        string? category,
+        int pageNumber,
+        int pageSize,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerTicketDetailDto> CreateTicketAsync(
+        ManagerCreateTicketRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerTicketDetailDto> AssignTicketStaffAsync(
+        long ticketId,
+        ManagerAssignTicketStaffRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<StaffTicketMessageDto>> GetTicketMessagesAsync(
+        long ticketId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ManagerChargeProposalDto>> GetTicketChargeProposalsAsync(
+        long ticketId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerTicketDetailDto> CloseTicketAsync(
+        long ticketId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ManagerAgreementDetailDto>> GetExpiringOrMoveOutAgreementsAsync(
+        long facilityId,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerInspectionDetailDto> AssignMoveOutInspectionAsync(
+        ManagerAssignInspectionRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    // ==========================================
+    // 8. Quản Lý & Chuyển Khoản Hoàn Cọc (Manager Bank Transfer Payout)
+    // ==========================================
+
+    Task<PagedResult<ManagerRefundItemDto>> GetFacilityRefundsAsync(
+        long? facilityId,
+        string? status,
+        int pageNumber,
+        int pageSize,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
+    Task<ManagerProcessRefundPayoutResultDto> ProcessRefundPayoutAsync(
+        long refundId,
+        ManagerProcessRefundPayoutRequest request,
         long currentUserId,
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);

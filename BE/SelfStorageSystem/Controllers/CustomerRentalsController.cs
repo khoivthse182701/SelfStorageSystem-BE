@@ -1,3 +1,4 @@
+using SelfStorageSystem.Contracts.Customer;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -411,5 +412,25 @@ public class CustomerRentalsController : ControllerBase
         customerId = 0;
         var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
         return !string.IsNullOrEmpty(userIdClaim) && long.TryParse(userIdClaim, out customerId);
+    }
+
+    /// <summary>
+    /// Khách hàng gửi thông tin tài khoản ngân hàng để nhận hoàn tiền cọc (MODULE 4).
+    /// </summary>
+    [HttpPost("refund-requests/{id:long}/bank-info")]
+    [HttpPost("refunds/{id:long}/bank-info")]
+    [ProducesResponseType(typeof(ApiResponse<CustomerRefundBankInfoDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SubmitRefundBankInfo(
+        [FromRoute] long id,
+        [FromBody] CustomerSubmitRefundBankInfoRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.SubmitRefundBankInfoAsync(customerId, id, request, cancellationToken);
+        return Ok(ApiResponse<CustomerRefundBankInfoDto>.Ok(result, "Bank information for refund recorded successfully."));
     }
 }

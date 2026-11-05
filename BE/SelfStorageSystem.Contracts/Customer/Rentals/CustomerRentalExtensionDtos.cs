@@ -84,6 +84,7 @@ public record UnitTransferRequestDto(
     DateOnly MoveInDate,
     decimal DiffRentAmount,
     decimal DiffDepositAmount,
+    decimal CleaningFee,
     decimal TotalPaidAmount,
     int RescheduleCount,
     long? InvoiceId,
@@ -92,4 +93,31 @@ public record UnitTransferRequestDto(
     string Reason,
     string Status,
     DateTimeOffset CreatedAt
+);
+
+public record TransferPreviewDto(
+    long AgreementId,
+    string AgreementNo,
+    long CurrentFacilityId,
+    string CurrentFacilityName,
+    long CurrentUnitTypeId,
+    string CurrentUnitTypeName,
+    decimal CurrentMonthlyRate,
+    decimal CurrentDeposit,
+    int TransferCount,
+    int MaxTransfers,
+    bool CanTransfer,
+    string? DisabledReason,
+    long? TargetFacilityId,
+    string? TargetFacilityName,
+    long? TargetUnitTypeId,
+    string? TargetUnitTypeName,
+    decimal? TargetMonthlyRate,
+    decimal? TargetDeposit,
+    decimal DiffRentAmount,
+    decimal DiffDepositAmount,
+    decimal CleaningFee,
+    decimal TotalRequiredPayment,
+    bool IsDowngrade,
+    bool IsCrossFacility
 );

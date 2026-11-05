@@ -66,6 +66,7 @@ public static class DependencyInjection
         // 4.1. Background Hosted Workers
         services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.ReservationHoldExpiryWorker>();
         services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.TransferExpiryWorker>();
+        services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.StorageLifecycleBackgroundService>();
 
         // 5. JWT Authentication
         var jwtSettings = configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() 
@@ -96,6 +97,19 @@ public static class DependencyInjection
                 ValidAudience = jwtSettings.Audience,
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.Zero
+            };
+            options.Events = new JwtBearerEvents
+            {
+                OnMessageReceived = context =>
+                {
+                    var accessToken = context.Request.Query["access_token"];
+                    var path = context.HttpContext.Request.Path;
+                    if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+                    {
+                        context.Token = accessToken;
+                    }
+                    return Task.CompletedTask;
+                }
             };
         });
 

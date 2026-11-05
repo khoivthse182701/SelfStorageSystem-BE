@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace SelfStorageSystem.Domain.Entities;
@@ -28,6 +28,8 @@ public partial class UnitTransferRequest
     public decimal DiffRentAmount { get; set; }
 
     public decimal DiffDepositAmount { get; set; }
+
+    public decimal CleaningFee { get; set; }
 
     public decimal PenaltyAmount { get; set; }
 

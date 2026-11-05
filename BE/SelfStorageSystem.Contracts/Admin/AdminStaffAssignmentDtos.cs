@@ -28,8 +28,7 @@ public class AdminCreateStaffAssignmentRequest
     [Required]
     public long FacilityId { get; set; }
 
-    [Required]
-    public string AssignmentRole { get; set; } = string.Empty;
+    public string? AssignmentRole { get; set; }
 
     public DateTimeOffset? StartsAt { get; set; }
 

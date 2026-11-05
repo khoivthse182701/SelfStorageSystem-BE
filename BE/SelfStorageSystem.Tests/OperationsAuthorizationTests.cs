@@ -27,43 +27,45 @@ public class OperationsAuthorizationTests : IClassFixture<OperationsAuthorizatio
 
     public OperationsAuthorizationTests(OperationsAuthorizationFixture fixture) => _fixture = fixture;
 
-    public static IEnumerable<object[]> ManagerAndAdminRoutes()
+    public static IEnumerable<object[]> Routes()
     {
         yield return new object[] { "GET", "/api/manager/facilities/1/pricing/rates", "", nameof(IBusinessOperationsService.GetRatesAsync) };
+        yield return new object[] { "PUT", "/api/manager/facilities/1/pricing/rates",
+            """{"facilityId":1,"unitTypeId":1,"monthlyRate":1000000,"validFrom":"2026-01-01"}""",
+            nameof(IBusinessOperationsService.UpsertRateAsync) };
         yield return new object[] { "GET", "/api/manager/pricing/fees", "", nameof(IBusinessOperationsService.GetFeesAsync) };
         yield return new object[] { "GET", "/api/manager/promotions", "", nameof(IBusinessOperationsService.GetPromotionsAsync) };
         yield return new object[] { "POST", "/api/manager/promotions",
-            "{\"code\":\"SALE\",\"name\":\"Sale\",\"discountType\":\"fixed\",\"discountValue\":100000,\"validFrom\":\"2026-01-01T00:00:00Z\",\"validTo\":\"2026-12-31T00:00:00Z\"}",
+            """{"code":"SALE","name":"Sale","discountType":"fixed","discountValue":100000,"validFrom":"2026-01-01T00:00:00Z","validTo":"2026-12-31T00:00:00Z"}""",
             nameof(IBusinessOperationsService.CreatePromotionAsync) };
-        yield return new object[] { "PUT", "/api/manager/promotions/7/status", "{\"isActive\":false}",
+        yield return new object[] { "PUT", "/api/manager/promotions/7/status", """{"isActive":false}""",
             nameof(IBusinessOperationsService.UpdatePromotionStatusAsync) };
     }
 
-    public static IEnumerable<object[]> AdminOnlyRoutes()
-    {
-        yield return new object[] { "PUT", "/api/manager/facilities/1/pricing/rates",
-            "{\"facilityId\":1,\"unitTypeId\":1,\"monthlyRate\":1000000,\"validFrom\":\"2026-01-01\"}",
-            nameof(IBusinessOperationsService.UpsertRateAsync) };
-    }
-
-    public static IEnumerable<object[]> Routes() => ManagerAndAdminRoutes().Concat(AdminOnlyRoutes());
-
     public static IEnumerable<object[]> AnonymousRoutes() => Routes().Select(route => route.Take(3).ToArray());
 
-    public static IEnumerable<object[]> ForbiddenRoutes() =>
-        ManagerAndAdminRoutes().SelectMany(route =>
-            new[] { RoleConstants.Customer, RoleConstants.FacilityStaff }
-                .Select(role => route.Take(3).Concat(new object[] { role }).ToArray()))
-        .Concat(AdminOnlyRoutes().SelectMany(route =>
-            new[] { RoleConstants.Customer, RoleConstants.FacilityStaff, RoleConstants.FacilityManager }
-                .Select(role => route.Take(3).Concat(new object[] { role }).ToArray())));
+    public static IEnumerable<object[]> ForbiddenRoutes() => Routes().SelectMany(route =>
+    {
+        var method = (string)route[0];
+        var path = (string)route[1];
+        var roles = new List<string> { RoleConstants.Customer, RoleConstants.FacilityStaff };
+        if (method == "PUT" && path.Contains("/pricing/"))
+        {
+            roles.Add(RoleConstants.FacilityManager);
+        }
+        return roles.Select(role => route.Take(3).Concat(new object[] { role }).ToArray());
+    });
 
-    public static IEnumerable<object[]> AllowedRoutes() =>
-        ManagerAndAdminRoutes().SelectMany(route =>
-            new[] { RoleConstants.FacilityManager, RoleConstants.SystemAdministrator }
-                .Select(role => route.Concat(new object[] { role }).ToArray()))
-        .Concat(AdminOnlyRoutes().Select(route =>
-            route.Concat(new object[] { RoleConstants.SystemAdministrator }).ToArray()));
+    public static IEnumerable<object[]> AllowedRoutes() => Routes().SelectMany(route =>
+    {
+        var method = (string)route[0];
+        var path = (string)route[1];
+        var roles = (method == "PUT" && path.Contains("/pricing/"))
+            ? new[] { RoleConstants.SystemAdministrator }
+            : new[] { RoleConstants.FacilityManager, RoleConstants.SystemAdministrator };
+        return roles.Select(role => route.Concat(new object[] { role }).ToArray());
+    });
+
     [Theory]
     [MemberData(nameof(AnonymousRoutes))]
     public async Task NoIdentity_IsUnauthorizedWithoutCallingService(
@@ -100,14 +102,16 @@ public class OperationsAuthorizationTests : IClassFixture<OperationsAuthorizatio
         var invocation = Assert.Single(_fixture.Service.Invocations.Skip(callsBefore));
         Assert.Equal(serviceMethod, invocation.Method.Name);
         if (method != "GET")
-            Assert.Contains(OperationsAuthorizationFixture.UserId, invocation.Arguments.OfType<long>());
+            Assert.Contains(OperationsAuthorizationFixture.UserId, invocation.Arguments);
     }
 
-    private async Task<HttpResponseMessage> SendAsync(string method, string path, string body, string? role)
+    private async Task<HttpResponseMessage> SendAsync(
+        string method, string path, string body, string? role)
     {
-        using var request = new HttpRequestMessage(new HttpMethod(method), path);
-        if (body.Length > 0)
-            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var request = new HttpRequestMessage(new HttpMethod(method), path)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
         if (role != null)
             request.Headers.Add(OperationsAuthorizationFixture.RoleHeader, role);
         return await _fixture.Client.SendAsync(request);

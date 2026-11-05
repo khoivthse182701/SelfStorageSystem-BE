@@ -10,6 +10,9 @@ public static class StaffErrors
     public static readonly Error FacilityNotFound =
         Error.NotFound("Staff.FacilityNotFound", "Facility was not found.");
 
+    public static readonly Error StaffNotAssignedToFacility =
+        Error.Forbidden("Staff.NotAssignedToFacility", "Nhân viên không có quyền truy cập dữ liệu tại cơ sở này.");
+
     public static readonly Error TaskNotFound =
         Error.NotFound("Staff.TaskNotFound", "Staff task was not found.");
 
@@ -66,4 +69,19 @@ public static class StaffErrors
 
     public static readonly Error RateNotFound =
         Error.NotFound("Staff.RateNotFound", "No active pricing rate found for this unit type at the facility.");
+
+    public static readonly Error InspectionNotFound =
+        Error.NotFound("Staff.InspectionNotFound", "Move-out inspection was not found.");
+
+    public static readonly Error RefundNotFound =
+        Error.NotFound("Staff.RefundNotFound", "Refund record was not found.");
+
+    public static readonly Error RefundAlreadyInBankTransferFlow =
+        Error.Conflict("Staff.RefundAlreadyInBankTransferFlow", "Khoản hoàn cọc này đã chuyển sang luồng chuyển khoản ngân hàng do Facility Manager phụ trách. Nhân viên không thể chi tiền mặt tại quầy.");
+
+    public static readonly Error RefundAlreadyCompleted =
+        Error.Conflict("Staff.RefundAlreadyCompleted", "Khoản hoàn cọc này đã được hoàn tất trước đó.");
+
+    public static readonly Error RefundAmountInvalid =
+        Error.Validation("Staff.RefundAmountInvalid", "Số tiền hoàn cọc phải lớn hơn 0.");
 }

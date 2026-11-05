@@ -534,4 +534,37 @@ public class BusinessOperationsServiceTests
         Assert.Equal(1, resultFiltered.TotalCount);
         Assert.Equal("FAC-DN", resultFiltered.Items[0].Code);
     }
+
+    [Fact]
+    public async Task BulkUpsertRatesAsync_ValidBatch_ExecutesSuccessfullyAndAtomically()
+    {
+        await using var db = CreateDbContext();
+        await SeedRateScopeAsync(db);
+        var service = new BusinessOperationsService(db);
+
+        var request = new BulkUpsertRatesRequest
+        {
+            FacilityId = 1,
+            ValidFrom = new DateOnly(2026, 7, 1),
+            ValidTo = new DateOnly(2026, 12, 31),
+            Rates =
+            [
+                new BulkRateItemRequest
+                {
+                    UnitTypeId = 1,
+                    MonthlyRate = 1_200_000m,
+                    DepositAmount = 1_200_000m,
+                    BookingFee = 50_000m
+                }
+            ]
+        };
+
+        var results = await service.BulkUpsertRatesAsync(request, ActorId);
+
+        Assert.Single(results);
+        Assert.Equal(1_200_000m, results[0].MonthlyRate);
+        Assert.Equal(new DateOnly(2026, 7, 1), results[0].ValidFrom);
+        Assert.Single(await db.FacilityRates.ToListAsync());
+        Assert.NotEmpty(await db.AuditLogs.ToListAsync());
+    }
 }

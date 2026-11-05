@@ -52,11 +52,20 @@ public static class RentalErrors
     public static readonly Error RenewalAlreadyPending =
         Error.Conflict("Rental.RenewalAlreadyPending", "A renewal request is already pending for this rental agreement.");
 
+    public static readonly Error TransferBlockedByOverdueDebt =
+        Error.Conflict("Rental.TransferBlockedByOverdueDebt", "Unit transfer cannot be requested while there is an outstanding debt or overdue invoice on this agreement.");
+
     public static readonly Error MemberNotFound =
         Error.NotFound("Rental.MemberNotFound", "Authorized access member was not found or has been revoked.");
 
     public static readonly Error EmptyMemberName =
         Error.Validation("Rental.EmptyMemberName", "Member full name is required.");
+
+    public static readonly Error TransferLimitReached =
+        Error.Conflict("Rental.TransferLimitReached", "Hợp đồng đã đạt giới hạn tối đa 2 lần chuyển kho.");
+
+    public static readonly Error TargetUnitUnavailable =
+        Error.Conflict("Rental.TargetUnitUnavailable", "Không còn ô kho trống cho loại kho đã chọn tại cơ sở này.");
 
     public static readonly Error TransferRequestAlreadyPending =
         Error.Conflict("Rental.TransferAlreadyPending", "A unit transfer request is already pending for this rental agreement.");

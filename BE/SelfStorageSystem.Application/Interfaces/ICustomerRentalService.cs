@@ -1,3 +1,4 @@
+using SelfStorageSystem.Contracts.Customer;
 using SelfStorageSystem.Contracts.Customer.Rentals;
 
 namespace SelfStorageSystem.Application.Interfaces;
@@ -16,6 +17,14 @@ public interface ICustomerRentalService
     Task<IReadOnlyList<AuthorizedMemberDto>> GetAuthorizedMembersAsync(long customerId, long agreementId, CancellationToken cancellationToken = default);
     Task<AuthorizedMemberDto> AddAuthorizedMemberAsync(long customerId, long agreementId, CreateAuthorizedMemberRequest request, CancellationToken cancellationToken = default);
     Task RevokeAuthorizedMemberAsync(long customerId, long agreementId, long memberId, CancellationToken cancellationToken = default);
+    Task<TransferPreviewDto> GetTransferPreviewAsync(long customerId, long agreementId, long? requestedFacilityId = null, long? requestedUnitTypeId = null, DateOnly? moveOutDate = null, CancellationToken cancellationToken = default);
     Task<UnitTransferRequestDto> RequestUnitTransferAsync(long customerId, long agreementId, CreateTransferRequest request, CancellationToken cancellationToken = default);
     Task<UnitTransferRequestDto> RescheduleTransferAsync(long customerId, long transferRequestId, RescheduleTransferRequest request, CancellationToken cancellationToken = default);
+
+    // MODULE 4: Customer submits bank account information for deposit refund
+    Task<CustomerRefundBankInfoDto> SubmitRefundBankInfoAsync(
+        long customerId,
+        long refundId,
+        CustomerSubmitRefundBankInfoRequest request,
+        CancellationToken cancellationToken = default);
 }

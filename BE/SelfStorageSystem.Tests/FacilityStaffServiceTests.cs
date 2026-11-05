@@ -562,7 +562,7 @@ public class FacilityStaffServiceTests
         await db.SaveChangesAsync();
 
         var service = new FacilityStaffService(db);
-        var request = new UpdateUnitStatusRequest(PhysicalStatus: "under_maintenance");
+        var request = new UpdateUnitStatusRequest(PhysicalStatus: "under_maintenance", Reason: "Kẹt cửa cuốn");
 
         // Act
         await service.UpdateUnitStatusAsync(employeeUserId: 3, unitId: 101, request);
@@ -571,5 +571,64 @@ public class FacilityStaffServiceTests
         var updatedUnit = await db.StorageUnits.FindAsync(101L);
         Assert.NotNull(updatedUnit);
         Assert.Equal("under_maintenance", updatedUnit.PhysicalStatus);
+    }
+
+    [Fact]
+    public async Task UpdateUnitStatusAsync_OccupiedUnit_ThrowsError()
+    {
+        await using var db = CreateInMemoryDbContext();
+        var staffUser = new User { Id = 3, Email = "staff@system.local", PasswordHash = "hash", Status = "active" };
+        var employee = new EmployeeProfile { UserId = 3, EmployeeCode = "EMP-003", FullName = "Staff Nguyen", EmploymentStatus = "active" };
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "Thu Duc Facility", AddressLine = "123 Street", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var assignment = new StaffFacilityAssignment { Id = 2, EmployeeId = 3, FacilityId = 1, AssignmentRole = "staff", StartsAt = DateTimeOffset.UtcNow.AddDays(-10) };
+        var unit = new StorageUnit { Id = 102, FacilityId = 1, UnitTypeId = 1, UnitCode = "TD-102", PhysicalStatus = StorageUnitStatusConstants.Occupied, IsListed = true };
+
+        db.Users.Add(staffUser);
+        db.EmployeeProfiles.Add(employee);
+        db.Facilities.Add(facility);
+        db.StaffFacilityAssignments.Add(assignment);
+        db.StorageUnits.Add(unit);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityStaffService(db);
+        var request = new UpdateUnitStatusRequest(PhysicalStatus: "cleaning", Reason: "Dọn dẹp");
+
+        var ex = await Assert.ThrowsAsync<AppException>(() =>
+            service.UpdateUnitStatusAsync(employeeUserId: 3, unitId: 102, request));
+        Assert.Contains("thuê", ex.Message);
+    }
+
+    [Fact]
+    public async Task UpdateUnitStatusAsync_LockedByOtherStaff_ThrowsForbidden()
+    {
+        await using var db = CreateInMemoryDbContext();
+        var staffUser = new User { Id = 3, Email = "staff@system.local", PasswordHash = "hash", Status = "active" };
+        var employee = new EmployeeProfile { UserId = 3, EmployeeCode = "EMP-003", FullName = "Staff Nguyen", EmploymentStatus = "active" };
+        var facility = new Facility { Id = 1, Code = "FAC-01", Name = "Thu Duc Facility", AddressLine = "123 Street", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var assignment = new StaffFacilityAssignment { Id = 3, EmployeeId = 3, FacilityId = 1, AssignmentRole = "staff", StartsAt = DateTimeOffset.UtcNow.AddDays(-10) };
+        var unit = new StorageUnit
+        {
+            Id = 103,
+            FacilityId = 1,
+            UnitTypeId = 1,
+            UnitCode = "TD-103",
+            PhysicalStatus = StorageUnitStatusConstants.Cleaning,
+            Notes = "[LOCKED_BY:99:OtherStaff] Dang don dep",
+            IsListed = true
+        };
+
+        db.Users.Add(staffUser);
+        db.EmployeeProfiles.Add(employee);
+        db.Facilities.Add(facility);
+        db.StaffFacilityAssignments.Add(assignment);
+        db.StorageUnits.Add(unit);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityStaffService(db);
+        var request = new UpdateUnitStatusRequest(PhysicalStatus: "available");
+
+        var ex = await Assert.ThrowsAsync<AppException>(() =>
+            service.UpdateUnitStatusAsync(employeeUserId: 3, unitId: 103, request));
+        Assert.Contains("OtherStaff", ex.Message);
     }
 }

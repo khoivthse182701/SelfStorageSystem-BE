@@ -59,6 +59,10 @@ public class ManagerRefundApprovalDto
     public decimal OriginalDeposit { get; set; }
     public decimal EstimatedDeductions { get; set; }
     public decimal RecommendedRefundAmount { get; set; }
+    public string? BankName { get; set; }
+    public string? BankAccountNumber { get; set; }
+    public string? BankAccountHolder { get; set; }
+    public string? PayoutMethod { get; set; }
 }
 
 public class ManagerDecideRefundApprovalRequest

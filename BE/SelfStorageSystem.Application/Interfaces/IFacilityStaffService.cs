@@ -74,6 +74,18 @@ public interface IFacilityStaffService
         StaffCompleteTicketRequest request,
         CancellationToken cancellationToken = default);
 
+    // MODULE 3: Staff submits ticket report (Resolved / Severe_Need_Relocation)
+    Task<StaffTicketReportResultDto> SubmitTicketReportAsync(
+        long employeeUserId,
+        long ticketId,
+        StaffSubmitTicketReportRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffLogisticsTicketDto> CreateCheckInIncidentTicketAsync(
+        long employeeUserId,
+        StaffCreateCheckInIncidentTicketRequest request,
+        CancellationToken cancellationToken = default);
+
     // ==========================================
     // 5. SHIFTS & WORK SCHEDULE
     // ==========================================
@@ -88,6 +100,31 @@ public interface IFacilityStaffService
     Task<StaffShiftScheduleDto> CheckOutShiftAsync(long employeeUserId, long shiftId, CancellationToken cancellationToken = default);
 
     // ==========================================
+    // 6. INSPECTION & DEPOSIT SETTLEMENT (MODULE 4)
+    // ==========================================
+    Task<StaffInspectionResultDto> SubmitInspectionReportAsync(
+        long employeeUserId,
+        long inspectionId,
+        StaffSubmitInspectionReportRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<StaffRefundQueueItemDto>> GetPendingRefundsQueueAsync(
+        long employeeUserId,
+        long? facilityId = null,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffRefundQueueItemDto> ConfirmRefundPaymentAsync(
+        long employeeUserId,
+        StaffConfirmRefundPaymentRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffCounterCashPayoutResultDto> ProcessCounterCashPayoutAsync(
+        long employeeUserId,
+        long refundId,
+        StaffCounterCashPayoutRequest request,
+        CancellationToken cancellationToken = default);
+
+    // ==========================================
     // LEGACY METHODS (Kept for compatibility)
     // ==========================================
     Task<IReadOnlyList<StaffTaskDto>> GetStaffTasksAsync(long employeeUserId, long? facilityId = null, CancellationToken cancellationToken = default);
@@ -100,6 +137,8 @@ public interface IFacilityStaffService
     Task<IReadOnlyList<StaffSupportTicketDto>> GetFacilityTicketsAsync(long? facilityId = null, string? status = null, CancellationToken cancellationToken = default);
     Task AssignTicketToMeAsync(long employeeUserId, long ticketId, CancellationToken cancellationToken = default);
     Task<StaffTicketMessageDto> AddStaffTicketMessageAsync(long employeeUserId, long ticketId, AddStaffTicketMessageRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<StaffTicketMessageDto>> GetTicketMessagesAsync(long employeeUserId, long ticketId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<StaffTicketMessageDto>> GetTicketMessagesAsync(long ticketId, CancellationToken cancellationToken = default);
     Task<TicketChargeProposalDto> ProposeTicketChargeAsync(long employeeUserId, long ticketId, ProposeTicketChargeRequest request, CancellationToken cancellationToken = default);
     Task ResolveTicketAsync(long employeeUserId, long ticketId, ResolveTicketRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<StaffFacilityUnitDto>> GetFacilityUnitsAsync(long facilityId, CancellationToken cancellationToken = default);

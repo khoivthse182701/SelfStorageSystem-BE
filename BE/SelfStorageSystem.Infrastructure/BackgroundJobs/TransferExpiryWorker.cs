@@ -28,20 +28,47 @@ public sealed class TransferExpiryWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var intervalMinutes = Math.Max(1, _rentalSettings.TransferExpiryCheckIntervalMinutes);
-        _logger.LogInformation("TransferExpiryWorker started (Interval: {Interval}m, Unpaid hold: {Hold}m)",
-            intervalMinutes, _rentalSettings.TransferUnpaidHoldMinutes);
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try { await SweepAsync(stoppingToken); }
-            catch (Exception ex) { _logger.LogError(ex, "Transfer expiry sweep failed."); }
+            var intervalMinutes = Math.Max(1, _rentalSettings.TransferExpiryCheckIntervalMinutes);
+            _logger.LogInformation("TransferExpiryWorker started (Interval: {Interval}m, Unpaid hold: {Hold}m)",
+                intervalMinutes, _rentalSettings.TransferUnpaidHoldMinutes);
 
-            try { await Task.Delay(TimeSpan.FromMinutes(intervalMinutes), stoppingToken); }
-            catch (OperationCanceledException) { break; }
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await SweepAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Transfer expiry sweep failed: {Message}", ex.Message);
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(intervalMinutes), stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+
+            _logger.LogInformation("TransferExpiryWorker stopped.");
         }
-
-        _logger.LogInformation("TransferExpiryWorker stopped.");
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("TransferExpiryWorker canceled.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "FATAL unhandled exception in TransferExpiryWorker: {Message}", ex.Message);
+        }
     }
 
     private async Task SweepAsync(CancellationToken cancellationToken)

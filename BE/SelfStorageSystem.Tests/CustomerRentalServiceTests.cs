@@ -940,4 +940,163 @@ public class CustomerRentalServiceTests
 
         Assert.Equal(RentalErrors.IncorrectPin.Code, ex.Error.Code);
     }
+
+    [Fact]
+    public async Task GetTransferPreviewAsync_CrossFacilityAndLargerUnit_CalculatesPriceDiffAndCleaningFee()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+        long agreementId = 501;
+
+        var facility1 = new Facility { Id = 1, Name = "Facility A", Status = "active", Code = "FA", AddressLine = "123 St", City = "HCM", Timezone = "Asia/Ho_Chi_Minh" };
+        var facility2 = new Facility { Id = 2, Name = "Facility B", Status = "active", Code = "FB", AddressLine = "456 St", City = "HN", Timezone = "Asia/Ho_Chi_Minh" };
+
+        var unitTypeSmall = new UnitType { Id = 10, Code = "SM", Name = "Small Locker 1m2" };
+        var unitTypeLarge = new UnitType { Id = 20, Code = "LG", Name = "Large Unit 10m2" };
+
+        var currentUnit = new StorageUnit { Id = 101, FacilityId = 1, UnitTypeId = 10, UnitCode = "A-101", PhysicalStatus = "occupied" };
+        var targetUnit = new StorageUnit { Id = 201, FacilityId = 2, UnitTypeId = 20, UnitCode = "B-201", PhysicalStatus = "available" };
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var agreement = new RentalAgreement
+        {
+            Id = agreementId,
+            AgreementNo = "AGR-TRF-01",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = today.AddDays(-10),
+            EndDate = today.AddDays(20),
+            MonthlyRateSnapshot = 1000m,
+            DepositBalance = 1000m,
+            Facility = facility1
+        };
+
+        var unitAllocation = new UnitAllocation
+        {
+            Id = 1,
+            AgreementId = agreementId,
+            StorageUnitId = 101,
+            AllocationKind = "rental",
+            Status = AllocationStatusConstants.Active,
+            StorageUnit = currentUnit
+        };
+
+        var targetRate = new FacilityRate
+        {
+            Id = 1,
+            FacilityId = 2,
+            UnitTypeId = 20,
+            MonthlyRate = 4000m,
+            DepositAmount = 4000m,
+            ValidFrom = today.AddDays(-30)
+        };
+
+        await dbContext.Facilities.AddRangeAsync(facility1, facility2);
+        await dbContext.UnitTypes.AddRangeAsync(unitTypeSmall, unitTypeLarge);
+        await dbContext.StorageUnits.AddRangeAsync(currentUnit, targetUnit);
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.UnitAllocations.AddAsync(unitAllocation);
+        await dbContext.FacilityRates.AddAsync(targetRate);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext, rentalSettings: new RentalSettings { CrossFacilityCleaningFee = 50000m, MaxTransfersPerAgreement = 2 });
+
+        var preview = await service.GetTransferPreviewAsync(
+            customerId, agreementId, requestedFacilityId: 2, requestedUnitTypeId: 20, moveOutDate: today, CancellationToken.None);
+
+        Assert.NotNull(preview);
+        Assert.True(preview.CanTransfer);
+        Assert.True(preview.IsCrossFacility);
+        Assert.Equal(50000m, preview.CleaningFee);
+        Assert.Equal(3000m, preview.DiffDepositAmount);
+        Assert.True(preview.DiffRentAmount > 0);
+        Assert.Equal(0, preview.TransferCount);
+        Assert.Equal(2, preview.MaxTransfers);
+    }
+
+    [Fact]
+    public async Task RequestUnitTransferAsync_ExceedsMaxTransferLimit_ThrowsConflictException()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+        long agreementId = 502;
+
+        var facility = new Facility { Id = 1, Name = "Facility A", Status = "active", Code = "FA", AddressLine = "123 St", City = "HCM", Timezone = "Asia/Ho_Chi_Minh" };
+        var unitType = new UnitType { Id = 10, Code = "SM", Name = "Small Locker" };
+        var unit = new StorageUnit { Id = 101, FacilityId = 1, UnitTypeId = 10, UnitCode = "A-101", PhysicalStatus = "occupied" };
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var agreement = new RentalAgreement
+        {
+            Id = agreementId,
+            AgreementNo = "AGR-TRF-02",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = today.AddDays(-10),
+            EndDate = today.AddDays(20),
+            MonthlyRateSnapshot = 1000m,
+            DepositBalance = 1000m,
+            Facility = facility
+        };
+
+        var unitAllocation = new UnitAllocation
+        {
+            Id = 1,
+            AgreementId = agreementId,
+            StorageUnitId = 101,
+            AllocationKind = "rental",
+            Status = AllocationStatusConstants.Active,
+            StorageUnit = unit
+        };
+
+        var tr1 = new UnitTransferRequest
+        {
+            Id = 1,
+            AgreementId = agreementId,
+            FromUnitId = 101,
+            RequestedUnitTypeId = 10,
+            RequestedFacilityId = 1,
+            Status = TransferRequestStatusConstants.Completed,
+            CompletedAt = DateTimeOffset.UtcNow.AddDays(-5),
+            RequestedBy = customerId,
+            Reason = "First move"
+        };
+        var tr2 = new UnitTransferRequest
+        {
+            Id = 2,
+            AgreementId = agreementId,
+            FromUnitId = 101,
+            RequestedUnitTypeId = 10,
+            RequestedFacilityId = 1,
+            Status = TransferRequestStatusConstants.Completed,
+            CompletedAt = DateTimeOffset.UtcNow.AddDays(-2),
+            RequestedBy = customerId,
+            Reason = "Second move"
+        };
+
+        await dbContext.Facilities.AddAsync(facility);
+        await dbContext.UnitTypes.AddAsync(unitType);
+        await dbContext.StorageUnits.AddAsync(unit);
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.UnitAllocations.AddAsync(unitAllocation);
+        await dbContext.UnitTransferRequests.AddRangeAsync(tr1, tr2);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext, rentalSettings: new RentalSettings { MaxTransfersPerAgreement = 2 });
+
+        var request = new CreateTransferRequest(
+            RequestedUnitTypeId: 10,
+            RequestedFacilityId: 1,
+            MoveOutDate: today,
+            MoveInDate: today,
+            Reason: "Third attempt"
+        );
+
+        var ex = await Assert.ThrowsAsync<AppConflictException>(
+            () => service.RequestUnitTransferAsync(customerId, agreementId, request, CancellationToken.None));
+
+        Assert.Equal(RentalErrors.TransferLimitReached.Code, ex.Error.Code);
+    }
 }

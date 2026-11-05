@@ -24,26 +24,35 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
         if (!facilityExists)
             throw AppException.FromError(TicketErrors.FacilityNotFound);
 
+        var effectiveStorageUnitId = request.StorageUnitId;
         if (request.AgreementId.HasValue)
         {
             var agreementValid = await _dbContext.RentalAgreements
                 .AnyAsync(a => a.Id == request.AgreementId && a.CustomerId == customerId && a.FacilityId == request.FacilityId, cancellationToken);
             if (!agreementValid)
                 throw AppException.FromError(TicketErrors.AgreementNotFound);
+
+            if (!effectiveStorageUnitId.HasValue)
+            {
+                effectiveStorageUnitId = await _dbContext.UnitAllocations
+                    .Where(ua => ua.AgreementId == request.AgreementId.Value && ua.Status == AllocationStatusConstants.Active)
+                    .Select(ua => (long?)ua.StorageUnitId)
+                    .FirstOrDefaultAsync(cancellationToken);
+            }
         }
 
-        if (request.StorageUnitId.HasValue)
+        if (effectiveStorageUnitId.HasValue)
         {
             var unitValid = await _dbContext.StorageUnits
-                .AnyAsync(u => u.Id == request.StorageUnitId && u.FacilityId == request.FacilityId, cancellationToken);
+                .AnyAsync(u => u.Id == effectiveStorageUnitId && u.FacilityId == request.FacilityId, cancellationToken);
             if (!unitValid)
                 throw AppException.FromError(TicketErrors.StorageUnitNotFound);
         }
 
-        if (request.AgreementId.HasValue && request.StorageUnitId.HasValue)
+        if (request.AgreementId.HasValue && effectiveStorageUnitId.HasValue)
         {
             var unitBelongsToAgreement = await _dbContext.UnitAllocations
-                .AnyAsync(ua => ua.AgreementId == request.AgreementId.Value && ua.StorageUnitId == request.StorageUnitId.Value, cancellationToken);
+                .AnyAsync(ua => ua.AgreementId == request.AgreementId.Value && ua.StorageUnitId == effectiveStorageUnitId.Value, cancellationToken);
             if (!unitBelongsToAgreement)
                 throw AppException.FromError(TicketErrors.StorageUnitNotBelongToAgreement);
         }
@@ -67,12 +76,14 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             CustomerId = customerId,
             FacilityId = request.FacilityId,
             AgreementId = request.AgreementId,
-            StorageUnitId = request.StorageUnitId,
+            StorageUnitId = effectiveStorageUnitId,
             Category = category,
             Priority = priority,
             Subject = request.Subject,
             Description = request.Description,
-            Status = TicketStatusConstants.Open,
+            Status = (category == TicketCategoryConstants.Maintenance || category == TicketCategoryConstants.Unit) 
+                ? TicketStatusConstants.PendingManagerReview 
+                : TicketStatusConstants.Open,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
@@ -324,7 +335,10 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
         if (ticket == null)
             throw AppException.FromError(TicketErrors.TicketNotFound);
 
-        if (ticket.Status != TicketStatusConstants.Resolved)
+        if (ticket.Status != TicketStatusConstants.Resolved &&
+            ticket.Status != TicketStatusConstants.Closed &&
+            string.IsNullOrWhiteSpace(ticket.Resolution) &&
+            !ticket.ResolvedAt.HasValue)
             throw AppException.FromError(TicketErrors.TicketNotResolved);
 
         if (ticket.ServiceRating != null)

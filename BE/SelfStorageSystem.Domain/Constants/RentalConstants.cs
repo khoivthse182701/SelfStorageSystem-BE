@@ -5,6 +5,9 @@ public static class RentalAgreementStatusConstants
     public const string Draft = "draft";
     public const string Active = "active";
     public const string ExpiringSoon = "expiring_soon";
+    public const string Overdue = "overdue";
+    public const string MoveOutScheduled = "move_out_scheduled";
+    public const string CheckoutPending = "checkout_pending";
     public const string Terminated = "terminated";
     public const string Completed = "completed";
     public const string Cancelled = "cancelled";
@@ -220,6 +223,8 @@ public static class RentalPolicyConstants
 {
     public const int MaxTransferTransitDays = 7;
     public const int MaxTransferReschedules = 2;
+    public const int MaxTransfersPerAgreement = 2;
+    public const decimal DefaultCrossFacilityCleaningFee = 50000m;
     public const int DefaultMaxFailedPinAttempts = 5;
     public const int DefaultPinLockoutDurationMinutes = 15;
     public const int DefaultQrTtlSeconds = 120;

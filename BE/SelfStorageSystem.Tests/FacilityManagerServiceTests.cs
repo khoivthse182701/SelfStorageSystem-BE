@@ -1266,5 +1266,120 @@ public class FacilityManagerServiceTests
         Assert.Equal(1, facilities[0].Id);
         Assert.Equal(StaffAssignmentRoles.FacilityManager, facilities[0].AssignmentRole);
     }
+
+    [Fact]
+    public async Task EmergencyCancelAndRefundAgreement_CancelsAgreement_SetsUnitMaintenance_AndApprovesFullRefund()
+    {
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var unit = new StorageUnit
+        {
+            Id = 55,
+            FacilityId = 1,
+            UnitTypeId = 1,
+            UnitCode = "U-55",
+            FloorLabel = "1",
+            ZoneLabel = "A",
+            PhysicalStatus = StorageUnitStatusConstants.Occupied,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.StorageUnits.Add(unit);
+
+        var customer = new User
+        {
+            Id = 100,
+            Email = "customer100@storage.local",
+            Status = UserStatusConstants.Active,
+            PasswordHash = "hash",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CustomerProfile = new CustomerProfile { UserId = 100, FullName = "Customer 100" }
+        };
+        db.Users.Add(customer);
+
+        var agreement = new RentalAgreement
+        {
+            Id = 999,
+            AgreementNo = "AGR-999",
+            FacilityId = 1,
+            CustomerId = 100,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-10)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(20)),
+            MonthlyRateSnapshot = 1500000m,
+            DepositSnapshot = 1500000m,
+            DepositBalance = 1500000m,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.RentalAgreements.Add(agreement);
+
+        var alloc = new UnitAllocation
+        {
+            Id = 888,
+            AgreementId = 999,
+            StorageUnitId = 55,
+            AllocationKind = AllocationKindConstants.Rental,
+            AllocationStartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-10)),
+            AllocationEndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(20)),
+            Status = AllocationStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        db.UnitAllocations.Add(alloc);
+
+        var cred = new AccessCredential
+        {
+            Id = 777,
+            AgreementId = 999,
+            CredentialType = CredentialTypeConstants.Pin,
+            Status = CredentialStatusConstants.Active,
+            IssuedAt = DateTimeOffset.UtcNow,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        db.AccessCredentials.Add(cred);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        var req = new ManagerEmergencyCancelRefundRequest
+        {
+            Reason = "No replacement unit available",
+            Notes = "Full refund approved"
+        };
+
+        // Act
+        var result = await service.EmergencyCancelAndRefundAgreementAsync(999, req, currentUserId: 10, isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(RentalAgreementStatusConstants.Cancelled, result.AgreementStatus);
+        Assert.Equal(StorageUnitStatusConstants.Maintenance, result.UnitStatus);
+        Assert.Equal(3000000m, result.TotalRefundAmount);
+
+        var updatedAgreement = await db.RentalAgreements.FindAsync(999L);
+        Assert.NotNull(updatedAgreement);
+        Assert.Equal(RentalAgreementStatusConstants.Cancelled, updatedAgreement.Status);
+
+        var updatedUnit = await db.StorageUnits.FindAsync(55L);
+        Assert.NotNull(updatedUnit);
+        Assert.Equal(StorageUnitStatusConstants.Maintenance, updatedUnit.PhysicalStatus);
+        Assert.Contains("Sự cố Check-in - Hết kho thay thế", updatedUnit.Notes);
+
+        var updatedAlloc = await db.UnitAllocations.FindAsync(888L);
+        Assert.NotNull(updatedAlloc);
+        Assert.Equal(AllocationStatusConstants.Released, updatedAlloc.Status);
+        Assert.NotNull(updatedAlloc.EndedAt);
+
+        var updatedCred = await db.AccessCredentials.FindAsync(777L);
+        Assert.NotNull(updatedCred);
+        Assert.Equal(CredentialStatusConstants.Revoked, updatedCred.Status);
+        Assert.NotNull(updatedCred.RevokedAt);
+
+        var refund = await db.Refunds.FindAsync(result.RefundId);
+        Assert.NotNull(refund);
+        Assert.Equal(RefundStatusConstants.Approved, refund.Status);
+        Assert.Equal(3000000m, refund.Amount);
+    }
 }
 
