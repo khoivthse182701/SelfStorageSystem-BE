@@ -546,7 +546,23 @@ public class AdminManagementService : IAdminManagementService
         long adminUserId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedAssignmentRole = request.AssignmentRole.Trim().ToLowerInvariant();
+        string normalizedAssignmentRole;
+        if (!string.IsNullOrWhiteSpace(request.AssignmentRole))
+        {
+            normalizedAssignmentRole = request.AssignmentRole.Trim().ToLowerInvariant();
+        }
+        else
+        {
+            var userRoleCodes = await _dbContext.UserRoles
+                .Where(ur => ur.UserId == request.EmployeeId)
+                .Select(ur => ur.Role.Code)
+                .ToListAsync(cancellationToken);
+
+            normalizedAssignmentRole = userRoleCodes.Contains(RoleConstants.FacilityManager)
+                ? StaffAssignmentRoles.FacilityManager
+                : StaffAssignmentRoles.FacilityStaff;
+        }
+
         if (!AdminConstants.ValidStaffAssignmentRoles.Contains(normalizedAssignmentRole))
         {
             throw AppException.FromError(AdminErrors.InvalidAssignmentRole);
