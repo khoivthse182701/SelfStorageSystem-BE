@@ -60,6 +60,7 @@ builder.Environment.WebRootPath = wwwRootPath;
 
 // Add services to the container.
 builder.Services.AddControllers();
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddSignalR();
 builder.Services.AddScoped<SelfStorageSystem.Application.Interfaces.IRealtimeNotifier, SelfStorageSystem.Services.RealtimeNotifier>();
 builder.Services.AddEndpointsApiExplorer();

@@ -21,6 +21,7 @@ public class AdminAuditLogDto
 
 public class AdminAuditLogQueryParameters
 {
+    public string? SearchKeyword { get; set; }
     public string? EntityType { get; set; }
     public string? EntityId { get; set; }
     public string? Action { get; set; }

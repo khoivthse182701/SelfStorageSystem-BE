@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using SelfStorageSystem.Application.Interfaces;
@@ -15,13 +16,16 @@ public class AdminManagementService : IAdminManagementService
 {
     private readonly SelfStorageDbContext _dbContext;
     private readonly ILogger<AdminManagementService> _logger;
+    private readonly IHttpContextAccessor? _httpContextAccessor;
 
     public AdminManagementService(
         SelfStorageDbContext dbContext,
-        ILogger<AdminManagementService> logger)
+        ILogger<AdminManagementService> logger,
+        IHttpContextAccessor? httpContextAccessor = null)
     {
         _dbContext = dbContext;
         _logger = logger;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     // ==========================================
@@ -263,7 +267,10 @@ public class AdminManagementService : IAdminManagementService
         // 3. Validate role
         var normalizedRoleCode = request.Role.Trim().ToLowerInvariant();
         var role = await _dbContext.Roles.FirstOrDefaultAsync(r => r.Code == normalizedRoleCode, cancellationToken);
-        if (role == null || !AdminConstants.ValidInternalRoles.Contains(role.Code))
+        var isCustomer = role != null && (role.Code == RoleConstants.Customer || role.Code == "customer");
+        var isInternal = role != null && AdminConstants.ValidInternalRoles.Contains(role.Code);
+
+        if (role == null || (!isInternal && !isCustomer))
         {
             throw AppException.FromError(AdminErrors.InvalidRole);
         }
@@ -287,17 +294,6 @@ public class AdminManagementService : IAdminManagementService
         var now = DateTimeOffset.UtcNow;
         var hashedPassword = BCrypt.Net.BCrypt.HashPassword(request.Password);
 
-        // Generate unique employee code if not supplied
-        var employeeCode = !string.IsNullOrWhiteSpace(request.EmployeeCode) 
-            ? request.EmployeeCode.Trim().ToUpperInvariant() 
-            : $"{AdminConstants.DefaultEmployeeCodePrefix}{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % AdminConstants.AutoEmployeeCodeModulo:D6}";
-
-        var codeExists = await _dbContext.EmployeeProfiles.AnyAsync(ep => ep.EmployeeCode == employeeCode, cancellationToken);
-        if (codeExists)
-        {
-            throw AppException.FromError(AdminErrors.EmployeeCodeAlreadyExists);
-        }
-
         var newUser = new User
         {
             Email = normalizedEmail,
@@ -308,17 +304,44 @@ public class AdminManagementService : IAdminManagementService
             UpdatedAt = now
         };
 
-        var employeeProfile = new EmployeeProfile
-        {
-            EmployeeCode = employeeCode,
-            FullName = request.FullName.Trim(),
-            HireDate = request.HireDate ?? DateOnly.FromDateTime(DateTime.UtcNow),
-            EmploymentStatus = EmploymentStatusConstants.Active,
-            CreatedAt = now,
-            UpdatedAt = now
-        };
+        string logSummary;
+        EmployeeProfile? employeeProfile = null;
 
-        newUser.EmployeeProfile = employeeProfile;
+        if (isCustomer)
+        {
+            newUser.CustomerProfile = new CustomerProfile
+            {
+                FullName = request.FullName.Trim(),
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            logSummary = $"{newUser.Email} ({role.Code}) - Customer: {request.FullName.Trim()}";
+        }
+        else
+        {
+            // Generate unique employee code if not supplied
+            var employeeCode = !string.IsNullOrWhiteSpace(request.EmployeeCode) 
+                ? request.EmployeeCode.Trim().ToUpperInvariant() 
+                : $"{AdminConstants.DefaultEmployeeCodePrefix}{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % AdminConstants.AutoEmployeeCodeModulo:D6}";
+
+            var codeExists = await _dbContext.EmployeeProfiles.AnyAsync(ep => ep.EmployeeCode == employeeCode, cancellationToken);
+            if (codeExists)
+            {
+                throw AppException.FromError(AdminErrors.EmployeeCodeAlreadyExists);
+            }
+
+            employeeProfile = new EmployeeProfile
+            {
+                EmployeeCode = employeeCode,
+                FullName = request.FullName.Trim(),
+                HireDate = request.HireDate ?? DateOnly.FromDateTime(DateTime.UtcNow),
+                EmploymentStatus = EmploymentStatusConstants.Active,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            newUser.EmployeeProfile = employeeProfile;
+            logSummary = $"{newUser.Email} ({role.Code}) - Code: {employeeCode}";
+        }
 
         newUser.UserRoleUsers.Add(new UserRole
         {
@@ -328,7 +351,7 @@ public class AdminManagementService : IAdminManagementService
             GrantedAt = now
         });
 
-        if (initialFacility != null && AdminConstants.ValidStaffAssignmentRoles.Contains(role.Code))
+        if (initialFacility != null && employeeProfile != null && AdminConstants.ValidStaffAssignmentRoles.Contains(role.Code))
         {
             employeeProfile.StaffFacilityAssignments.Add(new StaffFacilityAssignment
             {
@@ -351,7 +374,7 @@ public class AdminManagementService : IAdminManagementService
             entityId: newUser.Id.ToString(),
             action: AuditActionConstants.Create,
             oldValues: null,
-            newValues: $"{newUser.Email} ({role.Code}) - Code: {employeeCode}",
+            newValues: logSummary,
             cancellationToken: cancellationToken);
 
         _logger.LogInformation("Admin {AdminId} successfully created internal user {Email} with role {Role}.",
@@ -518,6 +541,31 @@ public class AdminManagementService : IAdminManagementService
             };
         }
 
+        var hasCustomerRole = requestedRoleCodes.Any(r => r == RoleConstants.Customer || r == "customer");
+        if (hasCustomerRole && user.CustomerProfile == null)
+        {
+            user.CustomerProfile = new CustomerProfile
+            {
+                UserId = user.Id,
+                FullName = user.EmployeeProfile?.FullName ?? user.Email,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+        }
+
+        if (!hasEmployeeRole && user.EmployeeProfile != null)
+        {
+            // Close active staff assignments if demoted
+            var activeAssignments = await _dbContext.StaffFacilityAssignments
+                .Where(sfa => sfa.EmployeeId == user.EmployeeProfile.UserId && (sfa.EndsAt == null || sfa.EndsAt > now))
+                .ToListAsync(cancellationToken);
+
+            foreach (var a in activeAssignments)
+            {
+                a.EndsAt = now;
+            }
+        }
+
         user.UpdatedAt = now;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
@@ -676,7 +724,7 @@ public class AdminManagementService : IAdminManagementService
 
         var summary = $"EmployeeId: {assignment.EmployeeId}, FacilityId: {assignment.FacilityId}, Role: {assignment.AssignmentRole}";
 
-        _dbContext.StaffFacilityAssignments.Remove(assignment);
+        assignment.EndsAt = DateTimeOffset.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         await RecordAuditLogAsync(
@@ -716,21 +764,42 @@ public class AdminManagementService : IAdminManagementService
             auditQuery = auditQuery.Where(a => a.EntityType.ToLower() == entityType);
         }
 
-        if (!string.IsNullOrWhiteSpace(query.EntityId))
+        if (!string.IsNullOrWhiteSpace(query.SearchKeyword))
         {
-            var entityId = query.EntityId.Trim();
-            auditQuery = auditQuery.Where(a => a.EntityId == entityId);
+            var kw = query.SearchKeyword.Trim();
+            if (long.TryParse(kw, out var numId))
+            {
+                auditQuery = auditQuery.Where(a => a.EntityId == kw || a.ActorUserId == numId);
+            }
+            else
+            {
+                auditQuery = auditQuery.Where(a => a.EntityId == kw || a.Action.Contains(kw) || a.EntityType.Contains(kw));
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(query.EntityId) && query.ActorUserId.HasValue && query.EntityId == query.ActorUserId.Value.ToString())
+        {
+            var numId = query.ActorUserId.Value;
+            var strId = query.EntityId.Trim();
+            auditQuery = auditQuery.Where(a => a.EntityId == strId || a.ActorUserId == numId);
+        }
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(query.EntityId))
+            {
+                var entityId = query.EntityId.Trim();
+                auditQuery = auditQuery.Where(a => a.EntityId == entityId);
+            }
+
+            if (query.ActorUserId.HasValue)
+            {
+                auditQuery = auditQuery.Where(a => a.ActorUserId == query.ActorUserId.Value);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(query.Action))
         {
             var action = query.Action.Trim().ToLower();
             auditQuery = auditQuery.Where(a => a.Action.ToLower() == action);
-        }
-
-        if (query.ActorUserId.HasValue)
-        {
-            auditQuery = auditQuery.Where(a => a.ActorUserId == query.ActorUserId.Value);
         }
 
         if (query.FromDate.HasValue)
@@ -956,36 +1025,25 @@ public class AdminManagementService : IAdminManagementService
         var activeRentals = await _dbContext.RentalAgreements.CountAsync(r => r.Status == RentalAgreementStatusConstants.Active, cancellationToken);
 
         // 4. Facility Breakdown
-        var facilities = await _dbContext.Facilities
+        var facilityBreakdown = await _dbContext.Facilities
             .AsNoTracking()
-            .Include(f => f.StorageUnits)
             .OrderBy(f => f.Name)
-            .ToListAsync(cancellationToken);
-
-        var facilityBreakdown = facilities.Select(f =>
-        {
-            var fTotalUnits = f.StorageUnits.Count;
-            var fOccupied = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Occupied);
-            var fReserved = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Reserved);
-            var fAvailable = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Available);
-            var fRate = fTotalUnits > 0
-                ? Math.Round((double)fOccupied / fTotalUnits * 100.0, 2)
-                : 0.0;
-
-            return new AdminFacilityOccupancyBreakdownDto
+            .Select(f => new AdminFacilityOccupancyBreakdownDto
             {
                 FacilityId = f.Id,
                 FacilityCode = f.Code,
                 FacilityName = f.Name,
                 City = f.City,
                 Status = f.Status,
-                TotalUnits = fTotalUnits,
-                OccupiedUnits = fOccupied,
-                ReservedUnits = fReserved,
-                AvailableUnits = fAvailable,
-                OccupancyRate = fRate
-            };
-        }).ToList();
+                TotalUnits = f.StorageUnits.Count(),
+                OccupiedUnits = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Occupied),
+                ReservedUnits = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Reserved),
+                AvailableUnits = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Available),
+                OccupancyRate = f.StorageUnits.Any()
+                    ? Math.Round((double)f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Occupied) / f.StorageUnits.Count() * 100.0, 2)
+                    : 0.0
+            })
+            .ToListAsync(cancellationToken);
 
         return new AdminDashboardOverviewDto
         {
@@ -1365,6 +1423,12 @@ public class AdminManagementService : IAdminManagementService
     {
         try
         {
+            var httpContext = _httpContextAccessor?.HttpContext;
+            var resolvedIp = ipAddress 
+                ?? httpContext?.Request.Headers["X-Forwarded-For"].FirstOrDefault() 
+                ?? httpContext?.Connection.RemoteIpAddress?.ToString();
+            var requestId = httpContext?.TraceIdentifier;
+
             var auditLog = new AuditLog
             {
                 ActorUserId = actorUserId,
@@ -1375,7 +1439,8 @@ public class AdminManagementService : IAdminManagementService
                 Action = action,
                 OldValues = oldValues,
                 NewValues = newValues,
-                IpAddress = ipAddress,
+                IpAddress = resolvedIp,
+                RequestId = requestId,
                 OccurredAt = DateTimeOffset.UtcNow
             };
 

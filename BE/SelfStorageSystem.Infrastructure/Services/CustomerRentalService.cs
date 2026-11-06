@@ -2573,7 +2573,20 @@ public class CustomerRentalService : ICustomerRentalService
         if (renewal.Status != RenewalStatusConstants.PendingPayment)
             throw AppException.FromError(RentalErrors.CannotCancelActiveRenewal);
 
+        var now = DateTimeOffset.UtcNow;
         renewal.Status = RenewalStatusConstants.Cancelled;
+
+        var renewalBillingPeriod = $"{PaymentConstants.RenewalInvoicePrefix}{renewal.Id}";
+        var invoices = await _dbContext.Invoices
+            .Where(i => (i.BillingPeriod == renewalBillingPeriod || i.BillingPeriod == $"renewal-{renewal.Id}") && i.Status != InvoiceStatusConstants.Paid)
+            .ToListAsync(cancellationToken);
+
+        foreach (var inv in invoices)
+        {
+            inv.Status = InvoiceStatusConstants.Voided;
+            inv.VoidedAt = now;
+            inv.UpdatedAt = now;
+        }
         await _dbContext.SaveChangesAsync(cancellationToken);
         return true;
     }

@@ -273,9 +273,11 @@ public class AdminManagementServiceTests
         // Act - Revoke
         await adminService.RevokeStaffAssignmentAsync(assignmentDto.Id, adminUserId: 1);
 
-        // Assert - Assignment removed
+        // Assert - Assignment revoked (soft delete with EndsAt set)
         var dbAssignment = await db.StaffFacilityAssignments.FindAsync(assignmentDto.Id);
-        Assert.Null(dbAssignment);
+        Assert.NotNull(dbAssignment);
+        Assert.NotNull(dbAssignment.EndsAt);
+        Assert.True(dbAssignment.EndsAt <= DateTimeOffset.UtcNow);
     }
 
     [Fact]
