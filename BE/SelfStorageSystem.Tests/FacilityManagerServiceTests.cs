@@ -1381,5 +1381,137 @@ public class FacilityManagerServiceTests
         Assert.Equal(RefundStatusConstants.Approved, refund.Status);
         Assert.Equal(3000000m, refund.Amount);
     }
-}
 
+[Fact]
+    public async Task CreateFacilityStaffAsync_AssignsFacilityStaffUserRole_AndSucceeds()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var staffRole = new Role
+        {
+            Id = 2,
+            Code = RoleConstants.FacilityStaff,
+            DisplayName = "Facility Staff",
+            Description = "Staff"
+        };
+        db.Roles.Add(staffRole);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        var req = new ManagerCreateStaffRequest
+        {
+            FacilityId = 1,
+            Email = "newstaff@test.com",
+            Password = "Password123!",
+            FullName = "New Staff Member",
+            PhoneNumber = "0987654321"
+        };
+
+        // Act
+        var result = await service.CreateFacilityStaffAsync(req, currentUserId: 10, isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("newstaff@test.com", result.Email);
+
+        var userRole = await db.UserRoles.FirstOrDefaultAsync(ur => ur.UserId == result.UserId);
+        Assert.NotNull(userRole);
+        Assert.Equal(staffRole.Id, userRole.RoleId);
+        Assert.Equal(10, userRole.GrantedBy);
+    }
+
+    [Fact]
+    public async Task DeleteUnitAsync_WithHistoricalSupportTickets_ThrowsUnitCannotDeleteHasHistory()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var unit = new StorageUnit
+        {
+            Id = 201,
+            FacilityId = 1,
+            UnitTypeId = 1,
+            UnitCode = "TEST-DEL-01",
+            PhysicalStatus = StorageUnitStatusConstants.Available,
+            IsListed = true,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.StorageUnits.Add(unit);
+
+        var ticket = new SupportTicket
+        {
+            Id = 501,
+            TicketNo = "TCK-DEL-01",
+            FacilityId = 1,
+            CustomerId = 1,
+            StorageUnitId = 201,
+            Category = "unit",
+            Priority = "normal",
+            Subject = "Test Subject",
+            Description = "Test Desc",
+            Status = "closed",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.SupportTickets.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
+            service.DeleteUnitAsync(201, currentUserId: 10, isSystemAdmin: false));
+        var hasError = Assert.IsAssignableFrom<IHasAppError>(ex);
+        Assert.Equal(ManagerErrors.UnitCannotDeleteHasHistory.Code, hasError.Error.Code);
+    }
+
+    [Fact]
+    public async Task DeleteUnitAsync_CleanUnit_DeletesSuccessfully()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var unit = new StorageUnit
+        {
+            Id = 202,
+            FacilityId = 1,
+            UnitTypeId = 1,
+            UnitCode = "TEST-DEL-CLEAN",
+            PhysicalStatus = StorageUnitStatusConstants.Available,
+            IsListed = true,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.StorageUnits.Add(unit);
+
+        var mapPos = new UnitMapPosition
+        {
+            UnitId = 202,
+            AreaId = 1,
+            X = 10,
+            Y = 20,
+            Width = 2,
+            Height = 2.5m,
+            RotationDegrees = 0,
+            Metadata = "{}"
+        };
+        db.UnitMapPositions.Add(mapPos);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act
+        await service.DeleteUnitAsync(202, currentUserId: 10, isSystemAdmin: false);
+
+        // Assert
+        var deletedUnit = await db.StorageUnits.FindAsync(202L);
+        Assert.Null(deletedUnit);
+        var deletedMap = await db.UnitMapPositions.FindAsync(202L);
+        Assert.Null(deletedMap);
+    }
+}

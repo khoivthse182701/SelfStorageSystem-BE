@@ -573,6 +573,16 @@ public partial class FacilityManagerService : IFacilityManagerService
             throw AppException.FromError(ManagerErrors.UnitCannotDeleteHasRentals);
         }
 
+        var hasLinkedData = await _dbContext.SupportTickets.AnyAsync(t => t.StorageUnitId == unitId, cancellationToken)
+            || await _dbContext.Inspections.AnyAsync(i => i.StorageUnitId == unitId, cancellationToken)
+            || await _dbContext.MaintenanceWorkOrders.AnyAsync(m => m.StorageUnitId == unitId, cancellationToken)
+            || await _dbContext.UnitTransferRequests.AnyAsync(ut => ut.FromUnitId == unitId || ut.ToUnitId == unitId, cancellationToken);
+
+        if (hasLinkedData)
+        {
+            throw AppException.FromError(ManagerErrors.UnitCannotDeleteHasHistory);
+        }
+
         if (unit.UnitStatusHistories.Any())
         {
             _dbContext.UnitStatusHistories.RemoveRange(unit.UnitStatusHistories);

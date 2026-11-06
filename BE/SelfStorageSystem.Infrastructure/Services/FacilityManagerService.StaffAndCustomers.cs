@@ -182,11 +182,31 @@ public partial class FacilityManagerService : IFacilityManagerService
 
         };
 
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
         _dbContext.Users.Add(user);
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
 
+
+        var targetRoleCode = string.IsNullOrWhiteSpace(request.AssignmentRole)
+            ? RoleConstants.FacilityStaff
+            : request.AssignmentRole.Trim();
+
+        var staffRole = await _dbContext.Roles.FirstOrDefaultAsync(r => r.Code == targetRoleCode, cancellationToken)
+            ?? await _dbContext.Roles.FirstOrDefaultAsync(r => r.Code == RoleConstants.FacilityStaff, cancellationToken);
+
+        if (staffRole != null)
+        {
+            _dbContext.UserRoles.Add(new UserRole
+            {
+                UserId = user.Id,
+                RoleId = staffRole.Id,
+                GrantedBy = currentUserId,
+                GrantedAt = now
+            });
+        }
 
         var employeeCode = $"EMP-{now:yyMM}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}";
 
@@ -243,6 +263,8 @@ public partial class FacilityManagerService : IFacilityManagerService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
 
+
+        await transaction.CommitAsync(cancellationToken);
 
         var facility = await _dbContext.Facilities.FindAsync(new object[] { request.FacilityId }, cancellationToken);
 

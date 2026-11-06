@@ -93,9 +93,6 @@ public class ManagerController : ControllerBase
     }
 
     /// <summary>
-    /// Lấy dữ liệu tọa độ sơ đồ bản đồ kho (unit_map_positions).
-    /// </summary>
-    /// <summary>
     /// Xóa ô kho khỏi hệ thống.
     /// </summary>
     [HttpDelete("units/{unitId:long}")]
