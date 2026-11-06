@@ -1119,7 +1119,7 @@ public partial class FacilityStaffService : IFacilityStaffService
 
 
 
-                .ThenInclude(u => u.EmployeeProfile)
+                .ThenInclude(u => u!.EmployeeProfile)
 
 
 
@@ -1127,7 +1127,7 @@ public partial class FacilityStaffService : IFacilityStaffService
 
 
 
-                .ThenInclude(u => u.CustomerProfile)
+                .ThenInclude(u => u!.CustomerProfile)
 
 
 
@@ -1135,7 +1135,7 @@ public partial class FacilityStaffService : IFacilityStaffService
 
 
 
-                .ThenInclude(u => u.UserRoleUsers)
+                .ThenInclude(u => u!.UserRoleUsers)
 
 
 

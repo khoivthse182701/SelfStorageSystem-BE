@@ -708,15 +708,15 @@ public partial class FacilityManagerService : IFacilityManagerService
 
             .Include(m => m.AuthorUser)
 
-                .ThenInclude(u => u.EmployeeProfile)
+                .ThenInclude(u => u!.EmployeeProfile)
 
             .Include(m => m.AuthorUser)
 
-                .ThenInclude(u => u.CustomerProfile)
+                .ThenInclude(u => u!.CustomerProfile)
 
             .Include(m => m.AuthorUser)
 
-                .ThenInclude(u => u.UserRoleUsers)
+                .ThenInclude(u => u!.UserRoleUsers)
 
                     .ThenInclude(ur => ur.Role)
 

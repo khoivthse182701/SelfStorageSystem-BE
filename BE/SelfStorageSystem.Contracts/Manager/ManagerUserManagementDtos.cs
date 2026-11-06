@@ -56,12 +56,19 @@ public class ManagerUpdateStaffRequest
     public DateOnly? HireDate { get; set; }
 
     public string? EmploymentStatus { get; set; }
+
+    public string? Position { get; set; }
+
+    public string? AssignmentRole { get; set; }
+
+    public bool? IsActive { get; set; }
 }
 
 public class ManagerUpdateStaffStatusRequest
 {
-    [Required]
-    public string Status { get; set; } = "active"; // "active" | "inactive"
+    public string? Status { get; set; } = "active"; // "active" | "inactive"
+
+    public bool? IsActive { get; set; }
 }
 
 public class ManagerCustomerItemDto

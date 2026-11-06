@@ -1514,4 +1514,126 @@ public class FacilityManagerServiceTests
         var deletedMap = await db.UnitMapPositions.FindAsync(202L);
         Assert.Null(deletedMap);
     }
+
+    [Fact]
+    public async Task CreateFacilityStaffAsync_NonAdminAttemptsAdminRole_PreventsRoleEscalation_AssignsFacilityStaff()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var adminRole = new Role
+        {
+            Id = 1,
+            Code = RoleConstants.SystemAdministrator,
+            DisplayName = "Admin",
+            Description = "Admin"
+        };
+        var staffRole = new Role
+        {
+            Id = 2,
+            Code = RoleConstants.FacilityStaff,
+            DisplayName = "Facility Staff",
+            Description = "Staff"
+        };
+        db.Roles.AddRange(adminRole, staffRole);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        var req = new ManagerCreateStaffRequest
+        {
+            FacilityId = 1,
+            Email = "escalation_attempt@test.com",
+            Password = "Password123!",
+            FullName = "Hacker Staff",
+            PhoneNumber = "0987654321",
+            AssignmentRole = RoleConstants.SystemAdministrator
+        };
+
+        // Act
+        var result = await service.CreateFacilityStaffAsync(req, currentUserId: 10, isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(RoleConstants.FacilityStaff, result.AssignmentRole);
+
+        var userRole = await db.UserRoles.FirstOrDefaultAsync(ur => ur.UserId == result.UserId);
+        Assert.NotNull(userRole);
+        Assert.Equal(staffRole.Id, userRole.RoleId);
+        Assert.NotEqual(adminRole.Id, userRole.RoleId);
+    }
+
+    [Fact]
+    public async Task UpdateFacilityStaffStatusAsync_WithIsActiveFalse_DeactivatesUserAndEndsAssignment()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var staffRole = new Role { Id = 2, Code = RoleConstants.FacilityStaff, DisplayName = "Staff", Description = "Staff" };
+        db.Roles.Add(staffRole);
+
+        var staffUser = new User
+        {
+            Id = 20,
+            Email = "staff20@test.com",
+            PasswordHash = "hash",
+            Status = "active",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.Users.Add(staffUser);
+
+        var emp = new EmployeeProfile
+        {
+            UserId = 20,
+            EmployeeCode = "EMP-001",
+            FullName = "Staff Member 20",
+            HireDate = new DateOnly(2025, 1, 1),
+            EmploymentStatus = "active",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.EmployeeProfiles.Add(emp);
+
+        var assignment = new StaffFacilityAssignment
+        {
+            Id = 100,
+            EmployeeId = 20,
+            FacilityId = 1,
+            AssignmentRole = RoleConstants.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow,
+            AssignedBy = 10,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        db.StaffFacilityAssignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act - send IsActive = false (the DTO format sent by FE)
+        var result = await service.UpdateFacilityStaffStatusAsync(
+            20,
+            new ManagerUpdateStaffStatusRequest { IsActive = false, Status = null },
+            currentUserId: 10,
+            isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("inactive", result.UserStatus);
+        Assert.False(result.IsActive);
+
+        var updatedUser = await db.Users.FindAsync(20L);
+        Assert.NotNull(updatedUser);
+        Assert.Equal("inactive", updatedUser.Status);
+
+        var updatedEmp = await db.EmployeeProfiles.FindAsync(20L);
+        Assert.NotNull(updatedEmp);
+        Assert.Equal("terminated", updatedEmp.EmploymentStatus);
+
+        var updatedAssignment = await db.StaffFacilityAssignments.FindAsync(100L);
+        Assert.NotNull(updatedAssignment);
+        Assert.NotNull(updatedAssignment.EndsAt);
+    }
+
 }

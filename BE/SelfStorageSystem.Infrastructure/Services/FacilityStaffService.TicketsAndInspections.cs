@@ -3477,7 +3477,7 @@ public partial class FacilityStaffService : IFacilityStaffService
 
 
 
-                Reason = r.Reason,
+                Reason = r.Reason ?? string.Empty,
 
 
 

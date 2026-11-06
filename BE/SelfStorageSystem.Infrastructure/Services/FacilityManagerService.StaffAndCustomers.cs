@@ -18,6 +18,20 @@ namespace SelfStorageSystem.Infrastructure.Services;
 
 public partial class FacilityManagerService : IFacilityManagerService
 {
+    private static readonly HashSet<string> ValidStaffAssignmentRoles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        RoleConstants.FacilityStaff,
+        "facility_staff",
+        "maintenance_staff",
+        "cleaning_staff",
+        "security_staff",
+        "technical_staff",
+        "Nhân viên cơ sở (Facility Staff)",
+        "Nhân viên bảo trì (Maintenance Staff)",
+        "Nhân viên vệ sinh (Cleaning Staff)",
+        "Nhân viên an ninh (Security Staff)",
+        "Nhân viên kỹ thuật (Technical Staff)"
+    };
     // ==========================================
 
     // 6. Quản Lý Nhân Sự & Khách Hàng Cơ Sở (Facility Scope)
@@ -190,9 +204,15 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var targetRoleCode = string.IsNullOrWhiteSpace(request.AssignmentRole)
+        var rawRole = string.IsNullOrWhiteSpace(request.AssignmentRole)
             ? RoleConstants.FacilityStaff
             : request.AssignmentRole.Trim();
+
+        var normalizedAssignmentRole = (!isSystemAdmin && !ValidStaffAssignmentRoles.Contains(rawRole))
+            ? RoleConstants.FacilityStaff
+            : rawRole;
+
+        var targetRoleCode = isSystemAdmin ? normalizedAssignmentRole : RoleConstants.FacilityStaff;
 
         var staffRole = await _dbContext.Roles.FirstOrDefaultAsync(r => r.Code == targetRoleCode, cancellationToken)
             ?? await _dbContext.Roles.FirstOrDefaultAsync(r => r.Code == RoleConstants.FacilityStaff, cancellationToken);
@@ -246,7 +266,7 @@ public partial class FacilityManagerService : IFacilityManagerService
 
             FacilityId = request.FacilityId,
 
-            AssignmentRole = string.IsNullOrWhiteSpace(request.AssignmentRole) ? RoleConstants.FacilityStaff : request.AssignmentRole.Trim(),
+            AssignmentRole = normalizedAssignmentRole,
 
             StartsAt = now,
 
@@ -370,6 +390,34 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
+        var roleInput = request.AssignmentRole ?? request.Position;
+        if (!string.IsNullOrWhiteSpace(roleInput))
+        {
+            var roleToAssign = roleInput.Trim();
+            if (!isSystemAdmin && !ValidStaffAssignmentRoles.Contains(roleToAssign))
+            {
+                roleToAssign = RoleConstants.FacilityStaff;
+            }
+            assignment.AssignmentRole = roleToAssign;
+        }
+
+        if (request.IsActive.HasValue)
+        {
+            var active = request.IsActive.Value;
+            employee.User.Status = active ? "active" : "inactive";
+            employee.User.UpdatedAt = now;
+            employee.EmploymentStatus = active ? "active" : "terminated";
+
+            if (!active)
+            {
+                assignment.EndsAt = now;
+            }
+            else if (assignment.EndsAt.HasValue && assignment.EndsAt <= now)
+            {
+                assignment.EndsAt = null;
+            }
+        }
+
         await _dbContext.SaveChangesAsync(cancellationToken);
 
 
@@ -450,7 +498,7 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var isActive = request.Status.Equals("active", StringComparison.OrdinalIgnoreCase);
+        var isActive = request.IsActive ?? (!string.IsNullOrWhiteSpace(request.Status) && request.Status.Equals("active", StringComparison.OrdinalIgnoreCase));
 
         assignment.Employee.User.Status = isActive ? "active" : "inactive";
 
