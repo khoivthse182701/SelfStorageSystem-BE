@@ -1429,15 +1429,9 @@ public partial class FacilityStaffService : IFacilityStaffService
 
 
 
-        foreach (var task in ticket.StaffTasks.Where(st => st.AssignedEmployeeId == employeeUserId && st.Status != "completed"))
-
-
-
+        foreach (var task in ticket.StaffTasks.Where(st => st.AssignedEmployeeId == employeeUserId && st.Status != "done" && st.Status != "completed"))
         {
-
-
-
-            task.Status = "completed";
+            task.Status = "done";
 
 
 

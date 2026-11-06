@@ -482,41 +482,40 @@ public partial class FacilityStaffService : IFacilityStaffService
 
 
     public async Task<StaffTaskDto> UpdateStaffTaskStatusAsync(long employeeUserId, long taskId, UpdateStaffTaskStatusRequest request, CancellationToken cancellationToken = default)
-
-
-
     {
-
-
-
         var task = await _dbContext.StaffTasks.Include(t => t.Facility).Include(t => t.AssignedEmployee).FirstOrDefaultAsync(t => t.Id == taskId, cancellationToken);
-
-
-
         if (task == null) throw AppException.FromError(StaffErrors.TaskNotFound);
 
+        var normalizedStatus = request.Status?.Trim().ToLowerInvariant();
+        if (normalizedStatus == "completed")
+        {
+            normalizedStatus = "done";
+        }
 
+        var validStatuses = new HashSet<string> { "todo", "in_progress", "blocked", "done", "cancelled" };
+        if (!string.IsNullOrEmpty(normalizedStatus) && validStatuses.Contains(normalizedStatus))
+        {
+            task.Status = normalizedStatus;
+        }
+        else
+        {
+            throw AppException.FromError(Error.Validation("Staff.InvalidTaskStatus", $"Trạng thái nhiệm vụ '{request.Status}' không hợp lệ. Cho phép: todo, in_progress, done, blocked, cancelled."));
+        }
 
-        task.Status = request.Status;
-
-
-
-        if (request.ProgressPercent.HasValue) task.ProgressPercent = request.ProgressPercent.Value;
-
-
+        // DB Check constraint CK__staff_tasks__3C89F72A: ([status]='done' AND [progress_percent]=(100) OR [status]<>'done')
+        if (task.Status == "done")
+        {
+            task.ProgressPercent = 100;
+        }
+        else if (request.ProgressPercent.HasValue)
+        {
+            task.ProgressPercent = (short)Math.Clamp((int)request.ProgressPercent.Value, 0, 100);
+        }
 
         task.UpdatedAt = DateTimeOffset.UtcNow;
-
-
-
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-
-
         return new StaffTaskDto(task.Id, task.FacilityId, task.Facility.Code, task.AssignedEmployeeId, task.AssignedEmployee?.FullName, task.TaskType, task.Title, task.DueAt, task.Status, task.ProgressPercent, task.CreatedAt, task.UpdatedAt);
-
-
-
     }
 
 
