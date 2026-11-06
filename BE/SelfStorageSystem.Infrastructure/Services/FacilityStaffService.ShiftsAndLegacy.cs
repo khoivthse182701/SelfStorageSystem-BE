@@ -486,6 +486,20 @@ public partial class FacilityStaffService : IFacilityStaffService
         var task = await _dbContext.StaffTasks.Include(t => t.Facility).Include(t => t.AssignedEmployee).FirstOrDefaultAsync(t => t.Id == taskId, cancellationToken);
         if (task == null) throw AppException.FromError(StaffErrors.TaskNotFound);
 
+        var now = DateTimeOffset.UtcNow;
+        if (task.AssignedEmployeeId != employeeUserId)
+        {
+            var isAssignedToFacility = await _dbContext.StaffFacilityAssignments
+                .AnyAsync(sfa => sfa.EmployeeId == employeeUserId 
+                              && sfa.FacilityId == task.FacilityId 
+                              && (sfa.EndsAt == null || sfa.EndsAt > now), cancellationToken);
+
+            if (!isAssignedToFacility)
+            {
+                throw AppException.FromError(StaffErrors.StaffNotAssignedToFacility);
+            }
+        }
+
         var normalizedStatus = request.Status?.Trim().ToLowerInvariant();
         if (normalizedStatus == "completed")
         {
@@ -512,7 +526,7 @@ public partial class FacilityStaffService : IFacilityStaffService
             task.ProgressPercent = (short)Math.Clamp((int)request.ProgressPercent.Value, 0, 100);
         }
 
-        task.UpdatedAt = DateTimeOffset.UtcNow;
+        task.UpdatedAt = now;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         return new StaffTaskDto(task.Id, task.FacilityId, task.Facility.Code, task.AssignedEmployeeId, task.AssignedEmployee?.FullName, task.TaskType, task.Title, task.DueAt, task.Status, task.ProgressPercent, task.CreatedAt, task.UpdatedAt);

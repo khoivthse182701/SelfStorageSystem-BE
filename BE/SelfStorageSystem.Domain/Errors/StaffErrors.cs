@@ -13,6 +13,8 @@ public static class StaffErrors
     public static readonly Error StaffNotAssignedToFacility =
         Error.Forbidden("Staff.NotAssignedToFacility", "Nhân viên không có quyền truy cập dữ liệu tại cơ sở này.");
 
+    public static readonly Error NotAssignedToFacility = StaffNotAssignedToFacility;
+
     public static readonly Error TaskNotFound =
         Error.NotFound("Staff.TaskNotFound", "Staff task was not found.");
 
