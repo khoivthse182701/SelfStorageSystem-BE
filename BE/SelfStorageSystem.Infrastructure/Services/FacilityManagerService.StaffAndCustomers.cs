@@ -64,17 +64,16 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
+        // Retrieve the latest assignment for each staff member at this facility (including active and inactive)
         var query = _dbContext.StaffFacilityAssignments
-
             .AsNoTracking()
-
             .Include(sfa => sfa.Employee)
-
                 .ThenInclude(e => e.User)
-
             .Include(sfa => sfa.Facility)
-
-            .Where(sfa => sfa.FacilityId == targetFacilityId && (sfa.EndsAt == null || sfa.EndsAt > now));
+            .Where(sfa => sfa.FacilityId == targetFacilityId
+                && !_dbContext.StaffFacilityAssignments.Any(newer => newer.EmployeeId == sfa.EmployeeId
+                    && newer.FacilityId == targetFacilityId
+                    && newer.CreatedAt > sfa.CreatedAt));
 
 
 
@@ -124,7 +123,7 @@ public partial class FacilityManagerService : IFacilityManagerService
 
                 EmploymentStatus = sfa.Employee.EmploymentStatus,
 
-                UserStatus = sfa.Employee.User.Status,
+                UserStatus = (sfa.Employee.User.Status == "active" && (sfa.EndsAt == null || sfa.EndsAt > now)) ? "active" : "inactive",
 
                 FacilityId = sfa.FacilityId,
 
@@ -217,16 +216,18 @@ public partial class FacilityManagerService : IFacilityManagerService
         var staffRole = await _dbContext.Roles.FirstOrDefaultAsync(r => r.Code == targetRoleCode, cancellationToken)
             ?? await _dbContext.Roles.FirstOrDefaultAsync(r => r.Code == RoleConstants.FacilityStaff, cancellationToken);
 
-        if (staffRole != null)
+        if (staffRole == null)
         {
-            _dbContext.UserRoles.Add(new UserRole
-            {
-                UserId = user.Id,
-                RoleId = staffRole.Id,
-                GrantedBy = currentUserId,
-                GrantedAt = now
-            });
+            throw new InvalidOperationException($"Role '{targetRoleCode}' or '{RoleConstants.FacilityStaff}' does not exist in the database. Ensure roles are properly seeded.");
         }
+
+        _dbContext.UserRoles.Add(new UserRole
+        {
+            UserId = user.Id,
+            RoleId = staffRole.Id,
+            GrantedBy = currentUserId,
+            GrantedAt = now
+        });
 
         var employeeCode = $"EMP-{now:yyMM}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}";
 
@@ -348,7 +349,8 @@ public partial class FacilityManagerService : IFacilityManagerService
 
                 .ThenInclude(e => e.User)
 
-            .FirstOrDefaultAsync(sfa => sfa.EmployeeId == staffUserId && (sfa.EndsAt == null || sfa.EndsAt > now), cancellationToken);
+            .OrderByDescending(sfa => sfa.CreatedAt)
+            .FirstOrDefaultAsync(sfa => sfa.EmployeeId == staffUserId, cancellationToken);
 
 
 

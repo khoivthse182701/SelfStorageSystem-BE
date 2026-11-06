@@ -923,9 +923,6 @@ public class ManagerController : ControllerBase
     }
 
     /// <summary>
-    /// Manager phân công nhân viên xử lý Ticket sự cố.
-    /// </summary>
-    /// <summary>
     /// Manager tạo ticket sự cố/hỗ trợ mới tại cơ sở và tùy chọn giao việc ngay cho Staff.
     /// </summary>
     [HttpPost("tickets")]
@@ -941,6 +938,9 @@ public class ManagerController : ControllerBase
         return Ok(ApiResponse<ManagerTicketDetailDto>.Ok(result, "Tạo ticket sự cố thành công."));
     }
 
+    /// <summary>
+    /// Manager phân công nhân viên xử lý Ticket sự cố.
+    /// </summary>
     [HttpPost("tickets/{ticketId:long}/assign-staff")]
     [ProducesResponseType(typeof(ApiResponse<ManagerTicketDetailDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> AssignTicketStaff(
@@ -955,9 +955,6 @@ public class ManagerController : ControllerBase
         return Ok(ApiResponse<ManagerTicketDetailDto>.Ok(result, "Staff assigned to ticket successfully."));
     }
 
-    /// <summary>
-    /// Manager đóng Ticket sự cố sau khi đã xử lý xong (Resolved -> Closed).
-    /// </summary>
     /// <summary>
     /// Lấy lịch sử tin nhắn / ghi chú nội bộ của ticket cho Manager.
     /// </summary>
@@ -990,6 +987,9 @@ public class ManagerController : ControllerBase
         return Ok(ApiResponse<IReadOnlyList<ManagerChargeProposalDto>>.Ok(result, "Retrieved ticket charge proposals successfully."));
     }
 
+    /// <summary>
+    /// Manager đóng Ticket sự cố sau khi đã xử lý xong (Resolved -> Closed).
+    /// </summary>
     [HttpPost("tickets/{ticketId:long}/close")]
     [ProducesResponseType(typeof(ApiResponse<ManagerTicketDetailDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> CloseTicket(

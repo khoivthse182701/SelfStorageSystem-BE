@@ -1636,4 +1636,94 @@ public class FacilityManagerServiceTests
         Assert.NotNull(updatedAssignment.EndsAt);
     }
 
+
+    [Fact]
+    public async Task GetFacilityStaffsAsync_IncludesInactiveStaff_WithUserStatusInactive()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var staffRole = new Role { Id = 2, Code = RoleConstants.FacilityStaff, DisplayName = "Staff", Description = "Staff" };
+        db.Roles.Add(staffRole);
+
+        // Active Staff
+        var activeUser = new User { Id = 31, Email = "active@test.com", PasswordHash = "hash", Status = "active", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        var activeEmp = new EmployeeProfile { UserId = 31, EmployeeCode = "EMP-031", FullName = "Active Staff", HireDate = new DateOnly(2025, 1, 1), EmploymentStatus = "active", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        var activeAssign = new StaffFacilityAssignment { Id = 101, EmployeeId = 31, FacilityId = 1, AssignmentRole = RoleConstants.FacilityStaff, StartsAt = DateTimeOffset.UtcNow, AssignedBy = 10, CreatedAt = DateTimeOffset.UtcNow };
+
+        // Inactive Staff (EndsAt set in the past)
+        var inactiveUser = new User { Id = 32, Email = "inactive@test.com", PasswordHash = "hash", Status = "inactive", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        var inactiveEmp = new EmployeeProfile { UserId = 32, EmployeeCode = "EMP-032", FullName = "Inactive Staff", HireDate = new DateOnly(2024, 1, 1), EmploymentStatus = "terminated", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        var inactiveAssign = new StaffFacilityAssignment { Id = 102, EmployeeId = 32, FacilityId = 1, AssignmentRole = RoleConstants.FacilityStaff, StartsAt = DateTimeOffset.UtcNow.AddMonths(-6), EndsAt = DateTimeOffset.UtcNow.AddDays(-1), AssignedBy = 10, CreatedAt = DateTimeOffset.UtcNow.AddMonths(-6) };
+
+        db.Users.AddRange(activeUser, inactiveUser);
+        db.EmployeeProfiles.AddRange(activeEmp, inactiveEmp);
+        db.StaffFacilityAssignments.AddRange(activeAssign, inactiveAssign);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act
+        var result = await service.GetFacilityStaffsAsync(1, search: null, pageNumber: 1, pageSize: 10, currentUserId: 10, isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(3, result.TotalCount); // 1 seeded manager + 1 active staff + 1 inactive staff
+        Assert.Equal(3, result.Items.Count);
+
+        var activeItem = result.Items.FirstOrDefault(i => i.UserId == 31);
+        Assert.NotNull(activeItem);
+        Assert.True(activeItem.IsActive);
+        Assert.Equal("active", activeItem.UserStatus);
+
+        var inactiveItem = result.Items.FirstOrDefault(i => i.UserId == 32);
+        Assert.NotNull(inactiveItem);
+        Assert.False(inactiveItem.IsActive);
+        Assert.Equal("inactive", inactiveItem.UserStatus);
+    }
+
+    [Fact]
+    public async Task UpdateFacilityStaffAsync_ForInactiveStaff_SucceedsWithout404()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1, 10);
+
+        var staffRole = new Role { Id = 2, Code = RoleConstants.FacilityStaff, DisplayName = "Staff", Description = "Staff" };
+        db.Roles.Add(staffRole);
+
+        var inactiveUser = new User { Id = 40, Email = "inactive40@test.com", PasswordHash = "hash", Status = "inactive", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        var inactiveEmp = new EmployeeProfile { UserId = 40, EmployeeCode = "EMP-040", FullName = "Old Inactive Staff", HireDate = new DateOnly(2024, 1, 1), EmploymentStatus = "terminated", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
+        var inactiveAssign = new StaffFacilityAssignment { Id = 140, EmployeeId = 40, FacilityId = 1, AssignmentRole = RoleConstants.FacilityStaff, StartsAt = DateTimeOffset.UtcNow.AddMonths(-6), EndsAt = DateTimeOffset.UtcNow.AddDays(-5), AssignedBy = 10, CreatedAt = DateTimeOffset.UtcNow.AddMonths(-6) };
+
+        db.Users.Add(inactiveUser);
+        db.EmployeeProfiles.Add(inactiveEmp);
+        db.StaffFacilityAssignments.Add(inactiveAssign);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act - Manager updates phone and reactivates staff via UpdateFacilityStaffAsync
+        var updateReq = new ManagerUpdateStaffRequest
+        {
+            FullName = "Reactivated Staff",
+            PhoneNumber = "0911223344",
+            IsActive = true,
+            Position = "maintenance_staff"
+        };
+        var result = await service.UpdateFacilityStaffAsync(40, updateReq, currentUserId: 10, isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("Reactivated Staff", result.FullName);
+        Assert.Equal("0911223344", result.PhoneNumber);
+        Assert.Equal("maintenance_staff", result.AssignmentRole);
+        Assert.Equal("active", result.UserStatus);
+
+        var updatedAssign = await db.StaffFacilityAssignments.FindAsync(140L);
+        Assert.NotNull(updatedAssign);
+        Assert.Null(updatedAssign.EndsAt); // Reactivated clears EndsAt
+    }
+
 }
