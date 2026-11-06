@@ -91,6 +91,21 @@ public static class RentalErrors
     public static readonly Error TransferMoveOutAlreadyConfirmed =
         Error.Conflict("Rental.TransferMoveOutAlreadyConfirmed", "The move-out has already been confirmed and its date can no longer be changed.");
 
+    public static readonly Error CannotCancelActiveTransfer =
+        Error.Conflict("Rental.CannotCancelActiveTransfer", "Chỉ có thể hủy yêu cầu chuyển kho khi đang chờ thanh toán.");
+
+    public static readonly Error CannotCancelActiveRenewal =
+        Error.Conflict("Rental.CannotCancelActiveRenewal", "Chỉ có thể hủy yêu cầu gia hạn khi đang chờ thanh toán.");
+
+    public static readonly Error CannotCancelPaidInvoice =
+        Error.Conflict("Rental.CannotCancelPaidInvoice", "Không thể hủy hóa đơn đã thanh toán.");
+
+    public static readonly Error RenewalNotFound =
+        Error.NotFound("Rental.RenewalNotFound", "Renewal request was not found or does not belong to you.");
+
+    public static readonly Error InvoiceNotFound =
+        Error.NotFound("Rental.InvoiceNotFound", "Invoice was not found or does not belong to you.");
+
     public static readonly Error EmptyTransferReason =
         Error.Validation("Rental.EmptyTransferReason", "Transfer reason is required.");
 }

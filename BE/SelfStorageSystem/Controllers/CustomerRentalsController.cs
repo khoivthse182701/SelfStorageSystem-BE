@@ -444,6 +444,66 @@ public class CustomerRentalsController : ControllerBase
         return Ok(ApiResponse<UnitTransferRequestDto>.Ok(result, "Transfer schedule updated successfully."));
     }
 
+    /// <summary>
+    /// Cancels a pending unit transfer request and releases the held target unit.
+    /// </summary>
+    [HttpPost("transfer-requests/{transferRequestId:long}/cancel")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CancelTransferRequest(
+        [FromRoute] long transferRequestId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.CancelTransferRequestAsync(customerId, transferRequestId, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(result, "Unit transfer request cancelled successfully."));
+    }
+
+    /// <summary>
+    /// Cancels a pending rental agreement renewal request.
+    /// </summary>
+    [HttpPost("renewals/{renewalId:long}/cancel")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CancelRenewal(
+        [FromRoute] long renewalId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.CancelRenewalAsync(customerId, renewalId, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(result, "Rental renewal request cancelled successfully."));
+    }
+
+    /// <summary>
+    /// Cancels an unpaid invoice and voids associated pending holds.
+    /// </summary>
+    [HttpPost("invoices/{invoiceId:long}/cancel")]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CancelInvoice(
+        [FromRoute] long invoiceId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.CancelInvoiceAsync(customerId, invoiceId, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(result, "Invoice cancelled successfully."));
+    }
+
     private bool TryGetCustomerId(out long customerId)
     {
         customerId = 0;

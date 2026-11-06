@@ -20,6 +20,9 @@ public interface ICustomerRentalService
     Task<TransferPreviewDto> GetTransferPreviewAsync(long customerId, long agreementId, long? requestedFacilityId = null, long? requestedUnitTypeId = null, DateOnly? moveOutDate = null, CancellationToken cancellationToken = default);
     Task<UnitTransferRequestDto> RequestUnitTransferAsync(long customerId, long agreementId, CreateTransferRequest request, CancellationToken cancellationToken = default);
     Task<UnitTransferRequestDto> RescheduleTransferAsync(long customerId, long transferRequestId, RescheduleTransferRequest request, CancellationToken cancellationToken = default);
+    Task<bool> CancelTransferRequestAsync(long customerId, long transferRequestId, CancellationToken cancellationToken = default);
+    Task<bool> CancelRenewalAsync(long customerId, long renewalId, CancellationToken cancellationToken = default);
+    Task<bool> CancelInvoiceAsync(long customerId, long invoiceId, CancellationToken cancellationToken = default);
 
     // MODULE 4: Customer submits bank account information for deposit refund
     Task<CustomerRefundBankInfoDto> SubmitRefundBankInfoAsync(
