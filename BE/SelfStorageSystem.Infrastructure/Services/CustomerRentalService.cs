@@ -1908,7 +1908,8 @@ public class CustomerRentalService : ICustomerRentalService
             disabledReason = $"Hợp đồng đã đạt giới hạn tối đa {_rentalSettings.MaxTransfersPerAgreement} lần chuyển kho.";
         }
 
-        long? targetFacilityId = requestedFacilityId;
+        long resolvedFacilityId = requestedFacilityId ?? agreement.FacilityId;
+        long? targetFacilityId = resolvedFacilityId;
         string? targetFacilityName = null;
         long? targetUnitTypeId = requestedUnitTypeId;
         string? targetUnitTypeName = null;
@@ -1919,22 +1920,22 @@ public class CustomerRentalService : ICustomerRentalService
         decimal cleaningFee = 0m;
         decimal total = 0m;
         bool isDowngrade = false;
-        bool isCrossFacility = requestedFacilityId.HasValue && requestedFacilityId.Value != agreement.FacilityId;
+        bool isCrossFacility = resolvedFacilityId != agreement.FacilityId;
 
-        if (requestedFacilityId.HasValue)
-        {
-            var targetFacility = await _dbContext.Facilities.AsNoTracking().FirstOrDefaultAsync(f => f.Id == requestedFacilityId.Value, cancellationToken);
-            targetFacilityName = targetFacility?.Name;
-        }
+        var targetFacility = await _dbContext.Facilities.AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == resolvedFacilityId, cancellationToken);
+        targetFacilityName = targetFacility?.Name ?? currentFacilityName;
 
-        if (requestedUnitTypeId.HasValue && requestedFacilityId.HasValue)
+        int availableUnitsCount = 0;
+        if (requestedUnitTypeId.HasValue)
         {
-            var targetType = await _dbContext.UnitTypes.AsNoTracking().FirstOrDefaultAsync(t => t.Id == requestedUnitTypeId.Value, cancellationToken);
+            var targetType = await _dbContext.UnitTypes.AsNoTracking()
+                .FirstOrDefaultAsync(t => t.Id == requestedUnitTypeId.Value, cancellationToken);
             targetUnitTypeName = targetType?.Name;
 
             var targetRate = await _dbContext.FacilityRates
                 .AsNoTracking()
-                .Where(r => r.FacilityId == requestedFacilityId.Value && r.UnitTypeId == requestedUnitTypeId.Value && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo >= today))
+                .Where(r => r.FacilityId == resolvedFacilityId && r.UnitTypeId == requestedUnitTypeId.Value && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo >= today))
                 .OrderByDescending(r => r.ValidFrom)
                 .FirstOrDefaultAsync(cancellationToken);
 
@@ -1942,16 +1943,63 @@ public class CustomerRentalService : ICustomerRentalService
             {
                 targetMonthlyRate = targetRate.MonthlyRate;
                 targetDeposit = targetRate.DepositAmount;
+            }
+            else
+            {
+                // Fallback 1: Lấy mức giá chuẩn từ PriceRanges
+                var priceRange = await _dbContext.PriceRanges
+                    .AsNoTracking()
+                    .Where(p => p.UnitTypeId == requestedUnitTypeId.Value && p.ValidFrom <= today && (p.ValidTo == null || p.ValidTo >= today))
+                    .OrderByDescending(p => p.ValidFrom)
+                    .FirstOrDefaultAsync(cancellationToken);
 
+                if (priceRange != null)
+                {
+                    targetMonthlyRate = priceRange.MinMonthlyRate > 0 ? priceRange.MinMonthlyRate : priceRange.MaxMonthlyRate;
+                    targetDeposit = targetMonthlyRate;
+                }
+                else
+                {
+                    // Fallback 2: Lấy FacilityRate của cơ sở khác cùng loại kho
+                    var anyRate = await _dbContext.FacilityRates
+                        .AsNoTracking()
+                        .Where(r => r.UnitTypeId == requestedUnitTypeId.Value && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo >= today))
+                        .OrderByDescending(r => r.ValidFrom)
+                        .FirstOrDefaultAsync(cancellationToken);
+
+                    if (anyRate != null)
+                    {
+                        targetMonthlyRate = anyRate.MonthlyRate;
+                        targetDeposit = anyRate.DepositAmount;
+                    }
+                    else
+                    {
+                        // Fallback 3: Dùng giá hợp đồng hiện tại
+                        targetMonthlyRate = agreement.MonthlyRateSnapshot;
+                        targetDeposit = agreement.DepositBalance;
+                    }
+                }
+            }
+
+            if (targetMonthlyRate.HasValue)
+            {
+                var effectiveDeposit = targetDeposit ?? targetMonthlyRate.Value;
                 var effectiveMoveOut = moveOutDate ?? today;
                 var remainingDays = Math.Max(0, agreement.EndDate.DayNumber - effectiveMoveOut.DayNumber);
 
-                diffRent = Math.Max(0, targetRate.MonthlyRate - agreement.MonthlyRateSnapshot) * remainingDays / 30m;
-                diffDeposit = Math.Max(0, targetRate.DepositAmount - agreement.DepositBalance);
+                diffRent = Math.Max(0, targetMonthlyRate.Value - agreement.MonthlyRateSnapshot) * remainingDays / 30m;
+                diffDeposit = Math.Max(0, effectiveDeposit - agreement.DepositBalance);
                 cleaningFee = isCrossFacility ? _rentalSettings.CrossFacilityCleaningFee : 0m;
                 total = decimal.Round(diffRent, 0, MidpointRounding.AwayFromZero) + diffDeposit + cleaningFee;
-                isDowngrade = targetRate.MonthlyRate < agreement.MonthlyRateSnapshot;
+                isDowngrade = targetMonthlyRate.Value < agreement.MonthlyRateSnapshot;
             }
+
+            availableUnitsCount = await _dbContext.StorageUnits
+                .AsNoTracking()
+                .CountAsync(u => u.FacilityId == resolvedFacilityId 
+                              && u.UnitTypeId == requestedUnitTypeId.Value 
+                              && u.PhysicalStatus == StorageUnitStatusConstants.Available, 
+                            cancellationToken);
         }
 
         return new TransferPreviewDto(
@@ -1978,7 +2026,8 @@ public class CustomerRentalService : ICustomerRentalService
             CleaningFee: cleaningFee,
             TotalRequiredPayment: total,
             IsDowngrade: isDowngrade,
-            IsCrossFacility: isCrossFacility
+            IsCrossFacility: isCrossFacility,
+            AvailableUnitsCount: availableUnitsCount
         );
     }
 
@@ -1995,16 +2044,22 @@ public class CustomerRentalService : ICustomerRentalService
     {
 
         var agreement = await _dbContext.RentalAgreements
-
             .Include(a => a.UnitAllocations)
-
             .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
 
-
+        if (agreement == null)
+        {
+            agreement = await _dbContext.RentalAgreements
+                .Include(a => a.UnitAllocations)
+                .OrderByDescending(a => a.Id)
+                .FirstOrDefaultAsync(a => a.CustomerId == customerId
+                    && a.UnitAllocations.Any(ua => ua.StorageUnitId == agreementId || ua.Id == agreementId), cancellationToken);
+        }
 
         if (agreement == null)
-
             throw AppException.FromError(RentalErrors.AgreementNotFound);
+
+        agreementId = agreement.Id;
 
 
 

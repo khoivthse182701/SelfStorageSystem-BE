@@ -119,5 +119,6 @@ public record TransferPreviewDto(
     decimal CleaningFee,
     decimal TotalRequiredPayment,
     bool IsDowngrade,
-    bool IsCrossFacility
+    bool IsCrossFacility,
+    int AvailableUnitsCount = 0
 );

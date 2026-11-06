@@ -362,6 +362,43 @@ public class CustomerRentalsController : ControllerBase
     }
 
     /// <summary>
+    /// Gets transfer preview and price difference calculation for upgrading/transferring a unit.
+    /// </summary>
+    [HttpGet("{agreementId:long}/transfer-preview")]
+    [ProducesResponseType(typeof(ApiResponse<TransferPreviewDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetTransferPreview(
+        [FromRoute] long agreementId,
+        [FromQuery] long? requestedFacilityId,
+        [FromQuery] long? targetFacilityId,
+        [FromQuery] long? requestedUnitTypeId,
+        [FromQuery] long? targetUnitTypeId,
+        [FromQuery] DateOnly? moveOutDate,
+        [FromQuery] DateOnly? targetMoveDate,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var effFacilityId = requestedFacilityId ?? targetFacilityId;
+        var effUnitTypeId = requestedUnitTypeId ?? targetUnitTypeId;
+        var effDate = moveOutDate ?? targetMoveDate;
+
+        var result = await _rentalService.GetTransferPreviewAsync(
+            customerId,
+            agreementId,
+            effFacilityId,
+            effUnitTypeId,
+            effDate,
+            cancellationToken);
+
+        return Ok(ApiResponse<TransferPreviewDto>.Ok(result, "Retrieved transfer preview successfully."));
+    }
+
+    /// <summary>
     /// Requests unit transfer or size upgrade (Flow 3 & BR-RSV-04).
     /// </summary>
     [HttpPost("{agreementId:long}/transfer-request")]
