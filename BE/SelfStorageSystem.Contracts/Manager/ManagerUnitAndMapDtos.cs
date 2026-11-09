@@ -22,6 +22,7 @@ public class ManagerStorageUnitDto
     public string PhysicalStatus { get; set; } = string.Empty;
     public bool IsListed { get; set; }
     public string? Notes { get; set; }
+    public string? ImageUrl { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }
@@ -45,15 +46,15 @@ public class ManagerCreateStorageUnitRequest
     public bool IsListed { get; set; } = true;
 
     public string? Notes { get; set; }
+
+    public string? ImageUrl { get; set; }
 }
 
 public class ManagerUpdateStorageUnitRequest
 {
-    [Required]
-    public string UnitCode { get; set; } = string.Empty;
+    public string? UnitCode { get; set; }
 
-    [Required]
-    public long UnitTypeId { get; set; }
+    public long? UnitTypeId { get; set; }
 
     public long? AreaId { get; set; }
 
@@ -63,9 +64,11 @@ public class ManagerUpdateStorageUnitRequest
 
     public string? PhysicalStatus { get; set; }
 
-    public bool IsListed { get; set; } = true;
+    public bool? IsListed { get; set; }
 
     public string? Notes { get; set; }
+
+    public string? ImageUrl { get; set; }
 }
 
 public class ManagerAreaLayoutDto

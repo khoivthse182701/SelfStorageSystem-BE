@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace SelfStorageSystem.Domain.Entities;
@@ -43,6 +43,7 @@ public partial class SupportTicket
 
     public virtual ICollection<MaintenanceWorkOrder> MaintenanceWorkOrders { get; set; } = new List<MaintenanceWorkOrder>();
 
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public virtual RentalAgreement? RentalAgreement { get; set; }
 
     public virtual ServiceRating? ServiceRating { get; set; }
@@ -51,6 +52,7 @@ public partial class SupportTicket
 
     public virtual StorageUnit? StorageUnit { get; set; }
 
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public virtual StorageUnit? StorageUnitNavigation { get; set; }
 
     public virtual TicketAssignment? TicketAssignment { get; set; }

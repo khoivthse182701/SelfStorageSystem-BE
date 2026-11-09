@@ -96,83 +96,73 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
+        int totalCount;
+        List<StorageUnit> rawUnits;
+
         if (!string.IsNullOrWhiteSpace(search))
-
         {
-
             var term = search.Trim().ToLowerInvariant();
-
             query = query.Where(u => u.UnitCode.ToLower().Contains(term) ||
-
                                      (u.FloorLabel != null && u.FloorLabel.ToLower().Contains(term)) ||
-
                                      (u.ZoneLabel != null && u.ZoneLabel.ToLower().Contains(term)) ||
-
                                      (u.Notes != null && u.Notes.ToLower().Contains(term)));
 
+            var candidates = await query
+                .OrderBy(u => u.UnitCode)
+                .ToListAsync(cancellationToken);
+
+            var filteredUnits = candidates.Where(u =>
+                u.UnitCode.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                (u.FloorLabel != null && u.FloorLabel.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                (u.ZoneLabel != null && u.ZoneLabel.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                (ExtractNotesAndImageUrl(u.Notes).CleanNotes is { Length: > 0 } cn &&
+                 cn.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            totalCount = filteredUnits.Count;
+            rawUnits = filteredUnits
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+        }
+        else
+        {
+            totalCount = await query.CountAsync(cancellationToken);
+            rawUnits = await query
+                .OrderBy(u => u.UnitCode)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync(cancellationToken);
         }
 
-
-
-        var totalCount = await query.CountAsync(cancellationToken);
-
-
-
-        var items = await query
-
-            .OrderBy(u => u.UnitCode)
-
-            .Skip((pageNumber - 1) * pageSize)
-
-            .Take(pageSize)
-
-            .Select(u => new ManagerStorageUnitDto
-
+        var items = rawUnits.Select(u =>
+        {
+            var (cleanNotes, imageUrl) = ExtractNotesAndImageUrl(u.Notes);
+            return new ManagerStorageUnitDto
             {
-
                 Id = u.Id,
-
                 FacilityId = u.FacilityId,
-
                 UnitCode = u.UnitCode,
-
                 UnitTypeId = u.UnitTypeId,
-
                 UnitTypeCode = u.UnitType.Code,
-
                 UnitTypeName = u.UnitType.Name,
-
                 WidthM = u.UnitType.WidthM,
-
                 LengthM = u.UnitType.LengthM,
-
                 HeightM = u.UnitType.HeightM,
-
                 AreaM2 = u.UnitType.AreaM2,
-
                 VolumeM3 = u.UnitType.VolumeM3,
-
                 AreaId = u.AreaId,
-
                 AreaName = u.Area != null ? u.Area.Name : null,
-
                 FloorLabel = u.FloorLabel,
-
                 ZoneLabel = u.ZoneLabel,
-
                 PhysicalStatus = u.PhysicalStatus,
-
                 IsListed = u.IsListed,
-
-                Notes = u.Notes,
-
+                Notes = cleanNotes,
+                ImageUrl = imageUrl,
                 CreatedAt = u.CreatedAt,
-
                 UpdatedAt = u.UpdatedAt
-
-            })
-
-            .ToListAsync(cancellationToken);
+            };
+        }).ToList();
 
 
 
@@ -282,7 +272,7 @@ public partial class FacilityManagerService : IFacilityManagerService
 
             IsListed = request.IsListed,
 
-            Notes = request.Notes?.Trim(),
+            Notes = PackNotesAndImageUrl(request.Notes, request.ImageUrl),
 
             CreatedAt = now,
 
@@ -304,48 +294,29 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
+        var (createdCleanNotes, createdImageUrl) = ExtractNotesAndImageUrl(unit.Notes);
         return new ManagerStorageUnitDto
-
         {
-
             Id = unit.Id,
-
             FacilityId = unit.FacilityId,
-
             UnitCode = unit.UnitCode,
-
             UnitTypeId = unit.UnitTypeId,
-
             UnitTypeCode = unitType.Code,
-
             UnitTypeName = unitType.Name,
-
             WidthM = unitType.WidthM,
-
             LengthM = unitType.LengthM,
-
             HeightM = unitType.HeightM,
-
             AreaM2 = unitType.AreaM2,
-
             VolumeM3 = unitType.VolumeM3,
-
             AreaId = unit.AreaId,
-
             FloorLabel = unit.FloorLabel,
-
             ZoneLabel = unit.ZoneLabel,
-
             PhysicalStatus = unit.PhysicalStatus,
-
             IsListed = unit.IsListed,
-
-            Notes = unit.Notes,
-
+            Notes = createdCleanNotes,
+            ImageUrl = createdImageUrl,
             CreatedAt = unit.CreatedAt,
-
             UpdatedAt = unit.UpdatedAt
-
         };
 
     }
@@ -390,38 +361,29 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var newCode = request.UnitCode.Trim().ToUpperInvariant();
+        var newCode = string.IsNullOrWhiteSpace(request.UnitCode)
+            ? unit.UnitCode
+            : request.UnitCode.Trim().ToUpperInvariant();
 
         if (!string.Equals(unit.UnitCode, newCode, StringComparison.OrdinalIgnoreCase))
-
         {
-
             var codeExists = await _dbContext.StorageUnits
-
                 .AnyAsync(u => u.FacilityId == unit.FacilityId && u.UnitCode.ToUpper() == newCode && u.Id != unitId, cancellationToken);
-
             if (codeExists)
-
             {
-
                 throw AppException.FromError(ManagerErrors.UnitCodeAlreadyExists);
-
             }
-
         }
 
-
+        var targetUnitTypeId = (request.UnitTypeId.HasValue && request.UnitTypeId.Value > 0)
+            ? request.UnitTypeId.Value
+            : unit.UnitTypeId;
 
         var unitType = await _dbContext.UnitTypes
-
-            .FirstOrDefaultAsync(ut => ut.Id == request.UnitTypeId, cancellationToken);
-
+            .FirstOrDefaultAsync(ut => ut.Id == targetUnitTypeId, cancellationToken);
         if (unitType == null)
-
         {
-
             throw AppException.FromError(ManagerErrors.UnitTypeNotFound);
-
         }
 
 
@@ -477,73 +439,54 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
         var now = DateTimeOffset.UtcNow;
-
         unit.UnitCode = newCode;
+        unit.UnitTypeId = targetUnitTypeId;
+        if (request.AreaId.HasValue) unit.AreaId = request.AreaId;
+        if (request.FloorLabel != null) unit.FloorLabel = request.FloorLabel.Trim();
+        if (request.ZoneLabel != null) unit.ZoneLabel = request.ZoneLabel.Trim();
+        if (request.IsListed.HasValue) unit.IsListed = request.IsListed.Value;
+        if (request.Notes != null || request.ImageUrl != null)
+        {
+            var (existingCleanNotes, existingImg) = ExtractNotesAndImageUrl(unit.Notes);
+            var (reqCleanNotes, reqExtractedImg) = request.Notes != null
+                ? ExtractNotesAndImageUrl(request.Notes)
+                : (existingCleanNotes, null);
 
-        unit.UnitTypeId = request.UnitTypeId;
+            var targetNotes = request.Notes != null ? reqCleanNotes : existingCleanNotes;
+            var targetImg = request.ImageUrl != null
+                ? (string.IsNullOrWhiteSpace(request.ImageUrl) ? null : request.ImageUrl.Trim())
+                : (reqExtractedImg ?? existingImg);
 
-        unit.AreaId = request.AreaId;
-
-        unit.FloorLabel = request.FloorLabel?.Trim();
-
-        unit.ZoneLabel = request.ZoneLabel?.Trim();
-
-        unit.IsListed = request.IsListed;
-
-        unit.Notes = request.Notes?.Trim();
-
+            unit.Notes = PackNotesAndImageUrl(targetNotes, targetImg);
+        }
         unit.UpdatedAt = now;
-
-
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-
-
+        var (updatedCleanNotes, updatedImageUrl) = ExtractNotesAndImageUrl(unit.Notes);
         return new ManagerStorageUnitDto
-
         {
-
             Id = unit.Id,
-
             FacilityId = unit.FacilityId,
-
             UnitCode = unit.UnitCode,
-
             UnitTypeId = unit.UnitTypeId,
-
             UnitTypeCode = unitType.Code,
-
             UnitTypeName = unitType.Name,
-
             WidthM = unitType.WidthM,
-
             LengthM = unitType.LengthM,
-
             HeightM = unitType.HeightM,
-
             AreaM2 = unitType.AreaM2,
-
             VolumeM3 = unitType.VolumeM3,
-
             AreaId = unit.AreaId,
-
             AreaName = unit.Area?.Name,
-
             FloorLabel = unit.FloorLabel,
-
             ZoneLabel = unit.ZoneLabel,
-
             PhysicalStatus = unit.PhysicalStatus,
-
             IsListed = unit.IsListed,
-
-            Notes = unit.Notes,
-
+            Notes = updatedCleanNotes,
+            ImageUrl = updatedImageUrl,
             CreatedAt = unit.CreatedAt,
-
             UpdatedAt = unit.UpdatedAt
-
         };
     }
 
@@ -972,7 +915,13 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var decision = request.Decision.Trim().ToLowerInvariant();
+        var currentStatus = (transferReq.Status ?? string.Empty).Trim().ToLowerInvariant();
+        if (currentStatus is TransferRequestStatusConstants.Completed or TransferRequestStatusConstants.Rejected or TransferRequestStatusConstants.Cancelled)
+            throw AppException.FromError(ManagerErrors.TransferRequestNotPending);
+
+        var decision = (request.Decision ?? string.Empty).Trim().ToLowerInvariant();
+        if (!ApprovalDecisionConstants.All.Contains(decision))
+            throw AppException.FromError(ManagerErrors.InvalidDecision);
 
         var now = DateTimeOffset.UtcNow;
 
@@ -1057,12 +1006,13 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
                 if (targetUnit == null)
-
                     throw new AppException(Error.Validation("StorageUnit.NoneAvailable", "Không còn ô kho trống phù hợp tại cơ sở để thực hiện chuyển đổi."));
-
             }
 
-
+            if (targetUnit.FacilityId != transferReq.FromUnit.FacilityId)
+            {
+                await EnsureFacilityAccessAsync(targetUnit.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
+            }
 
             await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
@@ -1107,6 +1057,7 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
             var oldUnit = transferReq.FromUnit;
+            var prevOldStatus = oldUnit?.PhysicalStatus;
 
             if (oldUnit != null)
 
@@ -1128,40 +1079,81 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-            targetUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
-
-            targetUnit.UpdatedAt = now;
-
-
-
-            var newAllocStartDate = today;
+            if (oldUnit != null)
+            {
+                _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
+                {
+                    StorageUnitId = oldUnit.Id,
+                    OldStatus = prevOldStatus,
+                    NewStatus = oldUnit.PhysicalStatus,
+                    Reason = $"Manager approved unit transfer request #{transferReq.Id} for agreement #{transferReq.Agreement.AgreementNo}",
+                    ChangedBy = currentUserId,
+                    ChangedAt = now
+                });
+            }
 
             var agreement = transferReq.Agreement;
+            List<SupportTicket>? linkedTickets = null;
+            if (agreement.FacilityId != targetUnit.FacilityId)
+            {
+                linkedTickets = await _dbContext.SupportTickets
+                    .Where(t => t.AgreementId == agreement.Id && t.FacilityId != targetUnit.FacilityId)
+                    .ToListAsync(cancellationToken);
+                foreach (var ticket in linkedTickets)
+                {
+                    ticket.AgreementId = null;
+                }
+            }
 
+            // Step 1: Persist old allocation release and temporary ticket detach first inside the transaction
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            // Step 2: Update Agreement FacilityId & snapshots and persist before adding new UnitAllocation
+            agreement.FacilityId = targetUnit.FacilityId;
+            if (transferReq.DiffDepositAmount > 0)
+            {
+                agreement.DepositSnapshot += transferReq.DiffDepositAmount;
+                agreement.DepositBalance += transferReq.DiffDepositAmount;
+            }
+            var targetRate = await _dbContext.FacilityRates
+                .AsNoTracking()
+                .Where(r => r.FacilityId == targetUnit.FacilityId && r.UnitTypeId == targetUnit.UnitTypeId && r.ValidFrom <= today && (r.ValidTo == null || r.ValidTo >= today))
+                .OrderByDescending(r => r.ValidFrom)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (targetRate != null)
+            {
+                agreement.MonthlyRateSnapshot = targetRate.MonthlyRate;
+            }
+            agreement.UpdatedAt = now;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            // Step 3: Occupy target unit, insert new UnitAllocation, update credentials & transfer status
+            var prevTargetStatus = targetUnit.PhysicalStatus;
+            targetUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
+            _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
+            {
+                StorageUnitId = targetUnit.Id,
+                OldStatus = prevTargetStatus,
+                NewStatus = StorageUnitStatusConstants.Occupied,
+                Reason = $"Manager approved unit transfer request #{transferReq.Id} from unit {oldUnit?.UnitCode} for agreement #{transferReq.Agreement.AgreementNo}",
+                ChangedBy = currentUserId,
+                ChangedAt = now
+            });
+            targetUnit.UpdatedAt = now;
+
+            var newAllocStartDate = today < agreement.StartDate ? agreement.StartDate : today;
             var newAllocEndDate = agreement.EndDate > newAllocStartDate ? agreement.EndDate : newAllocStartDate.AddDays(1);
 
-
-
             _dbContext.UnitAllocations.Add(new UnitAllocation
-
             {
-
                 StorageUnitId = targetUnit.Id,
-
                 AgreementId = agreement.Id,
-
                 AllocationKind = AllocationKindConstants.Rental,
-
                 AllocationStartDate = newAllocStartDate,
-
                 AllocationEndDate = newAllocEndDate,
-
                 Status = AllocationStatusConstants.Active,
-
                 CreatedAt = now,
-
                 EndedAt = null
-
             });
 
 
@@ -1237,6 +1229,21 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
             await _dbContext.SaveChangesAsync(cancellationToken);
+
+            if (linkedTickets is { Count: > 0 })
+            {
+                foreach (var ticket in linkedTickets)
+                {
+                    ticket.AgreementId = agreement.Id;
+                    ticket.FacilityId = targetUnit.FacilityId;
+                    if (ticket.StorageUnitId != null)
+                    {
+                        ticket.StorageUnitId = targetUnit.Id;
+                    }
+                    ticket.UpdatedAt = now;
+                }
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
 
             await transaction.CommitAsync(cancellationToken);
 
@@ -1331,6 +1338,40 @@ public partial class FacilityManagerService : IFacilityManagerService
     }
 
 
+
+    private static (string? CleanNotes, string? ImageUrl) ExtractNotesAndImageUrl(string? rawNotes)
+    {
+        if (string.IsNullOrWhiteSpace(rawNotes))
+        {
+            return (rawNotes, null);
+        }
+
+        var match = System.Text.RegularExpressions.Regex.Match(rawNotes, @"\[IMG:([^\]]+)\]");
+        if (match.Success)
+        {
+            var imageUrl = match.Groups[1].Value.Trim();
+            var cleanNotes = System.Text.RegularExpressions.Regex.Replace(rawNotes, @"\[IMG:[^\]]+\]\s*", string.Empty).Trim();
+            return (cleanNotes, imageUrl);
+        }
+
+        return (rawNotes, null);
+    }
+
+    private static string? PackNotesAndImageUrl(string? rawNotes, string? imageUrl)
+    {
+        var (cleanNotes, embeddedImg) = ExtractNotesAndImageUrl(rawNotes);
+        var finalImg = !string.IsNullOrWhiteSpace(imageUrl) ? imageUrl.Trim() : embeddedImg;
+        var trimmedNotes = cleanNotes?.Trim();
+
+        if (!string.IsNullOrWhiteSpace(finalImg))
+        {
+            return string.IsNullOrWhiteSpace(trimmedNotes)
+                ? $"[IMG:{finalImg}]"
+                : $"[IMG:{finalImg}] {trimmedNotes}";
+        }
+
+        return string.IsNullOrWhiteSpace(trimmedNotes) ? null : trimmedNotes;
+    }
 
     public async Task ValidateFacilityAccessAsync(
 

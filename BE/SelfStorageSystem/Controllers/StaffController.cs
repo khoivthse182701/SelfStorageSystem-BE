@@ -100,7 +100,7 @@ public class StaffController : ControllerBase
     /// <summary>
     /// [VÔ HIỆU HÓA] Bỏ tính năng tạo đơn thuê kho trực tiếp tại quầy của Staff. Khách hàng bắt buộc đặt trực tuyến.
     /// </summary>
-    [Obsolete("Walk-in booking creation by staff has been disabled. Customers must book online.")]
+
     [HttpPost("walk-in-bookings")]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status403Forbidden)]
     public IActionResult CreateWalkInBooking([FromBody] StaffWalkInBookingRequest request)
@@ -341,7 +341,10 @@ public class StaffController : ControllerBase
         [FromQuery] DateOnly? date,
         CancellationToken cancellationToken)
     {
-        var list = await _staffService.GetMoveOutsAsync(facilityId, date, cancellationToken);
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var list = await _staffService.GetMoveOutsAsync(userId, facilityId, date, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<StaffMoveOutSummaryDto>>.Ok(list, "Move-out requests retrieved successfully."));
     }
 
@@ -371,7 +374,10 @@ public class StaffController : ControllerBase
         [FromRoute] long facilityId,
         CancellationToken cancellationToken)
     {
-        var list = await _staffService.GetFacilityUnitsAsync(facilityId, cancellationToken);
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var list = await _staffService.GetFacilityUnitsAsync(userId, facilityId, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<StaffFacilityUnitDto>>.Ok(list, "Facility units retrieved successfully."));
     }
 
@@ -418,7 +424,10 @@ public class StaffController : ControllerBase
         [FromQuery] long? facilityId,
         CancellationToken cancellationToken)
     {
-        var list = await _staffService.LookupReservationsAsync(query, facilityId, cancellationToken);
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var list = await _staffService.LookupReservationsAsync(userId, query, facilityId, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<StaffReservationLookupDto>>.Ok(list, "Reservations retrieved successfully."));
     }
 
@@ -464,7 +473,10 @@ public class StaffController : ControllerBase
         [FromQuery] long? facilityId,
         CancellationToken cancellationToken)
     {
-        var list = await _staffService.GetOverdueAgreementsAsync(facilityId, cancellationToken);
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var list = await _staffService.GetOverdueAgreementsAsync(userId, facilityId, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<OverdueAgreementDto>>.Ok(list, "Overdue agreements retrieved successfully."));
     }
 
@@ -536,6 +548,25 @@ public class StaffController : ControllerBase
 
     // ==========================================
     // MODULE 4: Biên Bản Nghiệm Thu Trả Kho & Hoàn Cọc
+    // ==========================================
+
+    /// <summary>
+    /// Danh sách nhiệm vụ kiểm tra/nghiệm thu ô kho (Move-out / Check-out) của Staff tại cơ sở.
+    /// </summary>
+    [HttpGet("inspections")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<StaffAssignedInspectionDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetAssignedInspections(
+        [FromQuery] long? facilityId,
+        [FromQuery] string? status,
+        [FromQuery] DateOnly? date,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+            return Unauthorized(ApiResponse.Fail("Cannot identify user identity from token."));
+
+        var list = await _staffService.GetAssignedInspectionsAsync(userId, facilityId, status, date, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<StaffAssignedInspectionDto>>.Ok(list, "Assigned inspections retrieved successfully."));
+    }
     // ==========================================
 
     /// <summary>

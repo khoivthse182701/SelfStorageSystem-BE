@@ -124,14 +124,72 @@ public class ManagerAgreementDetailDto
     public string CustomerEmail { get; set; } = string.Empty;
     public long StorageUnitId { get; set; }
     public string UnitCode { get; set; } = string.Empty;
+    public string? UnitTypeName { get; set; }
+    public long FacilityId { get; set; }
     public DateOnly StartDate { get; set; }
     public DateOnly EndDate { get; set; }
+    public DateOnly? RequestedMoveOutDate { get; set; }
+    public bool IsMoveOutRequested { get; set; }
     public decimal MonthlyRent { get; set; }
     public decimal DepositAmount { get; set; }
     public string Status { get; set; } = string.Empty;
     public decimal TotalDebt { get; set; }
+    public string? InspectionStatus { get; set; }
+    public string? PostInspectionStatus { get; set; }
+    public long? AssignedStaffId { get; set; }
+    public string? AssignedStaffName { get; set; }
+    public decimal? DamageCost { get; set; }
+    public decimal? RefundAmount { get; set; }
+    public decimal? PenaltyAmount { get; set; }
+    public long? RefundId { get; set; }
+    public string? BankName { get; set; }
+    public string? BankAccountNumber { get; set; }
+    public string? BankAccountHolder { get; set; }
+    public string? Notes { get; set; }
     public List<ManagerAgreementInvoiceItemDto> Invoices { get; set; } = new();
     public List<StoredItemDto> StoredItems { get; set; } = new();
+
+    // Timestamps
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public DateTimeOffset? SignedAt { get; set; }
+    public DateTimeOffset? CheckedInAt { get; set; }
+    public DateTimeOffset? CheckedOutAt { get; set; }
+    public DateOnly? ActualEndDate { get; set; }
+
+    // Facility details
+    public string? FacilityName { get; set; }
+    public string? FacilityCode { get; set; }
+    public string? FacilityAddress { get; set; }
+    public string? FacilityWard { get; set; }
+    public string? FacilityDistrict { get; set; }
+    public string? FacilityCity { get; set; }
+    public TimeOnly? FacilityOpeningTime { get; set; }
+    public TimeOnly? FacilityClosingTime { get; set; }
+
+    // Customer details
+    public string? CustomerIdentityNumber { get; set; }
+    public string? CustomerAddress { get; set; }
+    public DateOnly? CustomerDateOfBirth { get; set; }
+    public string? EmergencyContactName { get; set; }
+    public string? EmergencyContactPhone { get; set; }
+
+    // Storage Unit & Specifications
+    public string? FloorLabel { get; set; }
+    public string? ZoneLabel { get; set; }
+    public string? UnitPhysicalStatus { get; set; }
+    public decimal? UnitAreaM2 { get; set; }
+    public decimal? UnitVolumeM3 { get; set; }
+    public decimal? UnitWidthM { get; set; }
+    public decimal? UnitLengthM { get; set; }
+    public decimal? UnitHeightM { get; set; }
+    public bool? ClimateControlled { get; set; }
+
+    // Policy & Terms
+    public long? PolicyVersionId { get; set; }
+    public string? PolicyType { get; set; }
+    public string? PolicyVersion { get; set; }
+    public string? PolicyContent { get; set; }
 }
 
 public class ManagerDelinquencyActionDto

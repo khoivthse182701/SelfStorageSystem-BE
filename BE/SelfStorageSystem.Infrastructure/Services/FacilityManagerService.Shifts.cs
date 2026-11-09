@@ -1084,6 +1084,43 @@ public partial class FacilityManagerService : IFacilityManagerService
 
         var now = DateTimeOffset.UtcNow;
 
+        if (request.TicketId.HasValue)
+        {
+            var existingTask = await _dbContext.StaffTasks
+                .FirstOrDefaultAsync(t => t.TicketId == request.TicketId.Value, cancellationToken);
+            if (existingTask != null)
+            {
+                existingTask.ShiftId = request.ShiftId;
+                existingTask.AssignedEmployeeId = request.AssignedEmployeeId;
+                existingTask.TaskType = taskType;
+                existingTask.Title = request.Title.Trim();
+                existingTask.DueAt = request.DueAt;
+                existingTask.Status = status;
+                existingTask.ProgressPercent = progress;
+                existingTask.UpdatedAt = now;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                return new ManagerStaffTaskDto
+                {
+                    Id = existingTask.Id,
+                    FacilityId = existingTask.FacilityId,
+                    ShiftId = existingTask.ShiftId,
+                    AssignedEmployeeId = existingTask.AssignedEmployeeId,
+                    AssignedEmployeeCode = employee?.EmployeeCode,
+                    AssignedEmployeeName = employee?.FullName,
+                    TicketId = existingTask.TicketId,
+                    MaintenanceWorkOrderId = existingTask.MaintenanceWorkOrderId,
+                    TaskType = existingTask.TaskType,
+                    Title = existingTask.Title,
+                    DueAt = existingTask.DueAt,
+                    Status = existingTask.Status,
+                    ProgressPercent = existingTask.ProgressPercent,
+                    CreatedBy = existingTask.CreatedBy,
+                    CreatedAt = existingTask.CreatedAt,
+                    UpdatedAt = existingTask.UpdatedAt
+                };
+            }
+        }
+
         var task = new StaffTask
 
         {
@@ -1119,41 +1156,64 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
         // Đồng bộ tạo SupportTicket để hiển thị trên API GET /api/staff/tickets của Staff
-
         if (!request.TicketId.HasValue)
-
         {
+            var isCurrentUserCustomer = await _dbContext.CustomerProfiles
+                .AnyAsync(c => c.UserId == currentUserId, cancellationToken);
+
+            long ticketCustomerId;
+            if (isCurrentUserCustomer)
+            {
+                ticketCustomerId = currentUserId;
+            }
+            else
+            {
+                var customerId = await _dbContext.RentalAgreements
+                    .Where(a => a.FacilityId == facilityId)
+                    .Select(a => (long?)a.CustomerId)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    ?? await _dbContext.Reservations
+                        .Where(r => r.FacilityId == facilityId)
+                        .Select(r => (long?)r.CustomerId)
+                        .FirstOrDefaultAsync(cancellationToken)
+                    ?? await _dbContext.CustomerProfiles
+                        .Select(c => (long?)c.UserId)
+                        .FirstOrDefaultAsync(cancellationToken);
+
+                if (customerId.HasValue)
+                {
+                    ticketCustomerId = customerId.Value;
+                }
+                else
+                {
+                    var managerProfile = new CustomerProfile
+                    {
+                        UserId = currentUserId,
+                        FullName = "Quản lý cơ sở",
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    _dbContext.CustomerProfiles.Add(managerProfile);
+                    await _dbContext.SaveChangesAsync(cancellationToken);
+                    ticketCustomerId = currentUserId;
+                }
+            }
 
             var syncTicket = new SupportTicket
-
             {
-
                 TicketNo = TicketConstants.GenerateTicketNo(),
-
                 FacilityId = facilityId,
-
-                CustomerId = currentUserId,
-
+                CustomerId = ticketCustomerId,
                 Category = taskType,
-
                 Priority = TicketPriorityConstants.Normal,
-
                 Subject = request.Title.Trim(),
-
                 Description = $"Nhiệm vụ điều phối từ Quản lý cơ sở: {request.Title.Trim()}",
-
                 Status = TicketStatusConstants.Open,
-
                 CreatedAt = now,
-
                 UpdatedAt = now
-
             };
-
             _dbContext.SupportTickets.Add(syncTicket);
-
             await _dbContext.SaveChangesAsync(cancellationToken);
-
             task.TicketId = syncTicket.Id;
 
 

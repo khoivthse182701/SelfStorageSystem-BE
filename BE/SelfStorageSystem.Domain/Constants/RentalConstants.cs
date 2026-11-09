@@ -3,6 +3,7 @@ namespace SelfStorageSystem.Domain.Constants;
 public static class RentalAgreementStatusConstants
 {
     public const string Draft = "draft";
+    public const string Scheduled = "scheduled";
     public const string Active = "active";
     public const string ExpiringSoon = "expiring_soon";
     public const string Overdue = "overdue";
@@ -91,6 +92,19 @@ public static class InspectionStatusConstants
     public const string Failed = "failed";
 
     public const string Passed = "completed";
+}
+
+public static class InspectionTypeConstants
+{
+    public const string CheckIn = "check_in";
+    public const string CheckOut = "check_out";
+    public const string Transfer = "transfer";
+    public const string Security = "security";
+    public const string FireSafety = "fire_safety";
+    public const string Routine = "routine";
+    public const string Incident = "incident";
+
+    public static readonly string[] All = { CheckIn, CheckOut, Transfer, Security, FireSafety, Routine, Incident };
 }
 
 public static class OverallConditionConstants

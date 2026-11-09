@@ -31,6 +31,9 @@ public static class AdminErrors
     public static readonly Error AssignmentNotFound =
         Error.NotFound("Admin.AssignmentNotFound", "The staff facility assignment record was not found.");
 
+        public static readonly Error AssignmentAlreadyRevoked =
+        Error.Conflict("Admin.AssignmentAlreadyRevoked", "The staff facility assignment has already been revoked or ended.");
+
     public static readonly Error AssignmentAlreadyExists =
         Error.Conflict("Admin.AssignmentAlreadyExists", "The employee already has an active assignment for this facility.");
 

@@ -52,9 +52,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
 
             CheckProhibitedContent(itemDto.ItemName, $"{itemDto.Description} {itemDto.LocationNote}");
 
-            var category = string.IsNullOrWhiteSpace(itemDto.Category) 
-                ? StoredItemCategoryConstants.Other 
-                : itemDto.Category.ToLowerInvariant();
+            var category = NormalizeCategory(itemDto.Category);
 
             if (!StoredItemCategoryConstants.All.Contains(category))
                 throw AppException.FromError(StoredItemErrors.InvalidCategory);
@@ -116,8 +114,8 @@ public class CustomerStoredItemService : ICustomerStoredItemService
 
         if (!string.IsNullOrWhiteSpace(category))
         {
-            var categoryLower = category.Trim().ToLower();
-            query = query.Where(i => i.Category.ToLower() == categoryLower);
+            var normalizedFilter = NormalizeCategory(category);
+            query = query.Where(i => i.Category.ToLower() == normalizedFilter);
         }
 
         var items = await query
@@ -183,9 +181,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
 
         CheckProhibitedContent(request.ItemName, $"{request.Description} {request.LocationNote}");
 
-        var category = string.IsNullOrWhiteSpace(request.Category)
-            ? StoredItemCategoryConstants.Other
-            : request.Category.ToLowerInvariant();
+        var category = NormalizeCategory(request.Category);
 
         if (!StoredItemCategoryConstants.All.Contains(category))
             throw AppException.FromError(StoredItemErrors.InvalidCategory);
@@ -260,5 +256,18 @@ public class CustomerStoredItemService : ICustomerStoredItemService
                 throw AppException.FromError(StoredItemErrors.ProhibitedItem);
             }
         }
+    }
+    private static string NormalizeCategory(string? rawCategory)
+    {
+        if (string.IsNullOrWhiteSpace(rawCategory))
+            return StoredItemCategoryConstants.Other;
+
+        var cat = rawCategory.Trim().ToLowerInvariant();
+        return cat switch
+        {
+            "business" => StoredItemCategoryConstants.Commercial,
+            "seasonal" => StoredItemCategoryConstants.Personal,
+            _ => cat
+        };
     }
 }

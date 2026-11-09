@@ -133,7 +133,11 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             .AsNoTracking()
             .Include(t => t.Facility)
             .Include(t => t.ServiceRating)
-            .Where(t => t.CustomerId == customerId);
+            .Include(t => t.Agreement)
+            .Where(t => t.CustomerId == customerId)
+            .Where(t => !t.Subject.StartsWith("[INTERNAL]") &&
+                        !(t.Category == MaintenanceCategoryConstants.Cleaning && t.Agreement != null &&
+                          (t.Agreement.Status == RentalAgreementStatusConstants.Terminated || t.Agreement.Status == RentalAgreementStatusConstants.Completed)));
 
         if (!string.IsNullOrWhiteSpace(status))
         {
@@ -174,7 +178,7 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
                     .ThenInclude(u => u.EmployeeProfile)
             .Include(t => t.TicketMessages.Where(m => !m.IsInternal))
                 .ThenInclude(m => m.TicketAttachmentMessages)
-            .FirstOrDefaultAsync(t => t.Id == ticketId && t.CustomerId == customerId, cancellationToken);
+            .FirstOrDefaultAsync(t => t.Id == ticketId && t.CustomerId == customerId && !t.Subject.StartsWith("[INTERNAL]"), cancellationToken);
 
         if (ticket == null)
             throw AppException.FromError(TicketErrors.TicketNotFound);
@@ -254,7 +258,7 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
             throw AppException.FromError(TicketErrors.EmptyMessage);
 
         var ticket = await _dbContext.SupportTickets
-            .FirstOrDefaultAsync(t => t.Id == ticketId && t.CustomerId == customerId, cancellationToken);
+            .FirstOrDefaultAsync(t => t.Id == ticketId && t.CustomerId == customerId && !t.Subject.StartsWith("[INTERNAL]"), cancellationToken);
 
         if (ticket == null)
             throw AppException.FromError(TicketErrors.TicketNotFound);
@@ -330,7 +334,7 @@ public class CustomerSupportTicketService : ICustomerSupportTicketService
 
         var ticket = await _dbContext.SupportTickets
             .Include(t => t.ServiceRating)
-            .FirstOrDefaultAsync(t => t.Id == ticketId && t.CustomerId == customerId, cancellationToken);
+            .FirstOrDefaultAsync(t => t.Id == ticketId && t.CustomerId == customerId && !t.Subject.StartsWith("[INTERNAL]"), cancellationToken);
 
         if (ticket == null)
             throw AppException.FromError(TicketErrors.TicketNotFound);

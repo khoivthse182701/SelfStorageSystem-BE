@@ -20,6 +20,7 @@ public class VietQrConfig
     public string BankCode { get; set; } = "MBBank";
     public string AccountNo { get; set; } = "0817495759";
     public string AccountName { get; set; } = "VO THAI HOANG KHOI";
-    public string Template { get; set; } = "compact";
-    public bool ShowInfo { get; set; } = true;
+    public string Template { get; set; } = "qronly";
+    public bool ShowInfo { get; set; } = false;
 }
+

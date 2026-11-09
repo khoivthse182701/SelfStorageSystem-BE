@@ -148,6 +148,35 @@ public class StaffInspectionResultDto
     public DateTimeOffset CompletedAt { get; set; }
 }
 
+public class StaffAssignedInspectionDto
+{
+    public long Id { get; set; }
+    public long InspectionId => Id;
+    public long AgreementId { get; set; }
+    public string AgreementNo { get; set; } = string.Empty;
+    public long FacilityId { get; set; }
+    public string FacilityName { get; set; } = string.Empty;
+    public long StorageUnitId { get; set; }
+    public string UnitCode { get; set; } = string.Empty;
+    public long CustomerId { get; set; }
+    public string CustomerName { get; set; } = string.Empty;
+    public string? CustomerPhone { get; set; }
+    public decimal DepositAmount { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string InspectionType { get; set; } = string.Empty;
+    public string? OverallCondition { get; set; }
+    public string? Summary { get; set; }
+    public DateTimeOffset? InspectedAt { get; set; }
+    public DateTimeOffset? ScheduledAt { get; set; }
+    public string? ExpirationDate { get; set; }
+    public string? RequestedMoveOutDate { get; set; }
+    public decimal? RefundAmount { get; set; }
+    public decimal? PenaltyAmount { get; set; }
+    public bool HasDamage { get; set; }
+    public string? RefundMethod { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 public class StaffConfirmRefundPaymentRequest
 {
     [Required]

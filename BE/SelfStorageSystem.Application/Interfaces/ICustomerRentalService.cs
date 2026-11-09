@@ -1,4 +1,4 @@
-using SelfStorageSystem.Contracts.Customer;
+﻿using SelfStorageSystem.Contracts.Customer;
 using SelfStorageSystem.Contracts.Customer.Rentals;
 
 namespace SelfStorageSystem.Application.Interfaces;
@@ -19,6 +19,7 @@ public interface ICustomerRentalService
     Task RevokeAuthorizedMemberAsync(long customerId, long agreementId, long memberId, CancellationToken cancellationToken = default);
     Task<TransferPreviewDto> GetTransferPreviewAsync(long customerId, long agreementId, long? requestedFacilityId = null, long? requestedUnitTypeId = null, DateOnly? moveOutDate = null, CancellationToken cancellationToken = default);
     Task<UnitTransferRequestDto> RequestUnitTransferAsync(long customerId, long agreementId, CreateTransferRequest request, CancellationToken cancellationToken = default);
+    Task<UnitTransferRequestDto?> GetLatestTransferRequestAsync(long customerId, long agreementId, CancellationToken cancellationToken = default);
     Task<UnitTransferRequestDto> RescheduleTransferAsync(long customerId, long transferRequestId, RescheduleTransferRequest request, CancellationToken cancellationToken = default);
     Task<bool> CancelTransferRequestAsync(long customerId, long transferRequestId, CancellationToken cancellationToken = default);
     Task<bool> CancelRenewalAsync(long customerId, long renewalId, CancellationToken cancellationToken = default);
@@ -29,5 +30,10 @@ public interface ICustomerRentalService
         long customerId,
         long refundId,
         CustomerSubmitRefundBankInfoRequest request,
+        CancellationToken cancellationToken = default);
+
+    // Refunds still waiting for the customer to provide bank info (works even after the agreement ended).
+    Task<IReadOnlyList<CustomerPendingRefundDto>> GetPendingBankInfoRefundsAsync(
+        long customerId,
         CancellationToken cancellationToken = default);
 }

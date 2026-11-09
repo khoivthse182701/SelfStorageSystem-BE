@@ -71,6 +71,7 @@ public partial class RentalAgreement
 
     public virtual ICollection<SupportTicket> SupportTicketAgreements { get; set; } = new List<SupportTicket>();
 
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public virtual ICollection<SupportTicket> SupportTicketRentalAgreements { get; set; } = new List<SupportTicket>();
 
     public virtual ICollection<UnitAllocation> UnitAllocations { get; set; } = new List<UnitAllocation>();

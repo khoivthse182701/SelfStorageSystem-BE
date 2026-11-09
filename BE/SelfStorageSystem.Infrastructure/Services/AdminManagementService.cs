@@ -42,6 +42,7 @@ public class AdminManagementService : IAdminManagementService
 
         var usersQuery = _dbContext.Users
             .AsNoTracking()
+            .AsSplitQuery()
             .Include(u => u.CustomerProfile)
             .Include(u => u.EmployeeProfile)
             .Include(u => u.UserRoleUsers)
@@ -93,6 +94,7 @@ public class AdminManagementService : IAdminManagementService
 
         var users = await usersQuery
             .OrderByDescending(u => u.CreatedAt)
+            .ThenByDescending(u => u.Id)
             .Skip((pageNumber - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
@@ -244,7 +246,23 @@ public class AdminManagementService : IAdminManagementService
         };
     }
 
-    public async Task<AdminUserDetailDto> CreateInternalUserAsync(
+        private async Task<string> GenerateUniqueEmployeeCodeAsync(CancellationToken cancellationToken)
+    {
+        var random = new Random();
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var baseNum = (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + random.Next(1, 9999)) % AdminConstants.AutoEmployeeCodeModulo;
+            var code = $"{AdminConstants.DefaultEmployeeCodePrefix}{baseNum:D6}";
+            var exists = await _dbContext.EmployeeProfiles.AnyAsync(ep => ep.EmployeeCode == code, cancellationToken);
+            if (!exists)
+            {
+                return code;
+            }
+        }
+        return $"{AdminConstants.DefaultEmployeeCodePrefix}{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
+    }
+
+public async Task<AdminUserDetailDto> CreateInternalUserAsync(
         AdminCreateUserRequest request,
         long adminUserId,
         CancellationToken cancellationToken = default)
@@ -319,15 +337,19 @@ public class AdminManagementService : IAdminManagementService
         }
         else
         {
-            // Generate unique employee code if not supplied
-            var employeeCode = !string.IsNullOrWhiteSpace(request.EmployeeCode) 
-                ? request.EmployeeCode.Trim().ToUpperInvariant() 
-                : $"{AdminConstants.DefaultEmployeeCodePrefix}{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % AdminConstants.AutoEmployeeCodeModulo:D6}";
-
-            var codeExists = await _dbContext.EmployeeProfiles.AnyAsync(ep => ep.EmployeeCode == employeeCode, cancellationToken);
-            if (codeExists)
+            string employeeCode;
+            if (!string.IsNullOrWhiteSpace(request.EmployeeCode))
             {
-                throw AppException.FromError(AdminErrors.EmployeeCodeAlreadyExists);
+                employeeCode = request.EmployeeCode.Trim().ToUpperInvariant();
+                var codeExists = await _dbContext.EmployeeProfiles.AnyAsync(ep => ep.EmployeeCode == employeeCode, cancellationToken);
+                if (codeExists)
+                {
+                    throw AppException.FromError(AdminErrors.EmployeeCodeAlreadyExists);
+                }
+            }
+            else
+            {
+                employeeCode = await GenerateUniqueEmployeeCodeAsync(cancellationToken);
             }
 
             employeeProfile = new EmployeeProfile
@@ -528,7 +550,7 @@ public class AdminManagementService : IAdminManagementService
         var hasEmployeeRole = requestedRoleCodes.Any(r => AdminConstants.ValidStaffAssignmentRoles.Contains(r));
         if (hasEmployeeRole && user.EmployeeProfile == null)
         {
-            var employeeCode = $"{AdminConstants.DefaultEmployeeCodePrefix}{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % AdminConstants.AutoEmployeeCodeModulo:D6}";
+            var employeeCode = await GenerateUniqueEmployeeCodeAsync(cancellationToken);
             user.EmployeeProfile = new EmployeeProfile
             {
                 UserId = user.Id,
@@ -565,6 +587,23 @@ public class AdminManagementService : IAdminManagementService
                 a.EndsAt = now;
             }
         }
+        else if (hasEmployeeRole && user.EmployeeProfile != null)
+        {
+            var isManagerNow = requestedRoleCodes.Contains(RoleConstants.FacilityManager);
+            var expectedAssignmentRole = isManagerNow ? StaffAssignmentRoles.FacilityManager : StaffAssignmentRoles.FacilityStaff;
+
+            var activeAssignments = await _dbContext.StaffFacilityAssignments
+                .Where(sfa => sfa.EmployeeId == user.EmployeeProfile.UserId && (sfa.EndsAt == null || sfa.EndsAt > now))
+                .ToListAsync(cancellationToken);
+
+            foreach (var a in activeAssignments)
+            {
+                if (a.AssignmentRole != expectedAssignmentRole)
+                {
+                    a.AssignmentRole = expectedAssignmentRole;
+                }
+            }
+        }
 
         user.UpdatedAt = now;
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -594,6 +633,11 @@ public class AdminManagementService : IAdminManagementService
         long adminUserId,
         CancellationToken cancellationToken = default)
     {
+        var userRoleCodes = await _dbContext.UserRoles
+            .Where(ur => ur.UserId == request.EmployeeId)
+            .Select(ur => ur.Role.Code)
+            .ToListAsync(cancellationToken);
+
         string normalizedAssignmentRole;
         if (!string.IsNullOrWhiteSpace(request.AssignmentRole))
         {
@@ -601,17 +645,24 @@ public class AdminManagementService : IAdminManagementService
         }
         else
         {
-            var userRoleCodes = await _dbContext.UserRoles
-                .Where(ur => ur.UserId == request.EmployeeId)
-                .Select(ur => ur.Role.Code)
-                .ToListAsync(cancellationToken);
-
             normalizedAssignmentRole = userRoleCodes.Contains(RoleConstants.FacilityManager)
                 ? StaffAssignmentRoles.FacilityManager
                 : StaffAssignmentRoles.FacilityStaff;
         }
 
         if (!AdminConstants.ValidStaffAssignmentRoles.Contains(normalizedAssignmentRole))
+        {
+            throw AppException.FromError(AdminErrors.InvalidAssignmentRole);
+        }
+
+        var hasMatchingRole = normalizedAssignmentRole switch
+        {
+            StaffAssignmentRoles.FacilityManager => userRoleCodes.Contains(RoleConstants.FacilityManager),
+            StaffAssignmentRoles.FacilityStaff => userRoleCodes.Contains(RoleConstants.FacilityStaff) || userRoleCodes.Contains(RoleConstants.FacilityManager),
+            _ => false
+        };
+
+        if (!hasMatchingRole)
         {
             throw AppException.FromError(AdminErrors.InvalidAssignmentRole);
         }
@@ -722,9 +773,15 @@ public class AdminManagementService : IAdminManagementService
             throw AppException.FromError(AdminErrors.AssignmentNotFound);
         }
 
+        var now = DateTimeOffset.UtcNow;
+        if (assignment.EndsAt.HasValue && assignment.EndsAt.Value <= now)
+        {
+            throw AppException.FromError(AdminErrors.AssignmentAlreadyRevoked);
+        }
+
         var summary = $"EmployeeId: {assignment.EmployeeId}, FacilityId: {assignment.FacilityId}, Role: {assignment.AssignmentRole}";
 
-        assignment.EndsAt = DateTimeOffset.UtcNow;
+        assignment.EndsAt = now;
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         await RecordAuditLogAsync(
@@ -767,13 +824,14 @@ public class AdminManagementService : IAdminManagementService
         if (!string.IsNullOrWhiteSpace(query.SearchKeyword))
         {
             var kw = query.SearchKeyword.Trim();
+            var kwLower = kw.ToLower();
             if (long.TryParse(kw, out var numId))
             {
-                auditQuery = auditQuery.Where(a => a.EntityId == kw || a.ActorUserId == numId);
+                auditQuery = auditQuery.Where(a => a.EntityId == kw || a.ActorUserId == numId || (a.ActorUser != null && a.ActorUser.Email.ToLower().Contains(kwLower)));
             }
             else
             {
-                auditQuery = auditQuery.Where(a => a.EntityId == kw || a.Action.Contains(kw) || a.EntityType.Contains(kw));
+                auditQuery = auditQuery.Where(a => a.EntityId == kw || a.Action.Contains(kw) || a.EntityType.Contains(kw) || (a.ActorUser != null && a.ActorUser.Email.ToLower().Contains(kwLower)));
             }
         }
         else if (!string.IsNullOrWhiteSpace(query.EntityId) && query.ActorUserId.HasValue && query.EntityId == query.ActorUserId.Value.ToString())
@@ -998,21 +1056,34 @@ public class AdminManagementService : IAdminManagementService
                         (p.PaidAt == null && p.CreatedAt >= firstDayLastMonth && p.CreatedAt < firstDayThisMonth))
             .SumAsync(p => (decimal?)p.Amount, cancellationToken) ?? 0m;
 
-        var totalInvoices = await _dbContext.Invoices.CountAsync(cancellationToken);
-        var paidInvoices = await _dbContext.Invoices.CountAsync(i => i.Status == InvoiceStatusConstants.Paid, cancellationToken);
-        var overdueInvoices = await _dbContext.Invoices.CountAsync(i => i.Status == InvoiceStatusConstants.Overdue, cancellationToken);
-        var openInvoices = await _dbContext.Invoices.CountAsync(i => i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.PartiallyPaid, cancellationToken);
+        var invoiceStatusCounts = await _dbContext.Invoices
+            .AsNoTracking()
+            .GroupBy(i => i.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        var totalInvoices = invoiceStatusCounts.Sum(x => x.Count);
+        var paidInvoices = invoiceStatusCounts.Where(x => x.Status == InvoiceStatusConstants.Paid).Sum(x => x.Count);
+        var overdueInvoices = invoiceStatusCounts.Where(x => x.Status == InvoiceStatusConstants.Overdue).Sum(x => x.Count);
+        var openInvoices = invoiceStatusCounts.Where(x => x.Status == InvoiceStatusConstants.Open || x.Status == InvoiceStatusConstants.PartiallyPaid).Sum(x => x.Count);
 
         // 2. Capacity & Occupancy KPIs
         var totalFacilities = await _dbContext.Facilities.CountAsync(cancellationToken);
-        var totalUnits = await _dbContext.StorageUnits.CountAsync(cancellationToken);
-        var occupiedUnits = await _dbContext.StorageUnits.CountAsync(u => u.PhysicalStatus == StorageUnitStatusConstants.Occupied, cancellationToken);
-        var reservedUnits = await _dbContext.StorageUnits.CountAsync(u => u.PhysicalStatus == StorageUnitStatusConstants.Reserved, cancellationToken);
-        var availableUnits = await _dbContext.StorageUnits.CountAsync(u => u.PhysicalStatus == StorageUnitStatusConstants.Available, cancellationToken);
-        var maintenanceUnits = await _dbContext.StorageUnits.CountAsync(u =>
-            u.PhysicalStatus == StorageUnitStatusConstants.Maintenance ||
-            u.PhysicalStatus == StorageUnitStatusConstants.OutOfService ||
-            u.PhysicalStatus == StorageUnitStatusConstants.PendingInspection, cancellationToken);
+
+        var unitStatusCounts = await _dbContext.StorageUnits
+            .AsNoTracking()
+            .GroupBy(u => u.PhysicalStatus)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        var totalUnits = unitStatusCounts.Sum(x => x.Count);
+        var occupiedUnits = unitStatusCounts.Where(x => x.Status == StorageUnitStatusConstants.Occupied).Sum(x => x.Count);
+        var reservedUnits = unitStatusCounts.Where(x => x.Status == StorageUnitStatusConstants.Reserved).Sum(x => x.Count);
+        var availableUnits = unitStatusCounts.Where(x => x.Status == StorageUnitStatusConstants.Available).Sum(x => x.Count);
+        var maintenanceUnits = unitStatusCounts.Where(x =>
+            x.Status == StorageUnitStatusConstants.Maintenance ||
+            x.Status == StorageUnitStatusConstants.OutOfService ||
+            x.Status == StorageUnitStatusConstants.PendingInspection).Sum(x => x.Count);
 
         var systemOccupancyRate = totalUnits > 0
             ? Math.Round((double)occupiedUnits / totalUnits * 100.0, 2)
@@ -1024,26 +1095,54 @@ public class AdminManagementService : IAdminManagementService
         var totalStaff = await _dbContext.EmployeeProfiles.CountAsync(cancellationToken);
         var activeRentals = await _dbContext.RentalAgreements.CountAsync(r => r.Status == RentalAgreementStatusConstants.Active, cancellationToken);
 
-        // 4. Facility Breakdown
-        var facilityBreakdown = await _dbContext.Facilities
+        // 4. Facility Breakdown (Optimized: grouped unit counts instead of 5 correlated subqueries per row)
+        var facilities = await _dbContext.Facilities
             .AsNoTracking()
             .OrderBy(f => f.Name)
-            .Select(f => new AdminFacilityOccupancyBreakdownDto
+            .Select(f => new { f.Id, f.Code, f.Name, f.City, f.Status })
+            .ToListAsync(cancellationToken);
+
+        var facilityUnitStats = await _dbContext.StorageUnits
+            .AsNoTracking()
+            .GroupBy(u => new { u.FacilityId, u.PhysicalStatus })
+            .Select(g => new { g.Key.FacilityId, g.Key.PhysicalStatus, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        var statsByFacility = facilityUnitStats
+            .GroupBy(s => s.FacilityId)
+            .ToDictionary(
+                g => g.Key,
+                g => new
+                {
+                    Total = g.Sum(x => x.Count),
+                    Occupied = g.Where(x => x.PhysicalStatus == StorageUnitStatusConstants.Occupied).Sum(x => x.Count),
+                    Reserved = g.Where(x => x.PhysicalStatus == StorageUnitStatusConstants.Reserved).Sum(x => x.Count),
+                    Available = g.Where(x => x.PhysicalStatus == StorageUnitStatusConstants.Available).Sum(x => x.Count)
+                });
+
+        var facilityBreakdown = facilities.Select(f =>
+        {
+            statsByFacility.TryGetValue(f.Id, out var stats);
+            var total = stats?.Total ?? 0;
+            var occupied = stats?.Occupied ?? 0;
+            var reserved = stats?.Reserved ?? 0;
+            var available = stats?.Available ?? 0;
+            var occupancyRate = total > 0 ? Math.Round((double)occupied / total * 100.0, 2) : 0.0;
+
+            return new AdminFacilityOccupancyBreakdownDto
             {
                 FacilityId = f.Id,
                 FacilityCode = f.Code,
                 FacilityName = f.Name,
                 City = f.City,
                 Status = f.Status,
-                TotalUnits = f.StorageUnits.Count(),
-                OccupiedUnits = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Occupied),
-                ReservedUnits = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Reserved),
-                AvailableUnits = f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Available),
-                OccupancyRate = f.StorageUnits.Any()
-                    ? Math.Round((double)f.StorageUnits.Count(u => u.PhysicalStatus == StorageUnitStatusConstants.Occupied) / f.StorageUnits.Count() * 100.0, 2)
-                    : 0.0
-            })
-            .ToListAsync(cancellationToken);
+                TotalUnits = total,
+                OccupiedUnits = occupied,
+                ReservedUnits = reserved,
+                AvailableUnits = available,
+                OccupancyRate = occupancyRate
+            };
+        }).ToList();
 
         return new AdminDashboardOverviewDto
         {
@@ -1181,7 +1280,7 @@ public class AdminManagementService : IAdminManagementService
             .AsNoTracking()
             .Include(sfa => sfa.Employee)
             .Include(sfa => sfa.AssignedByNavigation)
-            .Where(sfa => sfa.FacilityId == id && (sfa.EndsAt == null || sfa.EndsAt > now))
+            .Where(sfa => sfa.FacilityId == id && sfa.StartsAt <= now && (sfa.EndsAt == null || sfa.EndsAt > now))
             .OrderBy(sfa => sfa.AssignmentRole)
             .ThenBy(sfa => sfa.Employee.FullName)
             .ToListAsync(cancellationToken);
@@ -1296,6 +1395,11 @@ public class AdminManagementService : IAdminManagementService
             throw AppException.FromError(AdminErrors.DuplicateFacilityCode);
         }
 
+        if (status == FacilityStatusConstants.Inactive && facility.Status != FacilityStatusConstants.Inactive)
+        {
+            await EnsureFacilityCanBeDeactivatedAsync(id, cancellationToken);
+        }
+
         var oldValues = DescribeFacility(facility);
         var now = DateTimeOffset.UtcNow;
 
@@ -1339,12 +1443,9 @@ public class AdminManagementService : IAdminManagementService
             throw AppException.FromError(AdminErrors.FacilityNotFound);
         }
 
-        if (status == FacilityStatusConstants.Inactive)
+        if (status == FacilityStatusConstants.Inactive && facility.Status != FacilityStatusConstants.Inactive)
         {
-            var hasActiveRentals = await _dbContext.RentalAgreements.AnyAsync(a => a.FacilityId == id && (a.Status == RentalAgreementStatusConstants.Active || a.Status == RentalAgreementStatusConstants.ExpiringSoon), cancellationToken);
-            var hasReservedUnits = await _dbContext.StorageUnits.AnyAsync(u => u.FacilityId == id && (u.PhysicalStatus == StorageUnitStatusConstants.Reserved || u.PhysicalStatus == StorageUnitStatusConstants.Occupied), cancellationToken);
-            var hasInTransitTransfers = await _dbContext.UnitTransferRequests.AnyAsync(t => (t.FromUnit.FacilityId == id || t.RequestedFacilityId == id) && (t.Status == TransferRequestStatusConstants.MovedOutInTransit || t.Status == TransferRequestStatusConstants.PendingPayment || t.Status == TransferRequestStatusConstants.Paid || t.Status == TransferRequestStatusConstants.Scheduled || t.Status == TransferRequestStatusConstants.Pending), cancellationToken);
-            if (hasActiveRentals || hasReservedUnits || hasInTransitTransfers) throw AppException.FromError(AdminErrors.FacilityHasActiveOperations);
+            await EnsureFacilityCanBeDeactivatedAsync(id, cancellationToken);
         }
 
         var oldStatus = facility.Status;
@@ -1369,6 +1470,29 @@ public class AdminManagementService : IAdminManagementService
         }
 
         return await GetFacilityDetailAsync(facility.Id, cancellationToken);
+    }
+
+    private async Task EnsureFacilityCanBeDeactivatedAsync(long facilityId, CancellationToken cancellationToken)
+    {
+        var hasActiveRentals = await _dbContext.RentalAgreements.AnyAsync(
+            a => a.FacilityId == facilityId && (a.Status == RentalAgreementStatusConstants.Active || a.Status == RentalAgreementStatusConstants.ExpiringSoon), 
+            cancellationToken);
+        var hasReservedUnits = await _dbContext.StorageUnits.AnyAsync(
+            u => u.FacilityId == facilityId && (u.PhysicalStatus == StorageUnitStatusConstants.Reserved || u.PhysicalStatus == StorageUnitStatusConstants.Occupied), 
+            cancellationToken);
+        var hasInTransitTransfers = await _dbContext.UnitTransferRequests.AnyAsync(
+            t => (t.FromUnit.FacilityId == facilityId || t.RequestedFacilityId == facilityId) && 
+                 (t.Status == TransferRequestStatusConstants.MovedOutInTransit || 
+                  t.Status == TransferRequestStatusConstants.PendingPayment || 
+                  t.Status == TransferRequestStatusConstants.Paid || 
+                  t.Status == TransferRequestStatusConstants.Scheduled || 
+                  t.Status == TransferRequestStatusConstants.Pending), 
+            cancellationToken);
+
+        if (hasActiveRentals || hasReservedUnits || hasInTransitTransfers)
+        {
+            throw AppException.FromError(AdminErrors.FacilityHasActiveOperations);
+        }
     }
 
     private static (string Code, string Status, string Timezone) NormalizeFacilityInput(AdminCreateFacilityRequest request)
@@ -1424,9 +1548,13 @@ public class AdminManagementService : IAdminManagementService
         try
         {
             var httpContext = _httpContextAccessor?.HttpContext;
-            var resolvedIp = ipAddress 
-                ?? httpContext?.Request.Headers["X-Forwarded-For"].FirstOrDefault() 
-                ?? httpContext?.Connection.RemoteIpAddress?.ToString();
+            var rawForwarded = httpContext?.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+            var clientIp = rawForwarded?.Split(',')[0].Trim();
+            var resolvedIp = ipAddress ?? clientIp ?? httpContext?.Connection.RemoteIpAddress?.ToString();
+            if (resolvedIp != null && resolvedIp.Length > 45)
+            {
+                resolvedIp = resolvedIp[..45];
+            }
             var requestId = httpContext?.TraceIdentifier;
 
             var auditLog = new AuditLog

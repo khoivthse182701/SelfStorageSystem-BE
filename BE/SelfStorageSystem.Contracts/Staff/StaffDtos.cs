@@ -302,7 +302,8 @@ public record StaffTaskDto(
 
 public record UpdateStaffTaskStatusRequest(
     string Status,
-    short? ProgressPercent = null
+    short? ProgressPercent = null,
+    string? ReportNote = null
 );
 
 public record StaffReservationLookupDto(
@@ -371,7 +372,11 @@ public record StaffMoveOutSummaryDto(
     DateOnly RequestedMoveOutDate,
     string Status,
     string? Reason,
-    DateTimeOffset CreatedAt
+    DateTimeOffset CreatedAt,
+    long? RefundId = null,
+    decimal? RefundAmount = null,
+    string? RefundMethod = null,
+    string? PayoutStatus = null
 );
 
 public record InspectMoveOutRequest(

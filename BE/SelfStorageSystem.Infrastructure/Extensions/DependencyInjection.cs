@@ -44,6 +44,9 @@ public static class DependencyInjection
         services.Configure<RentalSettings>(configuration.GetSection(RentalSettings.SectionName));
         services.Configure<MediaSettings>(configuration.GetSection(MediaSettings.SectionName));
 
+        var pinProtectionKey = configuration["PIN_PROTECTION_KEY"] ?? configuration["SecuritySettings:PinProtectionKey"];
+        PinProtectionHelper.Initialize(pinProtectionKey);
+
         services.AddHttpContextAccessor();
         services.AddScoped<IJwtTokenService, JwtTokenService>();
         services.AddScoped<IEmailService, EmailService>();

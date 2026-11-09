@@ -29,7 +29,7 @@ public interface IFacilityStaffService
     // ==========================================
     // 2. WALK-IN BOOKING AT COUNTER (Nhom 2) - [DA VO HIEU HOA]
     // ==========================================
-    [Obsolete("Tinh nang dat thue tai quay (Walk-in booking) da bi vo hieu hoa theo Module 1: Cat bo tinh nang thua.")]
+
     Task<StaffWalkInBookingResponse> CreateWalkInBookingAsync(
         long employeeUserId,
         StaffWalkInBookingRequest request,
@@ -102,6 +102,13 @@ public interface IFacilityStaffService
     // ==========================================
     // 6. INSPECTION & DEPOSIT SETTLEMENT (MODULE 4)
     // ==========================================
+    Task<IReadOnlyList<StaffAssignedInspectionDto>> GetAssignedInspectionsAsync(
+        long employeeUserId,
+        long? facilityId = null,
+        string? status = null,
+        DateOnly? date = null,
+        CancellationToken cancellationToken = default);
+
     Task<StaffInspectionResultDto> SubmitInspectionReportAsync(
         long employeeUserId,
         long inspectionId,
@@ -129,11 +136,12 @@ public interface IFacilityStaffService
     // ==========================================
     Task<IReadOnlyList<StaffTaskDto>> GetStaffTasksAsync(long employeeUserId, long? facilityId = null, CancellationToken cancellationToken = default);
     Task<StaffTaskDto> UpdateStaffTaskStatusAsync(long employeeUserId, long taskId, UpdateStaffTaskStatusRequest request, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<StaffReservationLookupDto>> LookupReservationsAsync(string? query, long? facilityId = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<StaffReservationLookupDto>> LookupReservationsAsync(long employeeUserId, string? query, long? facilityId = null, CancellationToken cancellationToken = default);
     Task AssignUnitToReservationAsync(long employeeUserId, long reservationId, AssignUnitToReservationRequest request, CancellationToken cancellationToken = default);
     Task<StaffHandoverResultDto> CreateHandoverAsync(long employeeUserId, CreateStaffHandoverRequest request, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<StaffMoveOutSummaryDto>> GetMoveOutsAsync(long? facilityId = null, DateOnly? date = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<StaffMoveOutSummaryDto>> GetMoveOutsAsync(long employeeUserId, long? facilityId = null, DateOnly? date = null, CancellationToken cancellationToken = default);
     Task<InspectMoveOutResultDto> InspectMoveOutAsync(long employeeUserId, long moveOutId, InspectMoveOutRequest request, CancellationToken cancellationToken = default);
+    [Obsolete("Use GetLogisticsTicketsAsync instead.")]
     Task<IReadOnlyList<StaffSupportTicketDto>> GetFacilityTicketsAsync(long? facilityId = null, string? status = null, CancellationToken cancellationToken = default);
     Task AssignTicketToMeAsync(long employeeUserId, long ticketId, CancellationToken cancellationToken = default);
     Task<StaffTicketMessageDto> AddStaffTicketMessageAsync(long employeeUserId, long ticketId, AddStaffTicketMessageRequest request, CancellationToken cancellationToken = default);
@@ -141,9 +149,9 @@ public interface IFacilityStaffService
     Task<IReadOnlyList<StaffTicketMessageDto>> GetTicketMessagesAsync(long ticketId, CancellationToken cancellationToken = default);
     Task<TicketChargeProposalDto> ProposeTicketChargeAsync(long employeeUserId, long ticketId, ProposeTicketChargeRequest request, CancellationToken cancellationToken = default);
     Task ResolveTicketAsync(long employeeUserId, long ticketId, ResolveTicketRequest request, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<StaffFacilityUnitDto>> GetFacilityUnitsAsync(long facilityId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<StaffFacilityUnitDto>> GetFacilityUnitsAsync(long employeeUserId, long facilityId, CancellationToken cancellationToken = default);
     Task UpdateUnitStatusAsync(long employeeUserId, long unitId, UpdateUnitStatusRequest request, CancellationToken cancellationToken = default);
     Task<MaintenanceWorkOrderDto> CreateMaintenanceOrderAsync(long employeeUserId, long unitId, CreateMaintenanceWorkOrderRequest request, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<OverdueAgreementDto>> GetOverdueAgreementsAsync(long? facilityId = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<OverdueAgreementDto>> GetOverdueAgreementsAsync(long employeeUserId, long? facilityId = null, CancellationToken cancellationToken = default);
     Task LockAgreementAccessAsync(long employeeUserId, long agreementId, LockAccessRequest request, CancellationToken cancellationToken = default);
 }

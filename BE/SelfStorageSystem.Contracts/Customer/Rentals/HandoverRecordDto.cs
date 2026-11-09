@@ -6,6 +6,22 @@ public class HandoverRecordDto
     public long AgreementId { get; set; }
     public string AgreementNo { get; set; } = null!;
     public string HandoverType { get; set; } = null!;
+    public string? CustomerName { get; set; }
+    public string? CustomerEmail { get; set; }
+    public string? CustomerPhone { get; set; }
+    public string? FacilityName { get; set; }
+    public string? FacilityAddress { get; set; }
+    public string? FacilityCity { get; set; }
+    public string? UnitCode { get; set; }
+    public string? UnitTypeName { get; set; }
+    public string? FloorLabel { get; set; }
+    public string? ZoneLabel { get; set; }
+    public string? Dimensions { get; set; }
+    public decimal? AreaM2 { get; set; }
+    public decimal? VolumeM3 { get; set; }
+    public DateOnly? RentalStartDate { get; set; }
+    public DateOnly? RentalEndDate { get; set; }
+    public string? StaffEmployeeCode { get; set; }
     public string? CustomerSignatureRef { get; set; }
     public DateTimeOffset? CustomerSignedAt { get; set; }
     public string? StaffSignatureRef { get; set; }

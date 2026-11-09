@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using SelfStorageSystem.Infrastructure.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
@@ -114,9 +115,23 @@ public class CustomerPaymentService : ICustomerPaymentService
                     .ThenInclude(r => r!.UnitType)
                 .FirstOrDefaultAsync(i => i.Id == request.InvoiceId!.Value && i.CustomerId == customerId, cancellationToken);
             reservation = invoice?.Reservation;
+            // Invoice links must enforce the same booking rules as reservation links.
+            if (reservation != null)
+            {
+                if (reservation.Status == ReservationStatusConstants.Cancelled ||
+                    reservation.Status == ReservationStatusConstants.Expired || reservation.HoldUntil < now)
+                {
+                    throw AppException.FromError(PaymentErrors.HoldExpired);
+                }
+                if (reservation.Status == ReservationStatusConstants.Confirmed ||
+                    reservation.Status == ReservationStatusConstants.Converted)
+                {
+                    throw AppException.FromError(PaymentErrors.AlreadyConfirmed);
+                }
+            }
         }
 
-        if (invoice == null || (invoice.Status != InvoiceStatusConstants.Open && invoice.Status != InvoiceStatusConstants.Draft && invoice.Status != InvoiceStatusConstants.PartiallyPaid))
+        if (invoice == null || (invoice.Status != InvoiceStatusConstants.Open && invoice.Status != InvoiceStatusConstants.Draft && invoice.Status != InvoiceStatusConstants.PartiallyPaid && invoice.Status != InvoiceStatusConstants.Overdue))
         {
             throw AppException.FromError(PaymentErrors.InvoiceNotFound);
         }
@@ -177,18 +192,7 @@ public class CustomerPaymentService : ICustomerPaymentService
             : SePayConstants.DefaultInvoicePrefix;
         var transferContent = $"{prefix}{invoice.Id}";
 
-        var baseUrl = !string.IsNullOrWhiteSpace(_vietQrConfig.BaseUrl)
-            ? _vietQrConfig.BaseUrl.TrimEnd('/')
-            : SePayConstants.DefaultBaseUrl;
-
-        var bankCode = Uri.EscapeDataString(_vietQrConfig.BankCode ?? SePayConstants.DefaultBankCode);
-        var accNo = Uri.EscapeDataString(_vietQrConfig.AccountNo ?? string.Empty);
-        var template = Uri.EscapeDataString(_vietQrConfig.Template ?? SePayConstants.DefaultTemplate);
-        var showInfo = _vietQrConfig.ShowInfo ? "true" : "false";
-        var holder = Uri.EscapeDataString(_vietQrConfig.AccountName ?? string.Empty);
-        var memo = Uri.EscapeDataString(transferContent);
-
-        var qrUrl = $"{baseUrl}?bank={bankCode}&acc={accNo}&template={template}&showinfo={showInfo}&holder={holder}&amount={(long)amountToPay}&memo={memo}";
+        var qrUrl = VietQrUrlBuilder.Build(_vietQrConfig, amountToPay, transferContent);
 
         return new CheckoutResponse
         {
@@ -214,8 +218,7 @@ public class CustomerPaymentService : ICustomerPaymentService
 
     private CheckoutResponse BuildCheckoutResponse(long paymentId, long reservationId, long invoiceId, string invoiceNo, decimal amount, int expiresInSeconds, string transferContent)
     {
-        var baseUrl = !string.IsNullOrWhiteSpace(_vietQrConfig.BaseUrl) ? _vietQrConfig.BaseUrl.TrimEnd('/') : SePayConstants.DefaultBaseUrl;
-        var qrUrl = $"{baseUrl}?bank={Uri.EscapeDataString(_vietQrConfig.BankCode ?? SePayConstants.DefaultBankCode)}&acc={Uri.EscapeDataString(_vietQrConfig.AccountNo ?? string.Empty)}&template={Uri.EscapeDataString(_vietQrConfig.Template ?? SePayConstants.DefaultTemplate)}&showinfo={(_vietQrConfig.ShowInfo ? "true" : "false")}&holder={Uri.EscapeDataString(_vietQrConfig.AccountName ?? string.Empty)}&amount={(long)amount}&memo={Uri.EscapeDataString(transferContent)}";
+        var qrUrl = VietQrUrlBuilder.Build(_vietQrConfig, amount, transferContent);
         return new CheckoutResponse { PaymentId = paymentId, ReservationId = reservationId, InvoiceId = invoiceId, InvoiceNo = invoiceNo, Amount = amount, Currency = PaymentConstants.CurrencyVnd, PaymentMethod = PaymentConstants.MethodBankTransfer, ExpiresInSeconds = expiresInSeconds, VietQr = new VietQrPaymentInfo { BankCode = _vietQrConfig.BankCode ?? string.Empty, AccountNo = _vietQrConfig.AccountNo ?? string.Empty, AccountName = _vietQrConfig.AccountName ?? string.Empty, Amount = amount, TransferContent = transferContent, QrImageUrl = qrUrl } };
     }
 
@@ -348,7 +351,19 @@ public class CustomerPaymentService : ICustomerPaymentService
                 if (renewal.Agreement != null)
                 {
                     renewal.Agreement.EndDate = renewal.RequestedEndDate;
+                    if (renewal.Agreement.Status == RentalAgreementStatusConstants.ExpiringSoon)
+                    {
+                        renewal.Agreement.Status = RentalAgreementStatusConstants.Active;
+                    }
                     renewal.Agreement.UpdatedAt = nowTime;
+                }
+
+                var activeAllocations = await _dbContext.UnitAllocations
+                    .Where(ua => ua.AgreementId == renewal.AgreementId && ua.Status == AllocationStatusConstants.Active)
+                    .ToListAsync(cancellationToken);
+                foreach (var alloc in activeAllocations)
+                {
+                    alloc.AllocationEndDate = renewal.RequestedEndDate;
                 }
 
                 _dbContext.IntegrationEvents.Add(new IntegrationEvent
@@ -395,7 +410,10 @@ public class CustomerPaymentService : ICustomerPaymentService
         var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
 
         // 2. Partial Payment Handling: Validate transferred amount against remaining balance
-        if (payload.TransferAmount < remainingBalance)
+        var requiresReconciliation = invoice.Status == InvoiceStatusConstants.Voided ||
+            invoice.Reservation?.Status == ReservationStatusConstants.Cancelled ||
+            invoice.Reservation?.Status == ReservationStatusConstants.Expired;
+        if (!requiresReconciliation && payload.TransferAmount < remainingBalance)
         {
             _logger.LogWarning(PaymentLogMessages.PartialPayment,
                 payload.TransferAmount, remainingBalance, invoice.Id);
@@ -486,6 +504,7 @@ public class CustomerPaymentService : ICustomerPaymentService
             .AsNoTracking()
             .Include(p => p.TargetInvoice)
                 .ThenInclude(i => i.Reservation)
+                    .ThenInclude(r => r!.RentalAgreement)
             .Where(p => p.CustomerId == customerId)
             .OrderByDescending(p => p.CreatedAt)
             .ToListAsync(cancellationToken);
@@ -497,6 +516,15 @@ public class CustomerPaymentService : ICustomerPaymentService
             InvoiceNo = p.TargetInvoice?.InvoiceNo ?? string.Empty,
             ReservationId = p.TargetInvoice?.ReservationId,
             ReservationCode = p.TargetInvoice?.Reservation?.ReservationCode,
+            ReservationStatus = p.TargetInvoice?.Reservation?.Status,
+            HoldUntil = p.TargetInvoice?.Reservation?.HoldUntil,
+            CanCancelReservation = p.TargetInvoice?.Reservation is { } reservation &&
+                (reservation.Status == ReservationStatusConstants.Pending ||
+                 reservation.Status == ReservationStatusConstants.AwaitingDeposit ||
+                 reservation.Status == ReservationStatusConstants.Confirmed) &&
+                (reservation.RentalAgreement == null ||
+                 (reservation.RentalAgreement.Status == RentalAgreementStatusConstants.Draft &&
+                  reservation.RentalAgreement.CheckedInAt == null)),
             Amount = p.Amount,
             Currency = p.Currency,
             Method = p.Method,
@@ -505,7 +533,8 @@ public class CustomerPaymentService : ICustomerPaymentService
             Status = p.Status,
             PaidAt = p.PaidAt,
             CreatedAt = p.CreatedAt,
-            FailureReason = p.FailureReason
+            FailureReason = p.FailureReason,
+            RequiresReconciliation = NeedsReconciliation(p.Metadata)
         }).ToList();
 
         // Include customer's agreement renewals
@@ -576,10 +605,28 @@ public class CustomerPaymentService : ICustomerPaymentService
         return history.OrderByDescending(h => h.CreatedAt).ToList();
     }
 
+    private static bool NeedsReconciliation(string? metadata)
+    {
+        if (string.IsNullOrWhiteSpace(metadata)) return false;
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(metadata);
+            var root = document.RootElement;
+            return root.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                ((root.TryGetProperty("requiresReconciliation", out var review) && review.ValueKind == System.Text.Json.JsonValueKind.True) ||
+                 (root.TryGetProperty("isLatePayment", out var late) && late.ValueKind == System.Text.Json.JsonValueKind.True));
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
+
     public async Task<List<UnpaidInvoiceDto>> GetMyUnpaidInvoicesAsync(
         long customerId,
         CancellationToken cancellationToken = default)
     {
+        var now = DateTimeOffset.UtcNow;
         return await _dbContext.Invoices
             .AsNoTracking()
             .Include(i => i.Reservation)
@@ -587,7 +634,11 @@ public class CustomerPaymentService : ICustomerPaymentService
             .Where(i => i.CustomerId == customerId &&
                         (i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft ||
                          i.Status == InvoiceStatusConstants.PartiallyPaid || i.Status == InvoiceStatusConstants.Overdue) &&
-                        i.TotalAmount > i.PaidAmount)
+                        i.TotalAmount > i.PaidAmount &&
+                        (i.Reservation == null ||
+                         ((i.Reservation.Status == ReservationStatusConstants.Pending ||
+                           i.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
+                          i.Reservation.HoldUntil > now)))
             .OrderBy(i => i.DueDate)
             .ThenByDescending(i => i.CreatedAt)
             .Select(i => new UnpaidInvoiceDto
@@ -596,6 +647,8 @@ public class CustomerPaymentService : ICustomerPaymentService
                 InvoiceNo = i.InvoiceNo,
                 ReservationId = i.ReservationId,
                 ReservationCode = i.Reservation != null ? i.Reservation.ReservationCode : null,
+                ReservationStatus = i.Reservation != null ? i.Reservation.Status : null,
+                HoldUntil = i.Reservation != null ? i.Reservation.HoldUntil : null,
                 AgreementNo = i.Agreement != null ? i.Agreement.AgreementNo : null,
                 AmountDue = i.TotalAmount - i.PaidAmount,
                 Currency = i.Currency,
@@ -635,13 +688,14 @@ public class CustomerPaymentService : ICustomerPaymentService
         var reservation = invoice?.Reservation;
 
         // 1. Late Payment Handling: Payment arrived after reservation expired or cancelled
-        var isLatePayment = reservation != null &&
-            (reservation.Status == ReservationStatusConstants.Expired || reservation.Status == ReservationStatusConstants.Cancelled);
+        var isLatePayment = invoice?.Status == InvoiceStatusConstants.Voided ||
+            (reservation != null &&
+             (reservation.Status == ReservationStatusConstants.Expired || reservation.Status == ReservationStatusConstants.Cancelled));
 
         if (isLatePayment)
         {
             _logger.LogWarning(PaymentLogMessages.LatePaymentState,
-                reservation!.ReservationCode, reservation.Status);
+                reservation?.ReservationCode ?? invoice?.InvoiceNo, reservation?.Status ?? invoice?.Status);
 
             IDbContextTransaction? lateTx = null;
             if (_dbContext.Database.IsSqlServer())
@@ -654,7 +708,14 @@ public class CustomerPaymentService : ICustomerPaymentService
                 payment.Status = PaymentConstants.StatusSucceeded;
                 payment.PaidAt = now;
                 payment.ProviderTransactionId = transactionNo;
-                payment.Metadata = $"{{\"note\": \"Late payment received after reservation was {reservation.Status}. Needs manual refund or unit reassignment.\", \"isLatePayment\": true}}";
+                payment.Metadata = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    note = "Late payment received after invoice or reservation was closed. Manual reconciliation required.",
+                    isLatePayment = true,
+                    requiresReconciliation = true,
+                    invoiceStatus = invoice?.Status,
+                    reservationStatus = reservation?.Status
+                });
                 payment.UpdatedAt = now;
 
                 await _dbContext.SaveChangesAsync(cancellationToken);
@@ -666,7 +727,7 @@ public class CustomerPaymentService : ICustomerPaymentService
 
                 // Notify customer via email regarding late payment
                 var userEmail = customer?.User?.Email;
-                if (!string.IsNullOrWhiteSpace(userEmail))
+                if (reservation != null && !string.IsNullOrWhiteSpace(userEmail))
                 {
                     try
                     {
@@ -696,7 +757,7 @@ public class CustomerPaymentService : ICustomerPaymentService
                     await lateTx.RollbackAsync(cancellationToken);
                 }
                 _logger.LogError(ex, PaymentLogMessages.LatePaymentFailed, payment.Id, ex.Message);
-                return;
+                throw;
             }
             finally
             {

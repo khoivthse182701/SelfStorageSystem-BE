@@ -1,4 +1,4 @@
-using SelfStorageSystem.Contracts.Customer;
+﻿using SelfStorageSystem.Contracts.Customer;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -296,69 +296,44 @@ public class CustomerRentalsController : ControllerBase
     }
 
     /// <summary>
-    /// Gets authorized access members for a rental agreement (Flow 3).
+    /// Gets authorized access members for a rental agreement (Deprecated in v3.0).
     /// </summary>
     [HttpGet("{agreementId:long}/authorized-members")]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<AuthorizedMemberDto>>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetAuthorizedMembers(
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<AuthorizedMemberDto>>), StatusCodes.Status410Gone)]
+    public Task<IActionResult> GetAuthorizedMembers(
         [FromRoute] long agreementId,
         CancellationToken cancellationToken)
     {
-        if (!TryGetCustomerId(out var customerId))
-        {
-            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
-        }
-
-        var result = await _rentalService.GetAuthorizedMembersAsync(customerId, agreementId, cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<AuthorizedMemberDto>>.Ok(result, "Retrieved authorized access members successfully."));
+        return Task.FromResult<IActionResult>(StatusCode(StatusCodes.Status410Gone,
+            ApiResponse.Fail("Tính năng ủy quyền truy cập kho đã ngừng hỗ trợ theo chính sách an ninh v3.0.")));
     }
 
     /// <summary>
-    /// Adds a new authorized access member to a rental agreement (Flow 3).
+    /// Adds a new authorized access member to a rental agreement (Deprecated in v3.0).
     /// </summary>
     [HttpPost("{agreementId:long}/authorized-members")]
-    [ProducesResponseType(typeof(ApiResponse<AuthorizedMemberDto>), StatusCodes.Status201Created)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> AddAuthorizedMember(
+    [ProducesResponseType(typeof(ApiResponse<AuthorizedMemberDto>), StatusCodes.Status410Gone)]
+    public Task<IActionResult> AddAuthorizedMember(
         [FromRoute] long agreementId,
         [FromBody] CreateAuthorizedMemberRequest request,
         CancellationToken cancellationToken)
     {
-        if (!TryGetCustomerId(out var customerId))
-        {
-            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
-        }
-
-        var result = await _rentalService.AddAuthorizedMemberAsync(customerId, agreementId, request, cancellationToken);
-        return CreatedAtAction(
-            nameof(GetAuthorizedMembers),
-            new { agreementId },
-            ApiResponse<AuthorizedMemberDto>.Ok(result, "Authorized member added successfully."));
+        return Task.FromResult<IActionResult>(StatusCode(StatusCodes.Status410Gone,
+            ApiResponse.Fail("Tính năng ủy quyền truy cập kho đã ngừng hỗ trợ theo chính sách an ninh v3.0.")));
     }
 
     /// <summary>
-    /// Revokes an authorized access member (Flow 3).
+    /// Revokes an authorized access member (Deprecated in v3.0).
     /// </summary>
     [HttpDelete("{agreementId:long}/authorized-members/{memberId:long}")]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> RevokeAuthorizedMember(
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status410Gone)]
+    public Task<IActionResult> RevokeAuthorizedMember(
         [FromRoute] long agreementId,
         [FromRoute] long memberId,
         CancellationToken cancellationToken)
     {
-        if (!TryGetCustomerId(out var customerId))
-        {
-            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
-        }
-
-        await _rentalService.RevokeAuthorizedMemberAsync(customerId, agreementId, memberId, cancellationToken);
-        return Ok(ApiResponse.Ok("Authorized member revoked successfully."));
+        return Task.FromResult<IActionResult>(StatusCode(StatusCodes.Status410Gone,
+            ApiResponse.Fail("Tính năng ủy quyền truy cập kho đã ngừng hỗ trợ theo chính sách an ninh v3.0.")));
     }
 
     /// <summary>
@@ -401,6 +376,15 @@ public class CustomerRentalsController : ControllerBase
     /// <summary>
     /// Requests unit transfer or size upgrade (Flow 3 & BR-RSV-04).
     /// </summary>
+    [HttpGet("{agreementId:long}/transfer-request")]
+    public async Task<IActionResult> GetLatestTransferRequest(long agreementId, CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId)) return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        var result = await _rentalService.GetLatestTransferRequestAsync(customerId, agreementId, cancellationToken);
+        Response.Headers.CacheControl = "no-store";
+        return Ok(ApiResponse<UnitTransferRequestDto?>.Ok(result, "Retrieved latest transfer request."));
+    }
+
     [HttpPost("{agreementId:long}/transfer-request")]
     [ProducesResponseType(typeof(ApiResponse<UnitTransferRequestDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -529,5 +513,21 @@ public class CustomerRentalsController : ControllerBase
 
         var result = await _rentalService.SubmitRefundBankInfoAsync(customerId, id, request, cancellationToken);
         return Ok(ApiResponse<CustomerRefundBankInfoDto>.Ok(result, "Bank information for refund recorded successfully."));
+    }
+
+    /// <summary>
+    /// Danh sách khoản hoàn cọc đang chờ khách nhập STK (kể cả khi hợp đồng đã kết thúc).
+    /// </summary>
+    [HttpGet("refunds/pending-bank-info")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<CustomerPendingRefundDto>>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetPendingBankInfoRefunds(CancellationToken cancellationToken)
+    {
+        if (!TryGetCustomerId(out var customerId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot identify customer identity from token."));
+        }
+
+        var result = await _rentalService.GetPendingBankInfoRefundsAsync(customerId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<CustomerPendingRefundDto>>.Ok(result, "Pending refunds retrieved successfully."));
     }
 }

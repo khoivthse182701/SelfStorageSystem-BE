@@ -58,3 +58,6 @@ ui_audit_screenshots/
 *.mjs
 *.py
 scan_report.json
+
+.verification/
+all_commits_summary.json

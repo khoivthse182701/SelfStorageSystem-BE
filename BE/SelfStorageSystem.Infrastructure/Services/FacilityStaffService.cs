@@ -48,16 +48,59 @@ public partial class FacilityStaffService : IFacilityStaffService
 
     private async Task<long> ResolveFacilityIdAsync(long employeeUserId, long? facilityId, CancellationToken cancellationToken)
     {
-        if (facilityId.HasValue) return facilityId.Value;
-
         var now = DateTimeOffset.UtcNow;
+
+        var isAdmin = await _dbContext.UserRoles
+            .AnyAsync(ur => ur.UserId == employeeUserId &&
+                (ur.Role.Code == RoleConstants.SystemAdministrator ||
+                 ur.Role.Code == RoleConstants.Admin ||
+                 ur.Role.Code == "admin"),
+                cancellationToken);
+
+        if (facilityId.HasValue)
+        {
+            if (isAdmin)
+            {
+                return facilityId.Value;
+            }
+
+            var isAssigned = await _dbContext.StaffFacilityAssignments
+                .AnyAsync(s => s.EmployeeId == employeeUserId
+                            && s.FacilityId == facilityId.Value
+                            && (!s.EndsAt.HasValue || s.EndsAt > now),
+                    cancellationToken);
+
+            if (!isAssigned)
+            {
+                throw AppException.FromError(StaffErrors.StaffNotAssignedToFacility);
+            }
+
+            return facilityId.Value;
+        }
+
         var assignedFacilityId = await _dbContext.StaffFacilityAssignments
-            .Where(s => s.Employee.UserId == employeeUserId && (!s.EndsAt.HasValue || s.EndsAt > now))
+            .Where(s => s.EmployeeId == employeeUserId
+                     && (!s.EndsAt.HasValue || s.EndsAt > now))
             .Select(s => (long?)s.FacilityId)
             .FirstOrDefaultAsync(cancellationToken);
 
-        if (assignedFacilityId.HasValue) return assignedFacilityId.Value;
+        if (assignedFacilityId.HasValue)
+        {
+            return assignedFacilityId.Value;
+        }
 
-        throw AppException.FromError(ManagerErrors.EmployeeNotAssignedToFacility);
+        if (isAdmin)
+        {
+            var fallbackFacilityId = await _dbContext.Facilities
+                .Select(f => (long?)f.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (fallbackFacilityId.HasValue)
+            {
+                return fallbackFacilityId.Value;
+            }
+        }
+
+        throw AppException.FromError(StaffErrors.StaffNotAssignedToFacility);
     }
 }

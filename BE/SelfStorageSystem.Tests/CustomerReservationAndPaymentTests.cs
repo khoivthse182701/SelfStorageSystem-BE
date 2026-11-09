@@ -60,8 +60,8 @@ public class CustomerReservationAndPaymentTests
                 BankCode = "MBBank",
                 AccountNo = "0817495759",
                 AccountName = "VO THAI HOANG KHOI",
-                Template = "compact",
-                ShowInfo = true
+                Template = "qronly",
+                ShowInfo = false
             }
         };
 
@@ -70,8 +70,8 @@ public class CustomerReservationAndPaymentTests
         Assert.Equal("MBBank", paymentSettings.VietQr.BankCode);
         Assert.Equal("0817495759", paymentSettings.VietQr.AccountNo);
         Assert.Equal("VO THAI HOANG KHOI", paymentSettings.VietQr.AccountName);
-        Assert.Equal("compact", paymentSettings.VietQr.Template);
-        Assert.True(paymentSettings.VietQr.ShowInfo);
+        Assert.Equal("qronly", paymentSettings.VietQr.Template);
+        Assert.False(paymentSettings.VietQr.ShowInfo);
         Assert.Equal("https://vietqr.app/img", paymentSettings.VietQr.BaseUrl);
     }
 
@@ -127,8 +127,8 @@ public class CustomerReservationAndPaymentTests
                 BankCode = "MBBank",
                 AccountNo = "0817495759",
                 AccountName = "VO THAI HOANG KHOI",
-                Template = "compact",
-                ShowInfo = true
+                Template = "qronly",
+                ShowInfo = false
             }
         };
 
@@ -150,7 +150,7 @@ public class CustomerReservationAndPaymentTests
         Assert.Contains("bank=MBBank", result.VietQr.QrImageUrl);
         Assert.Contains("acc=0817495759", result.VietQr.QrImageUrl);
         Assert.Contains("holder=VO%20THAI%20HOANG%20KHOI", result.VietQr.QrImageUrl);
-        Assert.Contains($"memo=DH{invoice.Id}", result.VietQr.QrImageUrl);
+        Assert.Contains($"des=DH{invoice.Id}", result.VietQr.QrImageUrl);
     }
 
     [Theory]
@@ -696,4 +696,106 @@ public class CustomerReservationAndPaymentTests
         var pendingCount = await dbContext.Payments.CountAsync(p => p.TargetInvoiceId == invoice.Id);
         Assert.Equal(1, pendingCount);
     }
+
+    [Fact]
+    public async Task CreateReservationAsync_InMemory_WithoutStorageUnitId_ShouldAssignSelectedUnitAndCreateAllocation()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 101;
+        long facilityId = 1;
+        long unitTypeId = 1;
+
+        // Arrange CustomerProfile
+        dbContext.CustomerProfiles.Add(new CustomerProfile
+        {
+            UserId = customerId,
+            FullName = "Nguyen Van A",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+
+        // Arrange Facility
+        dbContext.Facilities.Add(new Facility
+        {
+            Id = facilityId,
+            Name = "Facility 1",
+            Code = "FAC-1",
+            AddressLine = "123 Street",
+            City = "HCM",
+            Status = FacilityStatusConstants.Active,
+            OpeningTime = new TimeOnly(7, 0),
+            ClosingTime = new TimeOnly(22, 0),
+            Timezone = "Asia/Ho_Chi_Minh"
+        });
+
+        // Arrange UnitType
+        dbContext.UnitTypes.Add(new UnitType
+        {
+            Id = unitTypeId,
+            Name = "Small Locker",
+            Code = "SML",
+            WidthM = 1,
+            LengthM = 1,
+            HeightM = 1,
+            IsActive = true
+        });
+
+        // Arrange FacilityRate
+        dbContext.FacilityRates.Add(new FacilityRate
+        {
+            Id = 1,
+            FacilityId = facilityId,
+            UnitTypeId = unitTypeId,
+            MonthlyRate = 500000m,
+            DepositAmount = 500000m,
+            BookingFee = 0m,
+            ValidFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-10))
+        });
+
+        // Arrange available storage unit with IsListed = true
+        var unit = new StorageUnit
+        {
+            Id = 55,
+            FacilityId = facilityId,
+            UnitTypeId = unitTypeId,
+            UnitCode = "U-055",
+            PhysicalStatus = StorageUnitStatusConstants.Available,
+            IsListed = true
+        };
+        dbContext.StorageUnits.Add(unit);
+        await dbContext.SaveChangesAsync();
+
+        var reservationService = new CustomerReservationService(
+            dbContext,
+            Options.Create(new ReservationSettings()),
+            NullLogger<CustomerReservationService>.Instance);
+
+        var request = new CreateReservationRequest
+        {
+            FacilityId = facilityId,
+            UnitTypeId = unitTypeId,
+            StorageUnitId = null,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)),
+            DurationMonths = 2,
+            PromotionCode = null
+        };
+
+        // Act
+        var result = await reservationService.CreateReservationAsync(customerId, request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.NotNull(result.ReservationCode);
+
+        var savedReservation = await dbContext.Reservations
+            .Include(r => r.UnitAllocation)
+                .ThenInclude(ua => ua!.StorageUnit)
+            .FirstOrDefaultAsync(r => r.ReservationCode == result.ReservationCode);
+
+        Assert.NotNull(savedReservation);
+        Assert.NotNull(savedReservation.UnitAllocation);
+        Assert.Equal(55, savedReservation.UnitAllocation.StorageUnitId);
+        Assert.Equal(StorageUnitStatusConstants.Reserved, unit.PhysicalStatus);
+    }
 }
+

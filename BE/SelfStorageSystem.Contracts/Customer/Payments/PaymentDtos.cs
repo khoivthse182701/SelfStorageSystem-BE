@@ -108,6 +108,10 @@ public class SePayWebhookPayload
 
 public class PaymentHistoryDto
 {
+    public bool RequiresReconciliation { get; set; }
+    public bool CanCancelReservation { get; set; }
+    public string? ReservationStatus { get; set; }
+    public DateTimeOffset? HoldUntil { get; set; }
     public long PaymentId { get; set; }
     public long InvoiceId { get; set; }
     public string InvoiceNo { get; set; } = string.Empty;
@@ -128,6 +132,8 @@ public class PaymentHistoryDto
 
 public class UnpaidInvoiceDto
 {
+    public string? ReservationStatus { get; set; }
+    public DateTimeOffset? HoldUntil { get; set; }
     public long InvoiceId { get; set; }
     public string InvoiceNo { get; set; } = string.Empty;
     public long? ReservationId { get; set; }

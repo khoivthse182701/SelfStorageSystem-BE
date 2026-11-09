@@ -1726,4 +1726,351 @@ public class FacilityManagerServiceTests
         Assert.Null(updatedAssign.EndsAt); // Reactivated clears EndsAt
     }
 
+
+    [Fact]
+    public async Task CreateStaffTask_WhenManagerIsNotCustomer_ResolvesValidCustomerId()
+    {
+        // Arrange
+        using var db = CreateInMemoryDbContext();
+        var managerUserId = 10L;
+        await SeedFacilityAndManagerAsync(db, 1L, managerUserId);
+
+        var custUser = new User { Id = 20L, Email = "cust@test.com", PasswordHash = "hash", Status = "active" };
+        var custProfile = new CustomerProfile { UserId = 20L, FullName = "Existing Customer" };
+        var agr = new RentalAgreement
+        {
+            Id = 1L,
+            AgreementNo = "AGR-101",
+            CustomerId = 20L,
+            FacilityId = 1L,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30)),
+            MonthlyRateSnapshot = 1000m,
+            DepositSnapshot = 1000m
+        };
+        db.Users.Add(custUser);
+        db.CustomerProfiles.Add(custProfile);
+        db.RentalAgreements.Add(agr);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        var req = new ManagerCreateStaffTaskRequest
+        {
+            TaskType = "inspection",
+            Title = "Kiem tra dinh ky kho",
+            AssignedEmployeeId = managerUserId
+        };
+
+        // Act
+        var result = await service.CreateStaffTaskAsync(1L, req, currentUserId: managerUserId, isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.NotNull(result.TicketId);
+        var createdTicket = await db.SupportTickets.FindAsync(result.TicketId.Value);
+        Assert.NotNull(createdTicket);
+        Assert.Equal(20L, createdTicket.CustomerId);
+    }
+
+    [Fact]
+    public async Task UpdateUnit_PartialUpdate_PreservesExistingUnitCodeAndType()
+    {
+        // Arrange
+        using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1L, 10L);
+
+        var unitType = new UnitType { Id = 1L, Name = "Standard", Code = "STD", HeightM = 2, WidthM = 2, LengthM = 2, VolumeM3 = 8 };
+        var unit = new StorageUnit
+        {
+            Id = 1L,
+            FacilityId = 1L,
+            UnitCode = "U-101",
+            UnitTypeId = 1L,
+            PhysicalStatus = StorageUnitStatusConstants.Available,
+            IsListed = true
+        };
+        db.UnitTypes.Add(unitType);
+        db.StorageUnits.Add(unit);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act - partial update: change only physicalStatus and isListed, omit unitCode and unitTypeId
+        var updateReq = new ManagerUpdateStorageUnitRequest
+        {
+            PhysicalStatus = StorageUnitStatusConstants.Maintenance,
+            IsListed = false
+        };
+        var result = await service.UpdateUnitAsync(1L, updateReq, currentUserId: 10L, isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("U-101", result.UnitCode); // Preserved original
+        Assert.Equal(1L, result.UnitTypeId); // Preserved original
+        Assert.Equal(StorageUnitStatusConstants.Maintenance, result.PhysicalStatus);
+        Assert.False(result.IsListed);
+    }
+
+    [Fact]
+    public async Task Dashboard_TodayCheckInsAndOuts_FiltersOnlyCurrentDay()
+    {
+        // Arrange
+        using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1L, 10L);
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var tomorrow = today.AddDays(1);
+
+        db.Reservations.Add(new Reservation
+        {
+            Id = 100L,
+            ReservationCode = "RES-TODAY",
+            FacilityId = 1L,
+            CustomerId = 2L,
+            UnitTypeId = 1L,
+            StartDate = today,
+            EndDate = today.AddDays(30),
+            Status = ReservationStatusConstants.Confirmed
+        });
+        db.Reservations.Add(new Reservation
+        {
+            Id = 101L,
+            ReservationCode = "RES-TOMORROW",
+            FacilityId = 1L,
+            CustomerId = 2L,
+            UnitTypeId = 1L,
+            StartDate = tomorrow,
+            EndDate = tomorrow.AddDays(30),
+            Status = ReservationStatusConstants.Confirmed
+        });
+
+        var agr1 = new RentalAgreement { Id = 1L, AgreementNo = "AGR-1", CustomerId = 2L, FacilityId = 1L, Status = "active", StartDate = today, EndDate = today.AddDays(30), MonthlyRateSnapshot = 1000m, DepositSnapshot = 1000m };
+        var agr2 = new RentalAgreement { Id = 2L, AgreementNo = "AGR-2", CustomerId = 2L, FacilityId = 1L, Status = "active", StartDate = today, EndDate = today.AddDays(30), MonthlyRateSnapshot = 1000m, DepositSnapshot = 1000m };
+        db.RentalAgreements.AddRange(agr1, agr2);
+
+        db.MoveOutRequests.Add(new MoveOutRequest
+        {
+            Id = 200L,
+            AgreementId = 1L,
+            RequestedBy = 2L,
+            RequestedMoveOutDate = today,
+            Status = MoveOutStatusConstants.Requested
+        });
+        db.MoveOutRequests.Add(new MoveOutRequest
+        {
+            Id = 201L,
+            AgreementId = 2L,
+            RequestedBy = 2L,
+            RequestedMoveOutDate = tomorrow,
+            Status = MoveOutStatusConstants.Requested
+        });
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act
+        var dashboard = await service.GetFacilityDashboardAsync(1L, currentUserId: 10L, isSystemAdmin: false);
+
+        // Assert - Only today items counted
+        Assert.Equal(1, dashboard.DailySchedule.TodayCheckInsCount);
+        Assert.Equal(1, dashboard.DailySchedule.TodayCheckOutsCount);
+    }
+
+    [Fact]
+    public async Task ProcessRefundPayout_UsesNormalizedTransactionRefAndProofUrl()
+    {
+        // Arrange
+        using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1L, 10L);
+
+        var custUser = new User { Id = 2L, Email = "cust2@test.com", PasswordHash = "hash", Status = "active" };
+        var custProfile = new CustomerProfile { UserId = 2L, FullName = "Customer Two" };
+        db.Users.Add(custUser);
+        db.CustomerProfiles.Add(custProfile);
+
+        var agreement = new RentalAgreement
+        {
+            Id = 1L,
+            AgreementNo = "AGR-101",
+            CustomerId = 2L,
+            FacilityId = 1L,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            MonthlyRateSnapshot = 1000m,
+            DepositSnapshot = 1000m
+        };
+        db.RentalAgreements.Add(agreement);
+
+        var payment = new Payment
+        {
+            Id = 1L,
+            CustomerId = 2L,
+            Amount = 1000m,
+            Currency = "VND",
+            Method = "vnpay", Provider = "vnpay", Metadata = "{}",
+            Status = "completed",
+            IdempotencyKey = "pmt-1"
+        };
+        db.Payments.Add(payment);
+
+        var refund = new Refund
+        {
+            Id = 99L,
+            PaymentId = 1L,
+            AgreementId = 1L,
+            Amount = 500000m,
+            Currency = "VND",
+            Reason = "{\"bank\":\"VCB\",\"account\":\"123456\",\"name\":\"Nguyen Van A\"}",
+            Provider = "manual_bank_transfer",
+            IdempotencyKey = "key-99",
+            Status = "approved",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.Refunds.Add(refund);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+        var req = new ManagerProcessRefundPayoutRequest
+        {
+            TransactionReference = "  TX-REF-999  ",
+            ProofImageUrl = "  https://cdn.example.com/proof.jpg  ",
+            Notes = "Chuyen khoan thanh cong"
+        };
+
+        // Act
+        var result = await service.ProcessRefundPayoutAsync(99L, req, currentUserId: 10L, isSystemAdmin: false);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("TX-REF-999", result.TransactionReference); // Trimmed/normalized
+        Assert.Equal("https://cdn.example.com/proof.jpg", result.ProofImageUrl);
+
+        var notif = await db.Notifications.FirstOrDefaultAsync(n => n.TemplateCode == "REFUND_PAYOUT_COMPLETED");
+        Assert.NotNull(notif);
+        Assert.Contains("TX-REF-999", notif.Payload);
+    }
+
+    [Fact]
+    public async Task GetExpiringOrMoveOutAgreements_WhenInspectionStatusIsDraft_MapsToAssignedAndInspecting()
+    {
+        // Arrange
+        using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1L, 10L);
+
+        var custUser = new User { Id = 20L, Email = "cust20@test.com", PasswordHash = "hash", Status = "active", PhoneNumber = "0909111222" };
+        var custProfile = new CustomerProfile { UserId = 20L, FullName = "Customer Twenty" };
+        var staffUser = new User { Id = 30L, Email = "staff30@test.com", PasswordHash = "hash", Status = "active" };
+        var staffProfile = new EmployeeProfile { UserId = 30L, EmployeeCode = "EMP-030", FullName = "Inspector Staff", EmploymentStatus = "active" };
+        var unitType = new UnitType { Id = 1L, Name = "Small", Code = "SM", HeightM = 2, WidthM = 2, LengthM = 2, VolumeM3 = 8 };
+        var unit = new StorageUnit { Id = 100L, FacilityId = 1L, UnitTypeId = 1L, UnitCode = "A-100", PhysicalStatus = StorageUnitStatusConstants.Occupied, IsListed = true };
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var agreement = new RentalAgreement
+        {
+            Id = 500L,
+            AgreementNo = "AGR-500",
+            CustomerId = 20L,
+            FacilityId = 1L,
+            Status = RentalAgreementStatusConstants.MoveOutScheduled,
+            StartDate = today.AddDays(-30),
+            EndDate = today.AddDays(2),
+            MonthlyRateSnapshot = 1000000m,
+            DepositSnapshot = 1000000m,
+            DepositBalance = 1000000m
+        };
+
+        var alloc = new UnitAllocation
+        {
+            Id = 501L,
+            AgreementId = 500L,
+            StorageUnitId = 100L,
+            AllocationKind = AllocationKindConstants.Rental,
+            AllocationStartDate = agreement.StartDate,
+            AllocationEndDate = agreement.EndDate,
+            Status = AllocationStatusConstants.Active
+        };
+
+        var moveOut = new MoveOutRequest
+        {
+            Id = 502L,
+            AgreementId = 500L,
+            RequestedBy = 20L,
+            RequestedMoveOutDate = today.AddDays(1),
+            Status = MoveOutStatusConstants.Requested
+        };
+
+        var draftInspection = new Inspection
+        {
+            Id = 503L,
+            AgreementId = 500L,
+            FacilityId = 1L,
+            StorageUnitId = 100L,
+            InspectedBy = 30L,
+            InspectionType = "check_out",
+            OverallCondition = "good",
+            Status = InspectionStatusConstants.Draft,
+            Summary = "Đã phân công kiểm tra kho trả phòng",
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        db.Users.AddRange(custUser, staffUser);
+        db.CustomerProfiles.Add(custProfile);
+        db.EmployeeProfiles.Add(staffProfile);
+        db.UnitTypes.Add(unitType);
+        db.StorageUnits.Add(unit);
+        db.RentalAgreements.Add(agreement);
+        db.UnitAllocations.Add(alloc);
+        db.MoveOutRequests.Add(moveOut);
+        db.Inspections.Add(draftInspection);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act
+        var list = await service.GetExpiringOrMoveOutAgreementsAsync(1L, currentUserId: 10L, isSystemAdmin: false);
+
+        // Assert
+        var item = Assert.Single(list, x => x.Id == 500L);
+        Assert.Equal("assigned", item.InspectionStatus);
+        Assert.Equal("inspecting", item.PostInspectionStatus);
+        Assert.Equal(30L, item.AssignedStaffId);
+        Assert.Equal("Inspector Staff", item.AssignedStaffName);
+    }
+
+    [Fact]
+    public async Task GetUnits_WhenNotesContainImgTag_ExtractsImageUrlAndCleansNotes()
+    {
+        // Arrange
+        using var db = CreateInMemoryDbContext();
+        await SeedFacilityAndManagerAsync(db, 1L, 10L);
+
+        var unitType = new UnitType { Id = 1L, Name = "Small", Code = "SM", HeightM = 2, WidthM = 2, LengthM = 2, VolumeM3 = 8 };
+        var unit = new StorageUnit
+        {
+            Id = 200L,
+            FacilityId = 1L,
+            UnitTypeId = 1L,
+            UnitCode = "A-200",
+            PhysicalStatus = StorageUnitStatusConstants.Available,
+            IsListed = true,
+            Notes = "[IMG:https://cdn.example.com/unit-a200.jpg] Kho sạch sẽ gần thang máy"
+        };
+
+        db.UnitTypes.Add(unitType);
+        db.StorageUnits.Add(unit);
+        await db.SaveChangesAsync();
+
+        var service = new FacilityManagerService(db, NullLogger<FacilityManagerService>.Instance);
+
+        // Act
+        var paged = await service.GetUnitsAsync(1L, null, null, null, 1, 10, currentUserId: 10L, isSystemAdmin: false);
+
+        // Assert
+        var dto = Assert.Single(paged.Items, u => u.Id == 200L);
+        Assert.Equal("https://cdn.example.com/unit-a200.jpg", dto.ImageUrl);
+        Assert.Equal("Kho sạch sẽ gần thang máy", dto.Notes);
+    }
 }

@@ -475,13 +475,10 @@ public partial class FacilityManagerService : IFacilityManagerService
         var now = DateTimeOffset.UtcNow;
 
         var assignment = await _dbContext.StaffFacilityAssignments
-
             .Include(sfa => sfa.Facility)
-
             .Include(sfa => sfa.Employee)
-
                 .ThenInclude(e => e.User)
-
+            .OrderByDescending(sfa => sfa.CreatedAt)
             .FirstOrDefaultAsync(sfa => sfa.EmployeeId == staffUserId, cancellationToken);
 
 

@@ -258,7 +258,7 @@ public partial class FacilityManagerService : IFacilityManagerService
 
                 Invoice = invoice,
 
-                LineType = InvoiceLineTypeConstants.Rent == "damage" ? "damage" : "damage",
+                LineType = InvoiceLineTypeConstants.Damage,
 
                 Description = proposal.Description,
 
@@ -335,62 +335,51 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
         var refunds = await _dbContext.Refunds
-
             .AsNoTracking()
-
             .Include(r => r.Agreement)
-
                 .ThenInclude(a => a!.Customer)
-
             .Include(r => r.Agreement)
-
                 .ThenInclude(a => a!.Invoices)
-
                     .ThenInclude(i => i.InvoiceLines)
-
+            .Include(r => r.Agreement)
+                .ThenInclude(a => a!.Inspections)
+                    .ThenInclude(i => i.InspectionItems)
             .Include(r => r.RefundApproval)
-
             .Where(r => r.Agreement != null && r.Agreement.FacilityId == facilityId)
-
             .OrderByDescending(r => r.CreatedAt)
-
             .ToListAsync(cancellationToken);
 
-
-
         var result = refunds.Select(r =>
-
         {
-
             var deposit = r.Agreement?.DepositSnapshot ?? 0m;
+            if (deposit <= 0m && r.Amount > 0m)
+            {
+                deposit = r.Amount;
+            }
+
+            var inspectionDamage = r.Agreement?.Inspections?
+                .OrderByDescending(i => i.CreatedAt)
+                .FirstOrDefault()?
+                .InspectionItems?
+                .Sum(item => item.ChargeAmount) ?? 0m;
 
             var unpaidDamages = r.Agreement?.Invoices
-
                 .Where(i => i.Status != InvoiceStatusConstants.Paid)
-
                 .SelectMany(i => i.InvoiceLines)
-
                 .Where(l => l.LineType == "damage" || l.LineType == "penalty")
-
                 .Sum(l => l.UnitPrice * l.Quantity) ?? 0m;
 
-
-
             var overdueDebt = r.Agreement?.Invoices
-
                 .Where(i => i.Status == InvoiceStatusConstants.Overdue)
-
                 .Sum(i => i.TotalAmount - i.PaidAmount) ?? 0m;
 
-
-
-            var estimatedDeductions = unpaidDamages + overdueDebt;
-
-            var recommendedRefund = Math.Max(0m, deposit - estimatedDeductions);
+            var recordedDeduction = (deposit > r.Amount && r.Amount > 0m) ? (deposit - r.Amount) : 0m;
+            var estimatedDeductions = Math.Max(recordedDeduction, Math.Max(inspectionDamage, unpaidDamages + overdueDebt));
+            var recommendedRefund = (r.Amount > 0m && r.Amount <= deposit && recordedDeduction > 0m)
+                ? r.Amount
+                : Math.Max(0m, deposit - estimatedDeductions);
 
             var (bankName, accNumber, holder, _) = ExtractBankInfo(r.Reason);
-
-
 
             return new ManagerRefundApprovalDto
 
@@ -463,37 +452,34 @@ public partial class FacilityManagerService : IFacilityManagerService
     {
 
         var refund = await _dbContext.Refunds
-
             .Include(r => r.Agreement)
-
-            .Include(r => r.Agreement)
-
                 .ThenInclude(a => a!.Invoices)
-
                     .ThenInclude(i => i.InvoiceLines)
-
+            .Include(r => r.Payment)
+                .ThenInclude(p => p.TargetInvoice)
+                    .ThenInclude(i => i!.Agreement)
+            .Include(r => r.Payment)
+                .ThenInclude(p => p.TargetInvoice)
+                    .ThenInclude(i => i!.Reservation)
             .Include(r => r.RefundApproval)
-
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
 
-
-
         if (refund == null)
-
         {
-
             throw AppException.FromError(ManagerErrors.RefundNotFound);
-
         }
 
+        long? refundFacilityId = refund.Agreement?.FacilityId
+            ?? refund.Payment?.TargetInvoice?.Agreement?.FacilityId
+            ?? refund.Payment?.TargetInvoice?.Reservation?.FacilityId;
 
-
-        if (refund.Agreement != null)
-
+        if (refundFacilityId.HasValue)
         {
-
-            await EnsureFacilityAccessAsync(refund.Agreement.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
-
+            await EnsureFacilityAccessAsync(refundFacilityId.Value, currentUserId, isSystemAdmin, cancellationToken);
+        }
+        else if (!isSystemAdmin)
+        {
+            throw AppException.FromError(ManagerErrors.NotAssignedToFacility);
         }
 
 
@@ -573,6 +559,34 @@ public partial class FacilityManagerService : IFacilityManagerService
             }
 
 
+
+                        var maxAllowableRefund = Math.Max(refund.Payment?.Amount ?? 0m, refund.Agreement?.DepositSnapshot ?? 0m);
+            if (approvedAmount > maxAllowableRefund)
+            {
+                throw new AppException(
+                    Error.Validation(
+                        ManagerErrors.RefundAmountExceedsPayment.Code,
+                        $"Số tiền hoàn ({approvedAmount:N0} đ) không được vượt quá số tiền thanh toán/tiền cọc gốc ({maxAllowableRefund:N0} đ)."));
+            }
+
+            if (refund.Payment == null || refund.Payment.Amount < approvedAmount)
+            {
+                var agreementId = refund.AgreementId ?? 0L;
+                var resId = refund.Agreement?.ReservationId ?? 0L;
+                var eligiblePayment = await _dbContext.Payments
+                    .Include(p => p.TargetInvoice)
+                        .ThenInclude(inv => inv.InvoiceLines)
+                    .Where(p => p.Status == PaymentConstants.StatusSucceeded &&
+                        (p.TargetInvoice.AgreementId == agreementId || (resId > 0 && p.TargetInvoice.ReservationId == resId)))
+                    .OrderByDescending(p => p.Amount)
+                    .FirstOrDefaultAsync(p => p.Amount >= approvedAmount, cancellationToken);
+
+                if (eligiblePayment != null)
+                {
+                    refund.PaymentId = eligiblePayment.Id;
+                    refund.Payment = eligiblePayment;
+                }
+            }
 
             refund.Amount = approvedAmount;
 

@@ -71,13 +71,30 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
         if (!string.IsNullOrWhiteSpace(status))
-
         {
-
             var s = status.Trim().ToLowerInvariant();
-
-            query = query.Where(t => t.Status.ToLower() == s);
-
+            if (s == "pending_manager_review")
+            {
+                query = query.Where(t => t.Status.ToLower() == TicketStatusConstants.Open.ToLower() && t.TicketAssignment == null);
+            }
+            else if (s == "in_progress")
+            {
+                query = query.Where(t => t.Status.ToLower() == TicketStatusConstants.InProgress.ToLower() || t.Status.ToLower() == TicketStatusConstants.Assigned.ToLower());
+            }
+            else if (s == "severe_need_relocation")
+            {
+                query = query.Where(t =>
+                    t.Status.ToLower() == TicketStatusConstants.SevereNeedRelocation.ToLower() ||
+                    t.Priority.ToLower() == TicketPriorityConstants.High.ToLower() ||
+                    t.Priority.ToLower() == TicketPriorityConstants.Urgent.ToLower() ||
+                    (t.Resolution != null && (t.Resolution.Contains("HƯ HỎNG NẶNG") || t.Resolution.Contains("khẩn cấp") || t.Resolution.Contains("đổi kho"))) ||
+                    t.Description.ToLower().Contains("đổi kho") ||
+                    t.Subject.ToLower().Contains("đổi kho"));
+            }
+            else
+            {
+                query = query.Where(t => t.Status.ToLower() == s);
+            }
         }
 
 
@@ -266,18 +283,77 @@ public partial class FacilityManagerService : IFacilityManagerService
 
         var now = DateTimeOffset.UtcNow;
 
-        long customerId = request.CustomerId ?? 1;
+        long? resolvedCustomerId = null;
 
-
-
-        if (request.AgreementId.HasValue && request.AgreementId.Value > 0)
-
+        if (request.CustomerId.HasValue && request.CustomerId.Value > 0)
         {
+            var exists = await _dbContext.CustomerProfiles.AnyAsync(c => c.UserId == request.CustomerId.Value, cancellationToken);
+            if (exists)
+            {
+                resolvedCustomerId = request.CustomerId.Value;
+            }
+        }
 
-            var agr = await _dbContext.RentalAgreements.FirstOrDefaultAsync(a => a.Id == request.AgreementId.Value, cancellationToken);
+        if (!resolvedCustomerId.HasValue && request.AgreementId.HasValue && request.AgreementId.Value > 0)
+        {
+            var agr = await _dbContext.RentalAgreements
+                .Where(a => a.Id == request.AgreementId.Value)
+                .Select(a => (long?)a.CustomerId)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (agr.HasValue)
+            {
+                resolvedCustomerId = agr.Value;
+            }
+        }
 
-            if (agr != null) customerId = agr.CustomerId;
+        if (!resolvedCustomerId.HasValue && request.StorageUnitId.HasValue && request.StorageUnitId.Value > 0)
+        {
+            var unitCustomerId = await _dbContext.UnitAllocations
+                .Where(ua => ua.StorageUnitId == request.StorageUnitId.Value && ua.Agreement != null && ua.Agreement.Status == RentalAgreementStatusConstants.Active)
+                .Select(ua => (long?)ua.Agreement!.CustomerId)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (unitCustomerId.HasValue)
+            {
+                resolvedCustomerId = unitCustomerId.Value;
+            }
+        }
 
+        if (!resolvedCustomerId.HasValue)
+        {
+            resolvedCustomerId = await _dbContext.RentalAgreements
+                .Where(a => a.FacilityId == request.FacilityId)
+                .Select(a => (long?)a.CustomerId)
+                .FirstOrDefaultAsync(cancellationToken)
+                ?? await _dbContext.Reservations
+                    .Where(r => r.FacilityId == request.FacilityId)
+                    .Select(r => (long?)r.CustomerId)
+                    .FirstOrDefaultAsync(cancellationToken)
+                ?? await _dbContext.CustomerProfiles
+                    .Select(c => (long?)c.UserId)
+                    .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        long customerId;
+        if (resolvedCustomerId.HasValue)
+        {
+            customerId = resolvedCustomerId.Value;
+        }
+        else
+        {
+            var currentIsCustomer = await _dbContext.CustomerProfiles.AnyAsync(c => c.UserId == currentUserId, cancellationToken);
+            if (!currentIsCustomer)
+            {
+                var profile = new CustomerProfile
+                {
+                    UserId = currentUserId,
+                    FullName = "Quản lý cơ sở",
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                _dbContext.CustomerProfiles.Add(profile);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            customerId = currentUserId;
         }
 
 
@@ -538,35 +614,36 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var staffTask = new StaffTask
-
+        var existingTask = await _dbContext.StaffTasks
+            .FirstOrDefaultAsync(t => t.TicketId == ticket.Id, cancellationToken);
+        if (existingTask != null)
         {
-
-            FacilityId = ticket.FacilityId,
-
-            AssignedEmployeeId = request.EmployeeId,
-
-            TicketId = ticket.Id,
-
-            TaskType = "support",
-
-            Title = $"[Sự cố #{ticket.TicketNo}] {ticket.Subject}",
-
-            Status = "todo",
-
-            CreatedBy = currentUserId,
-
-            DueAt = request.DueAt ?? now.AddHours(24),
-
-            ProgressPercent = 0,
-
-            CreatedAt = now,
-
-            UpdatedAt = now
-
-        };
-
-        _dbContext.StaffTasks.Add(staffTask);
+            existingTask.AssignedEmployeeId = request.EmployeeId;
+            existingTask.DueAt = request.DueAt ?? existingTask.DueAt ?? now.AddHours(24);
+            existingTask.Title = $"[Sự cố #{ticket.TicketNo}] {ticket.Subject}";
+            existingTask.FacilityId = ticket.FacilityId;
+            existingTask.Status = "todo";
+            existingTask.ProgressPercent = 0;
+            existingTask.UpdatedAt = now;
+        }
+        else
+        {
+            var staffTask = new StaffTask
+            {
+                FacilityId = ticket.FacilityId,
+                AssignedEmployeeId = request.EmployeeId,
+                TicketId = ticket.Id,
+                TaskType = "support",
+                Title = $"[Sự cố #{ticket.TicketNo}] {ticket.Subject}",
+                Status = "todo",
+                CreatedBy = currentUserId,
+                DueAt = request.DueAt ?? now.AddHours(24),
+                ProgressPercent = 0,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.StaffTasks.Add(staffTask);
+        }
 
 
 
@@ -1051,73 +1128,145 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
         var agreements = await _dbContext.RentalAgreements
-
             .AsNoTracking()
-
             .Include(a => a.Customer)
-
                 .ThenInclude(c => c.User)
-
             .Include(a => a.MoveOutRequest)
-
             .Include(a => a.UnitAllocations)
-
                 .ThenInclude(ua => ua.StorageUnit)
-
+                    .ThenInclude(su => su!.UnitType)
             .Include(a => a.Invoices)
-
+                .ThenInclude(i => i.InvoiceLines)
+            .Include(a => a.Inspections)
+                .ThenInclude(i => i.InspectedByNavigation)
+                    .ThenInclude(e => e.User)
+            .Include(a => a.Inspections)
+                .ThenInclude(i => i.InspectionItems)
+            .Include(a => a.Refunds)
             .Where(a => a.FacilityId == facilityId &&
-
-                (a.Status == "active" || a.Status == "expiring_soon" || a.Status == "overdue") &&
-
-                (a.EndDate <= upcomingThreshold || (a.MoveOutRequest != null && (a.MoveOutRequest.Status == "pending" || a.MoveOutRequest.Status == "approved"))))
-
+                (a.Status == RentalAgreementStatusConstants.Active || a.Status == RentalAgreementStatusConstants.ExpiringSoon || a.Status == RentalAgreementStatusConstants.Overdue || a.Status == RentalAgreementStatusConstants.MoveOutScheduled || a.Status == RentalAgreementStatusConstants.Terminated || a.Status == RentalAgreementStatusConstants.Completed) &&
+                (a.EndDate <= upcomingThreshold || (a.MoveOutRequest != null && a.MoveOutRequest.Status != MoveOutStatusConstants.Cancelled) || a.Inspections.Any(i => i.InspectionType == "check_out" || i.InspectionType == "move_out") || a.Refunds.Any()))
             .OrderBy(a => a.EndDate)
-
             .ToListAsync(cancellationToken);
 
-
-
         return agreements.Select(a =>
-
         {
+            var activeAllocation = a.UnitAllocations.FirstOrDefault(ua => ua.Status == "active")
+                ?? a.UnitAllocations.OrderByDescending(ua => ua.Id).FirstOrDefault();
 
-            var activeAllocation = a.UnitAllocations.FirstOrDefault(ua => ua.Status == "active");
+            var latestInspection = a.Inspections
+                .Where(i => i.InspectionType == "check_out" || i.InspectionType == "move_out")
+                .OrderByDescending(i => i.InspectedAt ?? i.CreatedAt)
+                .FirstOrDefault();
+
+            var latestRefund = a.Refunds
+                .OrderByDescending(r => r.CreatedAt)
+                .FirstOrDefault();
+
+            string inspectionStatus = "unassigned";
+            string postInspectionStatus = "awaiting_assignment";
+            long? assignedStaffId = null;
+            string? assignedStaffName = null;
+            decimal? damageCost = null;
+            decimal? refundAmount = null;
+            decimal? penaltyAmount = null;
+            long? refundId = null;
+            string? bankName = null;
+            string? bankAccountNumber = null;
+            string? bankAccountHolder = null;
+            string? notes = null;
+
+            if (latestInspection != null)
+            {
+                assignedStaffId = latestInspection.InspectedBy;
+                assignedStaffName = latestInspection.InspectedByNavigation?.FullName ?? latestInspection.InspectedByNavigation?.User?.Email;
+                notes = latestInspection.Summary;
+
+                var rawInspStatus = (latestInspection.Status ?? string.Empty).ToLowerInvariant();
+                if (rawInspStatus == "assigned" || rawInspStatus == "pending" || rawInspStatus == InspectionStatusConstants.Draft)
+                {
+                    inspectionStatus = "assigned";
+                    postInspectionStatus = "inspecting";
+                }
+                else if (rawInspStatus == "completed" || rawInspStatus == "inspected")
+                {
+                    inspectionStatus = "inspected";
+                    var dmg = latestInspection.InspectionItems.Sum(ii => ii.ChargeAmount);
+                    damageCost = dmg;
+
+                    if (latestRefund != null)
+                    {
+                        refundId = latestRefund.Id;
+                        refundAmount = latestRefund.Amount;
+                        var (bName, bAcc, bHolder, bNote) = ExtractBankInfo(latestRefund.Reason);
+                        bankName = bName;
+                        bankAccountNumber = bAcc;
+                        bankAccountHolder = bHolder;
+                        if (!string.IsNullOrWhiteSpace(bNote)) notes = bNote;
+
+                        var rStatus = (latestRefund.Status ?? string.Empty).ToLowerInvariant();
+                        if (rStatus == "completed" || rStatus == "refunded" || a.Status == RentalAgreementStatusConstants.Completed)
+                        {
+                            inspectionStatus = "completed";
+                            postInspectionStatus = "refunded";
+                        }
+                        else
+                        {
+                            postInspectionStatus = "waiting_bank_info";
+                        }
+                    }
+                    else
+                    {
+                        postInspectionStatus = "waiting_bank_info";
+                    }
+
+                    var penaltyInv = a.Invoices.FirstOrDefault(i => (i.TicketChargeProposalId.HasValue || i.InvoiceLines.Any(il => il.LineType == "penalty" || il.LineType == "damage")) && i.Status != InvoiceStatusConstants.Paid);
+                    if (penaltyInv != null && (penaltyInv.TotalAmount - penaltyInv.PaidAmount) > 0)
+                    {
+                        penaltyAmount = penaltyInv.TotalAmount - penaltyInv.PaidAmount;
+                        postInspectionStatus = "waiting_penalty_payment";
+                    }
+                    else if (dmg > a.DepositSnapshot && postInspectionStatus != "refunded")
+                    {
+                        penaltyAmount = dmg - a.DepositSnapshot;
+                        postInspectionStatus = "waiting_penalty_payment";
+                    }
+                }
+            }
 
             return new ManagerAgreementDetailDto
-
             {
-
                 Id = a.Id,
-
                 AgreementNo = a.AgreementNo,
-
                 CustomerId = a.CustomerId,
-
                 CustomerName = a.Customer.FullName,
-
                 CustomerPhone = a.Customer.User.PhoneNumber,
-
                 CustomerEmail = a.Customer.User.Email,
-
                 StorageUnitId = activeAllocation?.StorageUnitId ?? 0,
-
                 UnitCode = activeAllocation?.StorageUnit?.UnitCode ?? string.Empty,
-
+                UnitTypeName = activeAllocation?.StorageUnit?.UnitType?.Name,
+                FacilityId = a.FacilityId,
                 StartDate = a.StartDate,
-
                 EndDate = a.EndDate,
-
+                RequestedMoveOutDate = a.MoveOutRequest?.RequestedMoveOutDate,
+                IsMoveOutRequested = a.MoveOutRequest != null,
                 MonthlyRent = a.MonthlyRateSnapshot,
-
                 DepositAmount = a.DepositSnapshot,
-
                 Status = a.Status,
-
-                TotalDebt = a.Invoices.Where(i => i.Status == InvoiceStatusConstants.Overdue).Sum(i => i.TotalAmount - i.PaidAmount)
-
+                TotalDebt = a.Invoices.Where(i => i.Status == InvoiceStatusConstants.Overdue).Sum(i => i.TotalAmount - i.PaidAmount),
+                InspectionStatus = inspectionStatus,
+                PostInspectionStatus = postInspectionStatus,
+                AssignedStaffId = assignedStaffId,
+                AssignedStaffName = assignedStaffName,
+                DamageCost = damageCost,
+                RefundAmount = refundAmount,
+                PenaltyAmount = penaltyAmount,
+                RefundId = refundId,
+                BankName = bankName,
+                BankAccountNumber = bankAccountNumber,
+                BankAccountHolder = bankAccountHolder,
+                Notes = notes
             };
-
         }).ToList();
 
     }
@@ -1139,6 +1288,8 @@ public partial class FacilityManagerService : IFacilityManagerService
         var agreement = await _dbContext.RentalAgreements
 
             .Include(a => a.Facility)
+
+            .Include(a => a.MoveOutRequest)
 
             .Include(a => a.UnitAllocations)
 
@@ -1238,33 +1389,37 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var staffTask = new StaffTask
+        var existingInspectionTask = await _dbContext.StaffTasks
+            .FirstOrDefaultAsync(t => t.FacilityId == agreement.FacilityId &&
+                                      t.TaskType == "inspection" &&
+                                      t.Title.Contains(agreement.AgreementNo), cancellationToken);
 
+        if (existingInspectionTask != null)
         {
-
-            FacilityId = agreement.FacilityId,
-
-            AssignedEmployeeId = request.EmployeeId,
-
-            TaskType = "inspection",
-
-            Title = $"[Nghiệm thu trả kho HĐ #{agreement.AgreementNo}] Ô kho {activeUnit?.UnitCode ?? ""}",
-
-            Status = "todo",
-
-            CreatedBy = currentUserId,
-
-            DueAt = request.ScheduledAt ?? now.AddHours(24),
-
-            ProgressPercent = 0,
-
-            CreatedAt = now,
-
-            UpdatedAt = now
-
-        };
-
-        _dbContext.StaffTasks.Add(staffTask);
+            existingInspectionTask.AssignedEmployeeId = request.EmployeeId;
+            existingInspectionTask.DueAt = request.ScheduledAt ?? existingInspectionTask.DueAt ?? now.AddHours(24);
+            existingInspectionTask.Title = $"[Nghiệm thu trả kho HĐ #{agreement.AgreementNo}] Ô kho {activeUnit?.UnitCode ?? ""}";
+            existingInspectionTask.Status = "todo";
+            existingInspectionTask.ProgressPercent = 0;
+            existingInspectionTask.UpdatedAt = now;
+        }
+        else
+        {
+            var staffTask = new StaffTask
+            {
+                FacilityId = agreement.FacilityId,
+                AssignedEmployeeId = request.EmployeeId,
+                TaskType = "inspection",
+                Title = $"[Nghiệm thu trả kho HĐ #{agreement.AgreementNo}] Ô kho {activeUnit?.UnitCode ?? ""}",
+                Status = "todo",
+                CreatedBy = currentUserId,
+                DueAt = request.ScheduledAt ?? now.AddHours(24),
+                ProgressPercent = 0,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.StaffTasks.Add(staffTask);
+        }
 
 
 
@@ -1313,41 +1468,23 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
     private async Task<long> ResolveAndValidateFacilityIdAsync(
-
         long? facilityId,
-
         long currentUserId,
-
         bool isSystemAdmin,
-
         CancellationToken cancellationToken)
-
     {
-
-        if (facilityId.HasValue)
-
+        if (facilityId.HasValue && facilityId.Value > 0)
         {
-
             await ValidateFacilityAccessAsync(facilityId.Value, currentUserId, isSystemAdmin, cancellationToken);
-
             return facilityId.Value;
-
         }
-
-
 
         var facilities = await GetMyFacilitiesAsync(currentUserId, isSystemAdmin, cancellationToken);
-
         if (facilities.Count == 0)
-
         {
-
             throw AppException.FromError(ManagerErrors.NotAssignedToFacility);
-
         }
-
         return facilities[0].Id;
-
     }
 
 
@@ -1837,60 +1974,35 @@ public partial class FacilityManagerService : IFacilityManagerService
                 TemplateCode = "REFUND_PAYOUT_COMPLETED",
 
                 Subject = $"[Hoàn cọc thành công #{refund.Id}] HĐ #{refund.Agreement.AgreementNo}",
+                DeduplicationKey = $"refund-payout-{refund.Id}-{now.ToUnixTimeSeconds()}",
 
                 Payload = System.Text.Json.JsonSerializer.Serialize(new
-
                 {
-
                     refundId = refund.Id,
-
                     agreementId = refund.AgreementId,
-
                     agreementNo = refund.Agreement.AgreementNo,
-
                     amount = refund.Amount,
-
-                    transactionReference = request.TransactionReference,
-
+                    transactionReference = txRef,
                     payoutMethod = "bank_transfer",
-
-                    message = $"Quản lý cơ sở {refund.Agreement.Facility?.Name} đã chuyển khoản hoàn tất số tiền cọc {refund.Amount:N0} VND vào {bankTarget}. Mã giao dịch: {request.TransactionReference}."
-
+                    message = $"Quản lý cơ sở {refund.Agreement.Facility?.Name} đã chuyển khoản hoàn tất số tiền cọc {refund.Amount:N0} VND vào {bankTarget}. Mã giao dịch: {txRef}."
                 }),
-
                 Status = "pending",
-
                 ScheduledAt = now,
-
                 CreatedAt = now
-
             });
-
         }
-
-
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-
-
         return new ManagerProcessRefundPayoutResultDto
-
         {
-
             RefundId = refund.Id,
-
             AgreementId = refund.AgreementId,
-
             Amount = refund.Amount,
-
             Status = refund.Status,
-
             PayoutMethod = refund.Provider,
-
-            TransactionReference = request.TransactionReference ?? string.Empty,
-
-            ProofImageUrl = request.ProofImageUrl,
+            TransactionReference = txRef ?? string.Empty,
+            ProofImageUrl = proofImg,
 
             ProcessedByUserId = currentUserId,
 

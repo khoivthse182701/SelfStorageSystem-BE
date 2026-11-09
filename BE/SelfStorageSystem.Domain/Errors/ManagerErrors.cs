@@ -82,6 +82,9 @@ public static class ManagerErrors
     public static readonly Error RefundMissingBankInfo =
         Error.Validation("Manager.RefundMissingBankInfo", "Khách hàng chưa cung cấp thông tin tài khoản ngân hàng để chuyển khoản.");
 
+    public static readonly Error RefundAmountExceedsPayment =
+        Error.Validation("Manager.RefundAmountExceedsPayment", "Số tiền hoàn không được vượt quá số tiền thanh toán gốc.");
+
     public static readonly Error RefundAmountInvalid =
         Error.Validation("Manager.RefundAmountInvalid", "Số tiền hoàn cọc phải lớn hơn 0.");
 

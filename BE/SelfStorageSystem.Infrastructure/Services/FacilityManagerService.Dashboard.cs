@@ -95,29 +95,20 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
         // Daily schedule
-
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
         var todayCheckIns = await _dbContext.Reservations
-
             .CountAsync(r => r.FacilityId == facilityId && 
-
+                             r.StartDate == today &&
                              (r.Status == ReservationStatusConstants.Confirmed || r.Status == ReservationStatusConstants.Pending), cancellationToken);
 
-
-
         var todayCheckOuts = await _dbContext.MoveOutRequests
-
             .CountAsync(m => m.Agreement.FacilityId == facilityId && 
+                             m.RequestedMoveOutDate == today &&
+                             m.Status != MoveOutStatusConstants.Cancelled, cancellationToken);
 
-                             (m.Status == MoveOutStatusConstants.Requested || m.Status == MoveOutStatusConstants.InspectionPending || m.Status == MoveOutStatusConstants.Scheduled || m.RequestedMoveOutDate == today), cancellationToken);
 
 
-
-        var todayUtcDate = DateTime.UtcNow.Date;
-
-        var todayStart = new DateTimeOffset(todayUtcDate, TimeSpan.Zero);
-
+        var todayStart = new DateTimeOffset(today.ToDateTime(TimeOnly.MinValue), TimeSpan.FromHours(7));
         var todayEnd = todayStart.AddDays(1);
 
 

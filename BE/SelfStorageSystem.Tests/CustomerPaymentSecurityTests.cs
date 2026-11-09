@@ -214,4 +214,17 @@ public class CustomerPaymentSecurityTests
         // Assert
         Assert.Equal(legacyPin, decrypted);
     }
+
+    [Fact]
+    public void PinProtectionHelper_DecryptCrossKeyCiphertext_SuccessfullyDecryptsToSixDigits()
+    {
+        // Arrange: Ciphertext encrypted with primary fallback key
+        var cipherFromImage = "ENC:sWyFCOdGrcmSkmh48d4ddvYU/Yt1ZMPWOXnKNK6OvRE=";
+
+        // Act
+        var decrypted = PinProtectionHelper.Decrypt(cipherFromImage);
+
+        // Assert
+        Assert.Equal("123123", decrypted);
+    }
 }

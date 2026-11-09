@@ -30,6 +30,7 @@ public static class SePayConstants
     public const string TransferTypeIn = "in";
     public const string TransferTypeOut = "out";
     public const string DefaultBankCode = "MBBank";
-    public const string DefaultTemplate = "compact";
+    public const string DefaultTemplate = "qronly";
     public const string DefaultBaseUrl = "https://vietqr.app/img";
 }
+

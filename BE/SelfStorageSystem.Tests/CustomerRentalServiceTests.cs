@@ -332,6 +332,103 @@ public class CustomerRentalServiceTests
     }
 
     [Fact]
+    public async Task GetAccessCredentialsAsync_ShouldNotSuspend_WhenInvoicesAreVoidedOrTransferRelated()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        var facility = new Facility
+        {
+            Id = 1,
+            Code = "FAC-01",
+            Name = "Central Facility",
+            AddressLine = "123 Road",
+            City = "HCM",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = "active"
+        };
+        var unit = new StorageUnit
+        {
+            Id = 1,
+            FacilityId = 1,
+            UnitCode = "A-111",
+            PhysicalStatus = StorageUnitStatusConstants.Occupied,
+            Facility = facility
+        };
+        var agreement = new RentalAgreement
+        {
+            Id = 1008,
+            AgreementNo = "AGR-1008",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = today.AddDays(-10),
+            EndDate = today.AddDays(20),
+            CheckedInAt = DateTimeOffset.UtcNow.AddDays(-10),
+            MonthlyRateSnapshot = 2000000,
+            Facility = facility
+        };
+        var alloc = new UnitAllocation
+        {
+            Id = 1,
+            AgreementId = agreement.Id,
+            StorageUnitId = unit.Id,
+            AllocationKind = "rental",
+            Status = AllocationStatusConstants.Active,
+            StorageUnit = unit
+        };
+
+        // Paid rental invoice
+        var paidInvoice = new Invoice
+        {
+            Id = 1016,
+            AgreementId = agreement.Id,
+            InvoiceNo = "INV-PAID-01",
+            CustomerId = customerId,
+            IssueDate = today.AddDays(-10),
+            DueDate = today.AddDays(-5),
+            Currency = "VND",
+            Status = InvoiceStatusConstants.Paid,
+            TotalAmount = 2000000m,
+            PaidAmount = 2000000m
+        };
+
+        // Voided transfer invoice with past due date
+        var voidedTransferInvoice = new Invoice
+        {
+            Id = 9309,
+            AgreementId = agreement.Id,
+            InvoiceNo = "INV-TRF-20261106-000006",
+            CustomerId = customerId,
+            IssueDate = today.AddDays(-3),
+            DueDate = today.AddDays(-1),
+            Currency = "VND",
+            Status = InvoiceStatusConstants.Voided,
+            BillingPeriod = "TRANSFER:6",
+            TotalAmount = 11200000m,
+            PaidAmount = 0m
+        };
+
+        await dbContext.Facilities.AddAsync(facility);
+        await dbContext.StorageUnits.AddAsync(unit);
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.UnitAllocations.AddAsync(alloc);
+        await dbContext.Invoices.AddRangeAsync(paidInvoice, voidedTransferInvoice);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext);
+
+        var credentials = await service.GetAccessCredentialsAsync(customerId, agreement.Id, CancellationToken.None);
+
+        // Access must remain Active, must not be suspended by voided or transfer invoice
+        Assert.Equal(CredentialStatusConstants.Active, credentials.Status);
+        Assert.NotNull(credentials.GateQrToken);
+        Assert.Null(credentials.SuspendedReason);
+        Assert.NotNull(credentials.KeypadPin);
+    }
+
+    [Fact]
     public async Task GetAccessCredentialsAsync_ShouldReturnActiveCredentialsAnd120sToken_WhenValid()
     {
         using var dbContext = CreateInMemoryDbContext();
@@ -684,11 +781,25 @@ public class CustomerRentalServiceTests
             EmploymentStatus = "active"
         };
 
+        var customer = new CustomerProfile
+        {
+            UserId = customerId, FullName = "Nguyen Van Customer",
+            User = new User { Id = customerId, Email = "handover@example.com", PhoneNumber = "0900000001", PasswordHash = "test", Status = "active" }
+        };
+        dbContext.CustomerProfiles.Add(customer);
+        var unitType = new UnitType
+        {
+            Id = 1, Code = "S-DRY", Name = "Small Dry Storage", IsActive = true,
+            WidthM = 1.5m, LengthM = 2m, HeightM = 2.5m, AreaM2 = 3m, VolumeM3 = 7.5m
+        };
         var unit = new StorageUnit
         {
             Id = 1,
             FacilityId = 1,
             UnitCode = "U-101",
+            UnitType = unitType,
+            FloorLabel = "1",
+            ZoneLabel = "A",
             PhysicalStatus = StorageUnitStatusConstants.Occupied,
             Facility = facility
         };
@@ -775,11 +886,96 @@ public class CustomerRentalServiceTests
 
         Assert.NotNull(result);
         Assert.Equal(HandoverTypeConstants.CheckIn, result.HandoverType);
+        Assert.Equal("U-101", result.UnitCode);
+        Assert.Equal("Small Dry Storage", result.UnitTypeName);
+        Assert.Equal("Central Facility", result.FacilityName);
+        Assert.Equal("123 Road", result.FacilityAddress);
+        Assert.Equal("Nguyen Van Customer", result.CustomerName);
+        Assert.Equal("handover@example.com", result.CustomerEmail);
+        Assert.Equal("0900000001", result.CustomerPhone);
+        Assert.Equal("EMP-01", result.StaffEmployeeCode);
+        Assert.Equal(3m, result.AreaM2);
+        Assert.Equal(7.5m, result.VolumeM3);
         Assert.Equal("Nguyen Van Staff", result.HandledByName);
         Assert.NotNull(result.Inspection);
         Assert.Single(result.Inspection.Items);
         Assert.Equal("Door Lock Mechanism", result.Inspection.Items[0].ItemName);
         Assert.Equal("https://storage.example.com/photos/lock.jpg", result.Inspection.Items[0].PhotoUrl);
+
+        await Assert.ThrowsAsync<AppNotFoundException>(() => service.GetHandoverRecordAsync(customerId + 1, agreementId));
+
+        // The report must follow its recorded allocation, even if another unit
+        // becomes active later in the rental lifecycle.
+        var otherUnit = new StorageUnit { Id = 2, FacilityId = 1, UnitType = unitType, UnitCode = "U-102", PhysicalStatus = "occupied" };
+        dbContext.StorageUnits.Add(otherUnit);
+        dbContext.UnitAllocations.Add(new UnitAllocation
+        {
+            Id = 2, AgreementId = agreementId, StorageUnit = otherUnit,
+            AllocationKind = "rental", Status = AllocationStatusConstants.Active
+        });
+        await dbContext.SaveChangesAsync();
+        Assert.Equal("U-101", (await service.GetHandoverRecordAsync(customerId, agreementId)).UnitCode);
+    }
+
+    [Theory]
+    [InlineData("pending_payment", "open", 0, true)]
+    [InlineData("pending_payment", "partially_paid", 1000, true)]
+    [InlineData("paid", "paid", 8067, false)]
+    [InlineData("cancelled", "voided", 0, false)]
+    public async Task GetLatestTransferRequestAsync_ReportsServerPaymentStateAndQrContent(string status, string invoiceStatus, int paid, bool hasQr)
+    {
+        using var db = CreateInMemoryDbContext();
+        var type = new UnitType { Id = 1, Code = "S", Name = "Small", IsActive = true };
+        var unit = new StorageUnit { Id = 1, UnitType = type, UnitCode = "A-101", PhysicalStatus = "occupied" };
+        var agreement = new RentalAgreement { Id = 1, CustomerId = 7, AgreementNo = "AGR-1", Status = "active" };
+        db.RentalAgreements.Add(agreement);
+        db.UnitTransferRequests.Add(new UnitTransferRequest
+        {
+            Id = 9, Agreement = agreement, FromUnit = unit, RequestedUnitType = type,
+            RequestedBy = 7, RequestedFacilityId = 1, Reason = "Transfer", Status = status,
+            TotalPaidAmount = 8067, CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+        });
+        db.Invoices.Add(new Invoice
+        {
+            Id = 49333, InvoiceNo = "INV-TRF-9", CustomerId = 7, AgreementId = 1,
+            BillingPeriod = "TRANSFER:9", Currency = "VND", Status = invoiceStatus, TotalAmount = 8067, PaidAmount = paid
+        });
+        await db.SaveChangesAsync();
+        var result = await CreateService(db).GetLatestTransferRequestAsync(7, 1);
+        Assert.NotNull(result);
+        Assert.Equal(status, result.Status);
+        Assert.Equal(paid, result.PaidAmount);
+        Assert.Equal("DH49333", result.PaymentContent);
+        Assert.Equal(hasQr, result.PaymentQrUrl != null);
+        if (hasQr)
+        {
+            Assert.Contains("des=DH49333", result.PaymentQrUrl);
+            Assert.Contains($"amount={8067 - paid}", result.PaymentQrUrl);
+            Assert.DoesNotContain("memo=", result.PaymentQrUrl);
+        }
+        await Assert.ThrowsAsync<AppNotFoundException>(() => CreateService(db).GetLatestTransferRequestAsync(8, 1));
+    }
+
+    [Fact]
+    public async Task GetHandoverRecordAsync_MissingRecord_DoesNotInventInspectionOrSignatures()
+    {
+        using var db = CreateInMemoryDbContext();
+        var facility = new Facility { Id = 1, Code = "F1", Name = "Facility", AddressLine = "123 Road", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
+        var staff = new EmployeeProfile { UserId = 501, EmployeeCode = "EMP-01", FullName = "Staff", EmploymentStatus = "active" };
+        var agreement = new RentalAgreement { Id = 301, CustomerId = 1001, AgreementNo = "AGR-301", Facility = facility, Status = "active", CheckedInAt = DateTimeOffset.UtcNow };
+        var unit = new StorageUnit { Id = 1, Facility = facility, UnitCode = "A-101", PhysicalStatus = "occupied" };
+        db.RentalAgreements.Add(agreement);
+        db.UnitAllocations.Add(new UnitAllocation { Agreement = agreement, StorageUnit = unit, AllocationKind = "rental", Status = "active" });
+        db.StaffFacilityAssignments.Add(new StaffFacilityAssignment
+        {
+            Employee = staff, Facility = facility, AssignmentRole = "staff", StartsAt = DateTimeOffset.UtcNow.AddDays(-1)
+        });
+        await db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<AppNotFoundException>(() => CreateService(db).GetHandoverRecordAsync(1001, 301));
+        Assert.Empty(await db.HandoverRecords.ToListAsync());
+        Assert.Empty(await db.Inspections.ToListAsync());
+        Assert.Empty(await db.InspectionItems.ToListAsync());
     }
 
     [Fact]
@@ -1098,5 +1294,275 @@ public class CustomerRentalServiceTests
             () => service.RequestUnitTransferAsync(customerId, agreementId, request, CancellationToken.None));
 
         Assert.Equal(RentalErrors.TransferLimitReached.Code, ex.Error.Code);
+    }
+
+    [Fact]
+    public async Task UnlockUnitAsync_ShouldSucceed_WhenSecretDigestIsNull_AndDisplayHintIsEncrypted()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+        long agreementId = 302;
+        string correctPin = "654321";
+
+        var facility = new Facility
+        {
+            Id = 2,
+            Name = "Cau Giay Storage Facility 2",
+            Code = "FAC-CG2",
+            AddressLine = "123 Cau Giay",
+            Timezone = "Asia/Ho_Chi_Minh",
+            City = "Hanoi",
+            Status = "active",
+            OpeningTime = new TimeOnly(0, 0),
+            ClosingTime = new TimeOnly(23, 59)
+        };
+
+        var unit = new StorageUnit
+        {
+            Id = 2,
+            FacilityId = 2,
+            UnitCode = "CG-B202",
+            PhysicalStatus = StorageUnitStatusConstants.Occupied
+        };
+
+        var agreement = new RentalAgreement
+        {
+            Id = agreementId,
+            AgreementNo = "AGR-302",
+            CustomerId = customerId,
+            FacilityId = 2,
+            Status = RentalAgreementStatusConstants.Active,
+            CheckedInAt = DateTimeOffset.UtcNow.AddDays(-2),
+            Facility = facility
+        };
+
+        var unitAllocation = new UnitAllocation
+        {
+            Id = 2,
+            AgreementId = agreementId,
+            StorageUnitId = 2,
+            AllocationKind = "rental",
+            Status = AllocationStatusConstants.Active,
+            StorageUnit = unit
+        };
+
+        var credential = new AccessCredential
+        {
+            Id = 2,
+            AgreementId = agreementId,
+            CredentialType = CredentialTypeConstants.Pin,
+            SecretDigest = null,
+            DisplayHint = PinProtectionHelper.Encrypt(correctPin),
+            Status = CredentialStatusConstants.Active,
+            IssuedAt = DateTimeOffset.UtcNow,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        await dbContext.Facilities.AddAsync(facility);
+        await dbContext.StorageUnits.AddAsync(unit);
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.UnitAllocations.AddAsync(unitAllocation);
+        await dbContext.AccessCredentials.AddAsync(credential);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext);
+
+        var request = new UnlockStorageUnitRequest { Pin = correctPin };
+        var result = await service.UnlockUnitAsync(customerId, agreementId, request, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.True(result.Success);
+        Assert.Equal("CG-B202", result.UnitCode);
+    }
+
+    [Fact]
+    public async Task RequestMoveOutAsync_ShouldCapReasonTo250Chars_WhenBankDetailsAndReasonAreLong()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1001;
+        long agreementId = 303;
+
+        var agreement = new RentalAgreement
+        {
+            Id = agreementId,
+            AgreementNo = "AGR-303",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-10)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(20)),
+            MonthlyRateSnapshot = 1000000,
+            DepositSnapshot = 1000000,
+            DepositBalance = 1000000,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext);
+
+        var longReason = new string('A', 200);
+        var longBank = "Ngan Hang Thuong Mai Co Phan Ngoai Thuong Viet Nam Vietcombank";
+        var request = new RequestMoveOutRequest(
+            RequestedMoveOutDate: DateOnly.FromDateTime(DateTime.UtcNow.AddDays(5)),
+            Reason: longReason,
+            BankName: longBank,
+            BankAccountNumber: "9999888877776666",
+            BankAccountHolder: "NGUYEN VAN LONG NAME HOLDER FOR TESTING PURPOSE"
+        );
+
+        var result = await service.RequestMoveOutAsync(customerId, agreementId, request, CancellationToken.None);
+
+        Assert.NotNull(result);
+        var savedMoveOut = await dbContext.MoveOutRequests.FirstOrDefaultAsync(m => m.AgreementId == agreementId);
+        Assert.NotNull(savedMoveOut);
+        Assert.NotNull(savedMoveOut.Reason);
+        Assert.True(savedMoveOut.Reason.Length <= 250, $"Reason length was {savedMoveOut.Reason.Length}, expected <= 250");
+    }
+
+    [Fact]
+    public async Task CancelInvoiceAsync_WhenInvoiceIsForReservation_ShouldCancelReservationAndReleaseStorageUnit()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 2001;
+        long facilityId = 1;
+
+        var facility = new Facility
+        {
+            Id = facilityId,
+            Name = "Cau Giay Storage Facility",
+            Code = "FAC-CG",
+            AddressLine = "123 Cau Giay",
+            Timezone = "Asia/Ho_Chi_Minh",
+            City = "Hanoi",
+            Status = "active",
+            OpeningTime = new TimeOnly(0, 0),
+            ClosingTime = new TimeOnly(23, 59)
+        };
+
+        var unit = new StorageUnit
+        {
+            Id = 88,
+            FacilityId = facilityId,
+            UnitCode = "CG-A88",
+            PhysicalStatus = StorageUnitStatusConstants.Reserved
+        };
+
+        var reservation = new Reservation
+        {
+            Id = 501,
+            CustomerId = customerId,
+            FacilityId = facilityId,
+            UnitTypeId = 1,
+            ReservationCode = "RSV-TEST-501",
+            Status = ReservationStatusConstants.Pending,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(1)),
+            MonthlyRateSnapshot = 1000000,
+            DepositSnapshot = 1000000,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        var allocation = new UnitAllocation
+        {
+            Id = 501,
+            ReservationId = reservation.Id,
+            StorageUnitId = unit.Id,
+            AllocationKind = AllocationKindConstants.Reservation,
+            Status = AllocationStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            StorageUnit = unit
+        };
+
+        var invoice = new Invoice
+        {
+            Id = 901,
+            InvoiceNo = "INV-TEST-901",
+            CustomerId = customerId,
+            ReservationId = reservation.Id,
+            TotalAmount = 2000000,
+            PaidAmount = 0,
+            Status = InvoiceStatusConstants.Open,
+            IssueDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)),
+            Currency = "VND",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Reservation = reservation
+        };
+
+        await dbContext.Facilities.AddAsync(facility);
+        await dbContext.StorageUnits.AddAsync(unit);
+        await dbContext.Reservations.AddAsync(reservation);
+        await dbContext.UnitAllocations.AddAsync(allocation);
+        await dbContext.Invoices.AddAsync(invoice);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext);
+
+        // Act: Customer cancels the reservation invoice
+        var result = await service.CancelInvoiceAsync(customerId, invoice.Id);
+
+        // Assert
+        Assert.True(result);
+        Assert.Equal(InvoiceStatusConstants.Voided, invoice.Status);
+        Assert.Equal(ReservationStatusConstants.Cancelled, reservation.Status);
+        Assert.Equal(AllocationStatusConstants.Cancelled, allocation.Status);
+        Assert.Equal(StorageUnitStatusConstants.Available, unit.PhysicalStatus);
+    }
+
+    [Fact]
+    public async Task RequestMoveOutAsync_ShouldPreserveVietnameseUtf8Characters_WithoutUnicodeEscaping()
+    {
+        using var dbContext = CreateInMemoryDbContext();
+        long customerId = 1002;
+        long agreementId = 304;
+
+        var agreement = new RentalAgreement
+        {
+            Id = agreementId,
+            AgreementNo = "AGR-304",
+            CustomerId = customerId,
+            FacilityId = 1,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-10)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(20)),
+            MonthlyRateSnapshot = 1000000,
+            DepositSnapshot = 1000000,
+            DepositBalance = 1000000,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        await dbContext.RentalAgreements.AddAsync(agreement);
+        await dbContext.SaveChangesAsync();
+
+        var service = CreateService(dbContext);
+
+        var vietnameseBank = "Ngân hàng Thương mại Cổ phần Ngoại thương Việt Nam";
+        var vietnameseHolder = "NGUYỄN VĂN ĐỨC";
+        var vietnameseReason = "Hết hạn hợp đồng và chuyển văn phòng về cơ sở mới";
+
+        var request = new RequestMoveOutRequest(
+            RequestedMoveOutDate: DateOnly.FromDateTime(DateTime.UtcNow.AddDays(5)),
+            Reason: vietnameseReason,
+            BankName: vietnameseBank,
+            BankAccountNumber: "01234567890123",
+            BankAccountHolder: vietnameseHolder
+        );
+
+        var result = await service.RequestMoveOutAsync(customerId, agreementId, request, CancellationToken.None);
+
+        Assert.NotNull(result);
+        var savedMoveOut = await dbContext.MoveOutRequests.FirstOrDefaultAsync(m => m.AgreementId == agreementId);
+        Assert.NotNull(savedMoveOut);
+        Assert.NotNull(savedMoveOut.Reason);
+        Assert.True(savedMoveOut.Reason.Length <= 250, $"Reason length was {savedMoveOut.Reason.Length}, expected <= 250");
+        Assert.DoesNotContain("\\u", savedMoveOut.Reason);
+        Assert.Contains(vietnameseHolder, savedMoveOut.Reason);
+        Assert.Contains(vietnameseBank, savedMoveOut.Reason);
     }
 }

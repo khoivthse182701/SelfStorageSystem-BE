@@ -2,7 +2,10 @@ namespace SelfStorageSystem.Contracts.Customer.Rentals;
 
 public record RequestMoveOutRequest(
     DateOnly RequestedMoveOutDate,
-    string? Reason = null
+    string? Reason = null,
+    string? BankName = null,
+    string? BankAccountNumber = null,
+    string? BankAccountHolder = null
 );
 
 public record MoveOutResponseDto(
@@ -92,7 +95,13 @@ public record UnitTransferRequestDto(
     string? PaymentContent,
     string Reason,
     string Status,
-    DateTimeOffset CreatedAt
+    DateTimeOffset CreatedAt,
+    string? PaymentBankCode = null,
+    string? PaymentAccountNo = null,
+    string? PaymentAccountName = null,
+    decimal? AmountDue = null,
+    decimal? PaidAmount = null,
+    DateTimeOffset? HoldUntil = null
 );
 
 public record TransferPreviewDto(

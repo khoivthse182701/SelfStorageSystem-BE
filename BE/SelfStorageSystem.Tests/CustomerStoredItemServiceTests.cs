@@ -429,5 +429,45 @@ public class CustomerStoredItemServiceTests
         var updated = await service.UpdateStoredItemAsync(customerId: 7, agreementId: 400, itemId: itemId, updateRequest);
         Assert.Equal("Chuyển lên kệ tầng 2", updated.LocationNote);
     }
-}
 
+    [Fact]
+    public async Task DeclareStoredItems_WithBusinessAndSeasonalAliases_MapsCorrectly()
+    {
+        await using var db = CreateInMemoryDbContext();
+        db.RentalAgreements.Add(new RentalAgreement
+        {
+            Id = 200,
+            AgreementNo = "AGR-200",
+            CustomerId = 7,
+            FacilityId = 1,
+            Status = "active",
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30)),
+            MonthlyRateSnapshot = 1000000,
+            DepositSnapshot = 1000000,
+            DepositBalance = 1000000,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var service = new CustomerStoredItemService(db);
+        var request = new DeclareStoredItemsRequest(new List<CreateStoredItemDto>
+        {
+            new CreateStoredItemDto("Pallet hàng", "business", "Lô hàng mẫu", 10, 5000000m, null, null),
+            new CreateStoredItemDto("Ván trượt tuyết", "seasonal", "Dụng cụ mùa đông", 2, 2000000m, null, null)
+        });
+
+        var result = await service.DeclareStoredItemsAsync(7, 200, request);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal(StoredItemCategoryConstants.Commercial, result.Items[0].Category);
+        Assert.Equal(StoredItemCategoryConstants.Personal, result.Items[1].Category);
+
+        // Filter using alias "business"
+        var filteredByBusiness = await service.GetDeclaredStoredItemsAsync(7, 200, category: "business");
+        Assert.Single(filteredByBusiness.Items);
+        Assert.Equal("Pallet hàng", filteredByBusiness.Items[0].ItemName);
+    }
+}

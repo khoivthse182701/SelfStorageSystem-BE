@@ -101,3 +101,79 @@ ALTER TABLE [core].unit_transfer_requests ALTER COLUMN move_out_date date NOT NU
 GO
 ALTER TABLE [core].unit_transfer_requests ALTER COLUMN move_in_date date NOT NULL;
 GO
+
+-- 5. Allow cross-facility and cross-unit-type transfers in triggers
+CREATE OR ALTER TRIGGER [core].[trg_rental_agreements_validate_reservation]
+ON [core].[rental_agreements]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF NOT EXISTS (SELECT 1 FROM deleted) AND EXISTS (
+        SELECT 1
+        FROM inserted i
+        LEFT JOIN [core].[reservations] r ON r.id = i.reservation_id
+        WHERE r.id IS NULL
+           OR r.customer_id <> i.customer_id
+           OR r.facility_id <> i.facility_id
+           OR r.start_date <> i.start_date
+           OR r.monthly_rate_snapshot <> i.monthly_rate_snapshot
+           OR r.deposit_snapshot <> i.deposit_snapshot
+    )
+    BEGIN
+        THROW 51024, 'Agreement identity and price snapshots must match its reservation.', 1;
+    END
+END;
+GO
+
+CREATE OR ALTER TRIGGER [core].[trg_unit_allocations_validate_scope]
+ON [core].[unit_allocations]
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        JOIN [core].[storage_units] su ON su.id = i.storage_unit_id
+        WHERE i.status = 'active'
+          AND (
+            (i.allocation_kind = 'reservation_hold' AND (su.is_listed = 0 OR su.physical_status IN ('occupied','maintenance','under_maintenance','out_of_service','pending_inspection')))
+            OR (i.allocation_kind = 'rental' AND su.physical_status IN ('maintenance','under_maintenance','out_of_service','pending_inspection'))
+          )
+    )
+    BEGIN
+        THROW 51025, 'Storage unit is not bookable.', 1;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        JOIN [core].[storage_units] su ON su.id = i.storage_unit_id
+        JOIN [core].[reservations] r ON r.id = i.reservation_id
+        WHERE i.status = 'active' AND i.reservation_id IS NOT NULL
+          AND (su.facility_id <> r.facility_id
+               OR su.unit_type_id <> r.unit_type_id
+               OR i.allocation_start_date <> r.start_date
+               OR i.allocation_end_date <> r.end_date)
+    )
+    BEGIN
+        THROW 51026, 'Reservation allocation must match facility, unit type and rental period.', 1;
+    END;
+
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        JOIN [core].[storage_units] su ON su.id = i.storage_unit_id
+        JOIN [core].[rental_agreements] a ON a.id = i.agreement_id
+        WHERE i.status = 'active' AND i.agreement_id IS NOT NULL
+          AND (su.facility_id <> a.facility_id
+               OR i.allocation_start_date < a.start_date
+               OR i.allocation_end_date > a.end_date)
+    )
+    BEGIN
+        THROW 51027, 'Agreement allocation must match facility, allowed unit type and agreement period.', 1;
+    END
+END;
+GO

@@ -210,6 +210,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Danh sách cơ sở (kèm số ô kho và nhân sự đang hoạt động).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpGet("facilities")]
     [ProducesResponseType(typeof(ApiResponse<PagedResult<AdminFacilitySummaryDto>>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
@@ -224,6 +225,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Chi tiết cơ sở (kèm nhân sự đang gán và thống kê trạng thái ô kho).
     /// </summary>
+    [Authorize(Roles = RoleConstants.SystemAdministrator)]
     [HttpGet("facilities/{id:long}")]
     [ProducesResponseType(typeof(ApiResponse<AdminFacilityDetailDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]

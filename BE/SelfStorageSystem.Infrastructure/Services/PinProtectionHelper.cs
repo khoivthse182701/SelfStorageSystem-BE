@@ -12,10 +12,61 @@ namespace SelfStorageSystem.Infrastructure.Services;
 public static class PinProtectionHelper
 {
     private const string EncryptedPrefix = "ENC:";
-    
-    // Key derived from environment variable or cluster fallback key
-    private static readonly byte[] Key = SHA256.HashData(Encoding.UTF8.GetBytes(
-        Environment.GetEnvironmentVariable("PIN_PROTECTION_KEY") ?? "SelfStorageSystem.KeypadPin.ProtectionSecretKey.v1.2026!"));
+    private static readonly object SyncLock = new();
+    private static byte[]? _key;
+
+    // Primary legacy fallback key used when records were initially encrypted
+    private static readonly byte[] FallbackKeyPrimary = SHA256.HashData(
+        Encoding.UTF8.GetBytes("SelfStorageSystem.KeypadPin.ProtectionSecretKey.v1.2026!"));
+
+    // Secondary dev fallback key
+    private static readonly byte[] FallbackKeySecondary = SHA256.HashData(
+        Encoding.UTF8.GetBytes("SelfStorageSystem.DevKeypadPin.ProtectionKey.2026!"));
+
+    /// <summary>
+    /// Explicitly initializes the encryption key from configuration or environment.
+    /// </summary>
+    public static void Initialize(string? configuredKey)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredKey) && configuredKey != "__SET_VIA_ENVIRONMENT_OR_SECRETS__")
+        {
+            lock (SyncLock)
+            {
+                _key = SHA256.HashData(Encoding.UTF8.GetBytes(configuredKey.Trim()));
+            }
+        }
+    }
+
+    private static byte[] GetKey()
+    {
+        if (_key != null) return _key;
+
+        lock (SyncLock)
+        {
+            if (_key != null) return _key;
+
+            var envKey = Environment.GetEnvironmentVariable("PIN_PROTECTION_KEY");
+            if (!string.IsNullOrWhiteSpace(envKey) && envKey != "__SET_VIA_ENVIRONMENT_OR_SECRETS__")
+            {
+                _key = SHA256.HashData(Encoding.UTF8.GetBytes(envKey.Trim()));
+                return _key;
+            }
+
+            var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+                      ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+
+            if (string.Equals(env, "Production", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "PIN protection encryption key is missing or not configured for Production environment. " +
+                    "Set the PIN_PROTECTION_KEY environment variable or configure SecuritySettings:PinProtectionKey.");
+            }
+
+            // Safe development / unit test fallback key for non-production environments
+            _key = FallbackKeyPrimary;
+            return _key;
+        }
+    }
 
     /// <summary>
     /// Encrypts a plaintext PIN into a Base64-encoded AES-256-CBC string prefixed with "ENC:".
@@ -29,7 +80,7 @@ public static class PinProtectionHelper
 
         var trimmed = pin.Trim();
         using var aes = Aes.Create();
-        aes.Key = Key;
+        aes.Key = GetKey();
         aes.GenerateIV();
 
         using var encryptor = aes.CreateEncryptor(aes.Key, aes.IV);
@@ -46,6 +97,7 @@ public static class PinProtectionHelper
 
     /// <summary>
     /// Decrypts a stored PIN hint. If the value is a legacy unencrypted PIN, returns it as-is.
+    /// Supports multi-key fallback for backward compatibility across key rotations.
     /// </summary>
     public static string Decrypt(string? storedValue)
     {
@@ -69,7 +121,7 @@ public static class PinProtectionHelper
 
             if (payload.Length < 17) // 16 bytes IV + at least 1 block of cipher
             {
-                return trimmed;
+                return string.Empty;
             }
 
             var iv = new byte[16];
@@ -79,19 +131,37 @@ public static class PinProtectionHelper
             var cipherBytes = new byte[cipherLength];
             Buffer.BlockCopy(payload, 16, cipherBytes, 0, cipherLength);
 
-            using var aes = Aes.Create();
-            aes.Key = Key;
-            aes.IV = iv;
+            // Candidate keys: active key first, followed by known fallback keys
+            var candidateKeys = new List<byte[]> { GetKey(), FallbackKeyPrimary, FallbackKeySecondary };
 
-            using var decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
-            var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
+            foreach (var candidateKey in candidateKeys)
+            {
+                try
+                {
+                    using var aes = Aes.Create();
+                    aes.Key = candidateKey;
+                    aes.IV = iv;
 
-            return Encoding.UTF8.GetString(plainBytes);
+                    using var decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
+                    var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
+                    var decrypted = Encoding.UTF8.GetString(plainBytes);
+                    if (!string.IsNullOrEmpty(decrypted))
+                    {
+                        return decrypted;
+                    }
+                }
+                catch (CryptographicException)
+                {
+                    // Continue to next candidate key
+                }
+            }
+
+            // If decryption fails across all keys, do not leak raw ciphertext to UI
+            return string.Empty;
         }
         catch
         {
-            // Fallback gracefully to raw string if decryption fails
-            return trimmed;
+            return string.Empty;
         }
     }
 }

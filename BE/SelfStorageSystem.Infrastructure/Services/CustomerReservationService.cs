@@ -273,12 +273,13 @@ public class CustomerReservationService : ICustomerReservationService
 
 
         IDbContextTransaction? transaction = null;
+        StorageUnit? selectedUnit = null;
 
         if (_dbContext.Database.IsSqlServer())
 
         {
 
-            transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+            transaction = await _dbContext.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken);
 
         }
 
@@ -464,7 +465,7 @@ public class CustomerReservationService : ICustomerReservationService
 
             // 6. Concurrency Locking & Specific Storage Unit check
 
-            StorageUnit? selectedUnit = null;
+            selectedUnit = null;
 
             if (request.StorageUnitId.HasValue)
 
@@ -575,27 +576,31 @@ public class CustomerReservationService : ICustomerReservationService
                 }
 
                 else
-
                 {
+                    selectedUnit = await _dbContext.StorageUnits
+                        .Where(u => u.FacilityId == request.FacilityId
+                                 && u.UnitTypeId == request.UnitTypeId
+                                 && u.PhysicalStatus == StorageUnitStatusConstants.Available
+                                 && u.IsListed
+                                 && !u.UnitAllocations.Any(ua => ua.Status == AllocationStatusConstants.Active && ua.AllocationStartDate < endDate && ua.AllocationEndDate > request.StartDate))
+                        .OrderBy(u => u.Id)
+                        .FirstOrDefaultAsync(cancellationToken);
 
-                    var availableCount = await _dbContext.StorageUnits
-
-                        .CountAsync(u => u.FacilityId == request.FacilityId
-
-                                      && u.UnitTypeId == request.UnitTypeId
-
-                                      && u.PhysicalStatus == StorageUnitStatusConstants.Available, cancellationToken);
-
-
-
-                    if (availableCount <= 0)
-
+                    if (selectedUnit == null)
                     {
-
-                        throw AppException.FromError(ReservationErrors.NoAvailableUnits);
-
+                        selectedUnit = await _dbContext.StorageUnits
+                            .Where(u => u.FacilityId == request.FacilityId
+                                     && u.UnitTypeId == request.UnitTypeId
+                                     && u.PhysicalStatus == StorageUnitStatusConstants.Available
+                                     && !u.UnitAllocations.Any(ua => ua.Status == AllocationStatusConstants.Active && ua.AllocationStartDate < endDate && ua.AllocationEndDate > request.StartDate))
+                            .OrderBy(u => u.Id)
+                            .FirstOrDefaultAsync(cancellationToken);
                     }
 
+                    if (selectedUnit == null)
+                    {
+                        throw AppException.FromError(ReservationErrors.NoAvailableUnits);
+                    }
                 }
 
             }
@@ -938,6 +943,15 @@ public class CustomerReservationService : ICustomerReservationService
 
         }
 
+        catch (DbUpdateConcurrencyException ex)
+        {
+            if (transaction != null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+            _logger.LogWarning(ex, "Concurrency collision detected while reserving unit {UnitId}", selectedUnit?.Id);
+            throw AppException.FromError(ReservationErrors.UnitNotAvailable);
+        }
         catch (Exception ex)
 
         {
@@ -1382,7 +1396,9 @@ public class CustomerReservationService : ICustomerReservationService
 
         if (reservation.Status != ReservationStatusConstants.Pending &&
 
-            reservation.Status != ReservationStatusConstants.AwaitingDeposit)
+            reservation.Status != ReservationStatusConstants.AwaitingDeposit &&
+
+            reservation.Status != ReservationStatusConstants.Confirmed)
 
         {
 
@@ -1391,6 +1407,15 @@ public class CustomerReservationService : ICustomerReservationService
         }
 
 
+
+        // A booking can only be cancelled before handover. Older demo records may
+        // still say confirmed after their agreement has become active or ended.
+        if (await _dbContext.RentalAgreements.AnyAsync(a =>
+                a.ReservationId == reservation.Id &&
+                (a.Status != RentalAgreementStatusConstants.Draft || a.CheckedInAt != null), cancellationToken))
+        {
+            throw AppException.FromError(ReservationErrors.CannotCancelNonPending);
+        }
 
         var now = DateTimeOffset.UtcNow;
 
@@ -1436,7 +1461,8 @@ public class CustomerReservationService : ICustomerReservationService
 
         {
 
-            if (invoice.Status == InvoiceStatusConstants.Open || invoice.Status == InvoiceStatusConstants.Draft)
+            if (invoice.Status == InvoiceStatusConstants.Open || invoice.Status == InvoiceStatusConstants.Draft ||
+                invoice.Status == InvoiceStatusConstants.Overdue || invoice.Status == InvoiceStatusConstants.PartiallyPaid)
 
             {
 
@@ -1471,6 +1497,70 @@ public class CustomerReservationService : ICustomerReservationService
         {
 
             red.Status = PromotionRedemptionStatusConstants.Released;
+
+        }
+
+
+
+        // Cancel associated draft rental agreement and create refund if confirmed reservation was cancelled
+
+        var agreements = await _dbContext.RentalAgreements
+
+            .Where(a => a.ReservationId == reservation.Id)
+
+            .ToListAsync(cancellationToken);
+
+        foreach (var ag in agreements)
+
+        {
+
+            ag.Status = RentalAgreementStatusConstants.Cancelled;
+
+            ag.UpdatedAt = now;
+
+        }
+
+
+
+        var successfulPayments = reservation.Invoices
+
+            .SelectMany(i => i.Payments)
+
+            .Where(p => p.Status == PaymentConstants.StatusSucceeded)
+
+            .ToList();
+
+
+
+        foreach (var payment in successfulPayments)
+
+        {
+
+            _dbContext.Refunds.Add(new Refund
+
+            {
+
+                PaymentId = payment.Id,
+
+                AgreementId = agreements.FirstOrDefault()?.Id,
+
+                Amount = payment.Amount,
+
+                Currency = payment.Currency ?? PaymentConstants.CurrencyVnd,
+
+                Provider = payment.Provider ?? "Internal",
+
+                IdempotencyKey = $"REFUND-CANCEL-RSV-{reservation.Id}-{payment.Id}",
+
+                Reason = "Refund due to customer cancelling confirmed reservation before check-in",
+
+                Status = RefundStatusConstants.Pending,
+
+                CreatedAt = now,
+
+                UpdatedAt = now
+
+            });
 
         }
 

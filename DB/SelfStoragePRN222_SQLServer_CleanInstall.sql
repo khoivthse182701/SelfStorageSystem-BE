@@ -1545,6 +1545,18 @@ AFTER INSERT, UPDATE
 AS
 BEGIN
     SET NOCOUNT ON;
+    IF NOT (NOT EXISTS (SELECT 1 FROM deleted)
+            OR UPDATE(facility_rate_id)
+            OR UPDATE(monthly_rate_snapshot)
+            OR UPDATE(deposit_snapshot)
+            OR UPDATE(booking_fee_snapshot)
+            OR UPDATE(facility_id)
+            OR UPDATE(unit_type_id)
+            OR UPDATE(start_date))
+    BEGIN
+        RETURN;
+    END
+
     IF EXISTS (
         SELECT 1
         FROM inserted i
@@ -1570,7 +1582,7 @@ AFTER INSERT, UPDATE
 AS
 BEGIN
     SET NOCOUNT ON;
-    IF EXISTS (
+    IF NOT EXISTS (SELECT 1 FROM deleted) AND EXISTS (
         SELECT 1
         FROM inserted i
         LEFT JOIN [core].[reservations] r ON r.id = i.reservation_id
@@ -1599,7 +1611,10 @@ BEGIN
         FROM inserted i
         JOIN [core].[storage_units] su ON su.id = i.storage_unit_id
         WHERE i.status = 'active'
-          AND (su.is_listed = 0 OR su.physical_status IN ('occupied','maintenance','out_of_service','pending_inspection'))
+          AND (
+            (i.allocation_kind = 'reservation_hold' AND (su.is_listed = 0 OR su.physical_status IN ('occupied','maintenance','under_maintenance','out_of_service','pending_inspection')))
+            OR (i.allocation_kind = 'rental' AND su.physical_status IN ('maintenance','under_maintenance','out_of_service','pending_inspection'))
+          )
     )
     BEGIN
         THROW 51025, 'Storage unit is not bookable.', 1;
@@ -1625,12 +1640,10 @@ BEGIN
         FROM inserted i
         JOIN [core].[storage_units] su ON su.id = i.storage_unit_id
         JOIN [core].[rental_agreements] a ON a.id = i.agreement_id
-        JOIN [core].[reservations] r ON r.id = a.reservation_id
         WHERE i.status = 'active' AND i.agreement_id IS NOT NULL
           AND (su.facility_id <> a.facility_id
                OR i.allocation_start_date < a.start_date
-               OR i.allocation_end_date > a.end_date
-               OR (i.allocation_kind = 'rental' AND su.unit_type_id <> r.unit_type_id))
+               OR i.allocation_end_date > a.end_date)
     )
     BEGIN
         THROW 51027, 'Agreement allocation must match facility, allowed unit type and agreement period.', 1;

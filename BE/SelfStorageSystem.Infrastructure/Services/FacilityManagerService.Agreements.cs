@@ -199,21 +199,21 @@ public partial class FacilityManagerService : IFacilityManagerService
     {
 
         var agreement = await _dbContext.RentalAgreements
-
             .AsNoTracking()
-
+            .Include(a => a.Facility)
+            .Include(a => a.PolicyVersion)
             .Include(a => a.Customer)
-
                 .ThenInclude(c => c.User)
-
+            .Include(a => a.Reservation)
+                .ThenInclude(r => r.UnitType)
+            .Include(a => a.Reservation)
+                .ThenInclude(r => r.UnitAllocation)
+                    .ThenInclude(ua => ua.StorageUnit)
             .Include(a => a.UnitAllocations)
-
                 .ThenInclude(ua => ua.StorageUnit)
-
+                    .ThenInclude(u => u.UnitType)
             .Include(a => a.Invoices)
-
             .Include(a => a.StoredItems)
-
             .FirstOrDefaultAsync(a => a.Id == agreementId, cancellationToken);
 
 
@@ -310,42 +310,71 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
+        var unit = activeAlloc?.StorageUnit ?? agreement.Reservation?.UnitAllocation?.StorageUnit;
+        var unitType = unit?.UnitType ?? agreement.Reservation?.UnitType;
+
         return new ManagerAgreementDetailDto
-
         {
-
             Id = agreement.Id,
-
             AgreementNo = agreement.AgreementNo,
-
             CustomerId = agreement.CustomerId,
-
             CustomerName = agreement.Customer.FullName,
-
             CustomerPhone = agreement.Customer.User.PhoneNumber,
-
             CustomerEmail = agreement.Customer.User.Email,
-
-            StorageUnitId = activeAlloc?.StorageUnitId ?? 0,
-
-            UnitCode = activeAlloc?.StorageUnit?.UnitCode ?? string.Empty,
-
+            StorageUnitId = unit?.Id ?? 0,
+            UnitCode = unit?.UnitCode ?? string.Empty,
+            UnitTypeName = unitType?.Name ?? "Tiêu chuẩn",
+            FacilityId = agreement.FacilityId,
             StartDate = agreement.StartDate,
-
             EndDate = agreement.EndDate,
-
             MonthlyRent = agreement.MonthlyRateSnapshot,
-
             DepositAmount = agreement.DepositSnapshot,
-
             Status = agreement.Status,
-
             TotalDebt = totalDebt,
-
             Invoices = invoices,
+            StoredItems = storedItems,
 
-            StoredItems = storedItems
+            // Timestamps
+            CreatedAt = agreement.CreatedAt,
+            UpdatedAt = agreement.UpdatedAt,
+            SignedAt = agreement.SignedAt,
+            CheckedInAt = agreement.CheckedInAt,
+            CheckedOutAt = agreement.CheckedOutAt,
+            ActualEndDate = agreement.ActualEndDate,
 
+            // Facility details
+            FacilityName = agreement.Facility?.Name,
+            FacilityCode = agreement.Facility?.Code,
+            FacilityAddress = agreement.Facility?.AddressLine,
+            FacilityWard = agreement.Facility?.Ward,
+            FacilityDistrict = agreement.Facility?.District,
+            FacilityCity = agreement.Facility?.City,
+            FacilityOpeningTime = agreement.Facility?.OpeningTime,
+            FacilityClosingTime = agreement.Facility?.ClosingTime,
+
+            // Customer details
+            CustomerIdentityNumber = agreement.Customer?.IdentityNumber,
+            CustomerAddress = agreement.Customer?.Address,
+            CustomerDateOfBirth = agreement.Customer?.DateOfBirth,
+            EmergencyContactName = agreement.Customer?.EmergencyContactName,
+            EmergencyContactPhone = agreement.Customer?.EmergencyContactPhone,
+
+            // Storage Unit & Specifications
+            FloorLabel = unit?.FloorLabel,
+            ZoneLabel = unit?.ZoneLabel,
+            UnitPhysicalStatus = unit?.PhysicalStatus,
+            UnitAreaM2 = unitType?.AreaM2,
+            UnitVolumeM3 = unitType?.VolumeM3,
+            UnitWidthM = unitType?.WidthM,
+            UnitLengthM = unitType?.LengthM,
+            UnitHeightM = unitType?.HeightM,
+            ClimateControlled = unitType?.ClimateControlled,
+
+            // Policy & Terms
+            PolicyVersionId = agreement.PolicyVersionId,
+            PolicyType = agreement.PolicyVersion?.PolicyType,
+            PolicyVersion = agreement.PolicyVersion?.Version,
+            PolicyContent = agreement.PolicyVersion?.Content
         };
 
     }
@@ -1291,14 +1320,16 @@ public partial class FacilityManagerService : IFacilityManagerService
                 }
                 if (targetInvoiceId > 0)
                 {
+                    var openedAt = graceEnd < nowSync ? graceEnd.AddDays(-7) : nowSync;
+                    var caseStatus = nowSync <= graceEnd ? DelinquencyCaseStatusConstants.Grace : DelinquencyCaseStatusConstants.Delinquent;
                     _dbContext.DelinquencyCases.Add(new DelinquencyCase
                     {
                         AgreementId = agr.Id,
                         InvoiceId = targetInvoiceId,
                         OutstandingSnapshot = debt,
                         GraceEndsAt = graceEnd,
-                        Status = "open",
-                        OpenedAt = nowSync,
+                        Status = caseStatus,
+                        OpenedAt = openedAt,
                         Notes = $"Tự động mở hồ sơ công nợ quá hạn do nợ chưa thanh toán hoặc hợp đồng đã kết thúc."
                     });
                     hasNewCases = true;

@@ -1,3 +1,4 @@
+using SelfStorageSystem.Domain.Errors;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -241,7 +242,11 @@ public class AdminManagementServiceTests
         await using var db = CreateInMemoryDbContext();
         var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
 
+        var staffRole = new Role { Id = 1, Code = RoleConstants.FacilityStaff, DisplayName = "Staff" };
+        db.Roles.Add(staffRole);
+
         var user = new User { Id = 7, Email = "staff7@storage.local", Status = UserStatusConstants.Active, PasswordHash = "hash" };
+        user.UserRoleUsers.Add(new UserRole { UserId = 7, RoleId = 1, Role = staffRole });
         var employee = new EmployeeProfile { UserId = 7, EmployeeCode = "EMP-007", FullName = "James Staff", HireDate = new DateOnly(2025, 1, 1), EmploymentStatus = "active" };
         var facility = new Facility { Id = 10, Code = "FAC-10", Name = "Central Facility", AddressLine = "Main St", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = "active" };
 
@@ -710,5 +715,168 @@ public class AdminManagementServiceTests
         Assert.Equal(FacilityStatusConstants.Active, audit.OldValues);
         Assert.Contains("maintenance", audit.NewValues);
     }
-}
 
+    [Fact]
+    public async Task UpdateFacilityAsync_WhenDeactivatingFacilityWithActiveRentals_ThrowsConflictException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var facility = new Facility
+        {
+            Id = 8,
+            Code = "FAC-ACT",
+            Name = "Active Facility",
+            AddressLine = "123 Street",
+            City = "HCM",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        db.Facilities.Add(facility);
+
+        db.RentalAgreements.Add(new RentalAgreement
+        {
+            Id = 1,
+            AgreementNo = "AGR-001",
+            FacilityId = 8,
+            CustomerId = 10,
+            Status = RentalAgreementStatusConstants.Active,
+            StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(-1)),
+            EndDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(5)),
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var request = new AdminUpdateFacilityRequest
+        {
+            Code = "FAC-ACT",
+            Name = "Active Facility Updated",
+            AddressLine = "123 Street",
+            City = "HCM",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Inactive
+        };
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<AppConflictException>(() =>
+            adminService.UpdateFacilityAsync(8, request, adminUserId: 1));
+
+        Assert.Equal(AdminErrors.FacilityHasActiveOperations.Code, ex.Error.Code);
+    }
+
+    [Fact]
+    public async Task RevokeStaffAssignmentAsync_WhenAssignmentAlreadyEnded_ThrowsConflictException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var user = new User { Id = 1, Email = "staff1@storage.local", Status = UserStatusConstants.Active, PasswordHash = "hash" };
+        var employee = new EmployeeProfile { UserId = 1, EmployeeCode = "EMP-001", FullName = "Staff One", EmploymentStatus = "active" };
+        var facility = new Facility { Id = 1, Code = "FAC-1", Name = "Branch 1", AddressLine = "Addr", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = FacilityStatusConstants.Active };
+        db.Users.Add(user);
+        db.EmployeeProfiles.Add(employee);
+        db.Facilities.Add(facility);
+
+        var pastEnd = DateTimeOffset.UtcNow.AddDays(-5);
+        var assignment = new StaffFacilityAssignment
+        {
+            EmployeeId = 1,
+            FacilityId = 1,
+            AssignmentRole = StaffAssignmentRoles.FacilityStaff,
+            StartsAt = DateTimeOffset.UtcNow.AddMonths(-2),
+            EndsAt = pastEnd,
+            CreatedAt = DateTimeOffset.UtcNow.AddMonths(-2)
+        };
+        db.StaffFacilityAssignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<AppConflictException>(() =>
+            adminService.RevokeStaffAssignmentAsync(assignment.Id, adminUserId: 99));
+
+        Assert.Equal(AdminErrors.AssignmentAlreadyRevoked.Code, ex.Error.Code);
+
+        // Ensure EndsAt was not modified
+        var reloaded = await db.StaffFacilityAssignments.FindAsync(assignment.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal(pastEnd, reloaded.EndsAt);
+    }
+
+    [Fact]
+    public async Task AssignStaffToFacilityAsync_WhenUserLacksAssignedRole_ThrowsValidationException()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
+
+        var staffRole = new Role { Id = 1, Code = RoleConstants.FacilityStaff, DisplayName = "Staff" };
+        var managerRole = new Role { Id = 2, Code = RoleConstants.FacilityManager, DisplayName = "Manager" };
+        db.Roles.AddRange(staffRole, managerRole);
+
+        var user = new User { Id = 25, Email = "staffonly@storage.local", Status = UserStatusConstants.Active, PasswordHash = "hash" };
+        user.EmployeeProfile = new EmployeeProfile { UserId = 25, EmployeeCode = "EMP-025", FullName = "Staff Only", EmploymentStatus = "active" };
+        user.UserRoleUsers.Add(new UserRole { UserId = 25, RoleId = 1, Role = staffRole });
+        db.Users.Add(user);
+
+        var facility = new Facility { Id = 5, Code = "FAC-5", Name = "Branch 5", AddressLine = "Addr", City = "HCM", Timezone = "Asia/Ho_Chi_Minh", Status = FacilityStatusConstants.Active };
+        db.Facilities.Add(facility);
+        await db.SaveChangesAsync();
+
+        var request = new AdminCreateStaffAssignmentRequest
+        {
+            EmployeeId = 25,
+            FacilityId = 5,
+            AssignmentRole = StaffAssignmentRoles.FacilityManager // User lacks FacilityManager role
+        };
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<AppValidationException>(() =>
+            adminService.AssignStaffToFacilityAsync(request, adminUserId: 1));
+
+        Assert.Equal(AdminErrors.InvalidAssignmentRole.Code, ex.Error.Code);
+    }
+
+    [Fact]
+    public async Task RecordAuditLogAsync_WhenXForwardedForHasMultipleIps_TruncatesAndExtractsClientIp()
+    {
+        // Arrange
+        await using var db = CreateInMemoryDbContext();
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        httpContext.Request.Headers["X-Forwarded-For"] = "203.0.113.195, 70.41.3.18, 150.172.238.178, 198.51.100.1";
+        var httpContextAccessor = new Microsoft.AspNetCore.Http.HttpContextAccessor { HttpContext = httpContext };
+
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance, httpContextAccessor);
+
+        var facility = new Facility
+        {
+            Id = 9,
+            Code = "FAC-AUD",
+            Name = "Audit Facility",
+            AddressLine = "123 Street",
+            City = "HCM",
+            Timezone = "Asia/Ho_Chi_Minh",
+            Status = FacilityStatusConstants.Active
+        };
+        db.Facilities.Add(facility);
+        await db.SaveChangesAsync();
+
+        // Act - Trigger RecordAuditLogAsync through UpdateFacilityStatusAsync
+        await adminService.UpdateFacilityStatusAsync(9, new AdminUpdateFacilityStatusRequest
+        {
+            Status = FacilityStatusConstants.Maintenance,
+            Reason = "Testing audit log IP"
+        }, adminUserId: 1);
+
+        // Assert
+        var log = await db.AuditLogs.FirstOrDefaultAsync(a => a.EntityId == "9" && a.Action == AuditActionConstants.UpdateStatus);
+        Assert.NotNull(log);
+        Assert.NotNull(log.IpAddress);
+        Assert.Equal("203.0.113.195", log.IpAddress);
+        Assert.True(log.IpAddress!.Length <= 45);
+    }
+}
