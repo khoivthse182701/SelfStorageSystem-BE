@@ -20,15 +20,21 @@ public partial class FacilityStaffService : IFacilityStaffService
     private readonly SelfStorageDbContext _dbContext;
     private readonly PaymentSettings _paymentSettings;
     private readonly IRealtimeNotifier? _realtimeNotifier;
+    private readonly IQrTokenService? _qrTokenService;
+    private readonly IEmailService? _emailService;
 
     public FacilityStaffService(
         SelfStorageDbContext dbContext,
         IOptions<PaymentSettings>? paymentOptions = null,
-        IRealtimeNotifier? realtimeNotifier = null)
+        IRealtimeNotifier? realtimeNotifier = null,
+        IQrTokenService? qrTokenService = null,
+        IEmailService? emailService = null)
     {
         _dbContext = dbContext;
         _paymentSettings = paymentOptions?.Value ?? new PaymentSettings();
         _realtimeNotifier = realtimeNotifier;
+        _qrTokenService = qrTokenService;
+        _emailService = emailService;
     }
 
     // ==========================================

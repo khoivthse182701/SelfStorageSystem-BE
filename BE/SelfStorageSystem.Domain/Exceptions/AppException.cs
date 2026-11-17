@@ -21,12 +21,13 @@ public class AppException : Exception, IHasAppError
     {
         return error.Type switch
         {
-            ErrorType.Unauthorized => new AppUnauthorizedException(error, innerException),
-            ErrorType.Forbidden    => new AppForbiddenException(error, innerException),
-            ErrorType.NotFound     => new AppNotFoundException(error, innerException),
-            ErrorType.Validation   => new AppValidationException(error, innerException),
-            ErrorType.Conflict     => new AppConflictException(error, innerException),
-            _                     => new AppException(error, innerException)
+            ErrorType.Unauthorized    => new AppUnauthorizedException(error, innerException),
+            ErrorType.Forbidden       => new AppForbiddenException(error, innerException),
+            ErrorType.NotFound        => new AppNotFoundException(error, innerException),
+            ErrorType.Validation      => new AppValidationException(error, innerException),
+            ErrorType.Conflict        => new AppConflictException(error, innerException),
+            ErrorType.TooManyRequests => new AppTooManyRequestsException(error, innerException),
+            _                         => new AppException(error, innerException)
         };
     }
 }
@@ -80,6 +81,17 @@ public class AppForbiddenException : UnauthorizedAccessException, IHasAppError
     public Error Error { get; }
 
     public AppForbiddenException(Error error, Exception? innerException = null)
+        : base(error.Description, innerException)
+    {
+        Error = error;
+    }
+}
+
+public class AppTooManyRequestsException : InvalidOperationException, IHasAppError
+{
+    public Error Error { get; }
+
+    public AppTooManyRequestsException(Error error, Exception? innerException = null)
         : base(error.Description, innerException)
     {
         Error = error;

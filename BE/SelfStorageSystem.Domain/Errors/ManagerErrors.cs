@@ -106,6 +106,9 @@ public static class ManagerErrors
     public static readonly Error AgreementNotActive =
         Error.Conflict("Manager.AgreementNotActive", "Only active or expiring soon agreements can have their storage unit reassigned.");
 
+    public static readonly Error AgreementAlreadyClosed =
+        Error.Conflict("Manager.AgreementAlreadyClosed", "This rental agreement is already closed or cancelled.");
+
     public static readonly Error TargetUnitNotAvailable =
         Error.Conflict("Manager.TargetUnitNotAvailable", "The target storage unit is not available for assignment.");
 
@@ -126,4 +129,10 @@ public static class ManagerErrors
 
     public static readonly Error InspectionNotFound =
         Error.NotFound("Manager.InspectionNotFound", "Move-out inspection was not found.");
+
+    public static readonly Error CannotLiquidateAgreement =
+        Error.Conflict("Manager.CannotLiquidateAgreement", "Agreement can only be liquidated when overdue or defaulted.");
+
+    public static readonly Error AlreadyLiquidated =
+        Error.Conflict("Manager.AlreadyLiquidated", "This rental agreement has already been liquidated or terminated.");
 }

@@ -2,10 +2,13 @@ namespace SelfStorageSystem.Domain.Constants;
 
 public static class FacilityStatusConstants
 {
+    public const string Draft = "draft";
     public const string Active = "active";
     public const string Inactive = "inactive";
     public const string Maintenance = "maintenance";
     public const string SuspendedNewBookings = "suspended_new_bookings";
+    public const string TemporarilyClosed = "temporarily_closed";
+    public const string Closed = "closed";
 }
 
 public static class AuthConstants
@@ -43,6 +46,13 @@ public static class TimezoneConstants
 
 public static class FeeRuleTypeConstants
 {
+    public const string LateFee = "late_fee";
+    public const string DamageFee = "damage_fee";
+    public const string LostKeyFee = "lost_key_fee";
+    public const string MaintenanceFee = "maintenance_fee";
     public const string Booking = "booking";
+    public const string BookingFee = "booking_fee";
     public const string Tax = "tax";
+    public const string VatTax = "vat_tax";
+    public const string Other = "other";
 }

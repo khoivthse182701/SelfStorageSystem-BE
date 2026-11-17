@@ -14,16 +14,16 @@ public static class RentalErrors
         Error.Validation("Rental.NotCheckedIn", "Access credentials are only issued after check-in has been completed (BR-RSV-04).");
 
     public static readonly Error AccessSuspendedDueToOverdue =
-        Error.Conflict("Rental.AccessSuspended", "Access is currently suspended due to overdue payment exceeding 1 day (BR-REN-03). Please settle your balance.");
+        Error.Conflict("Rental.AccessSuspendedOverdue", "Access is currently suspended due to overdue payment exceeding 1 day (BR-REN-03). Please settle your balance.");
 
     public static readonly Error InvalidPinFormat =
         Error.Validation("Rental.InvalidPinFormat", "PIN must be exactly 6 numeric digits.");
 
     public static readonly Error PinTooSimple =
-        Error.Validation("Rental.PinTooSimple", "PIN cannot be repeated or consecutive numbers (e.g. 111111, 123456, 654321).");
+        Error.Validation("Rental.WeakPin", "PIN cannot be repeated or consecutive numbers (e.g. 111111, 123456, 654321).");
 
     public static readonly Error IncorrectCurrentPin =
-        Error.Validation("Rental.IncorrectCurrentPin", "The current PIN entered is incorrect.");
+        Error.Validation("Rental.InvalidCurrentPin", "The current PIN entered is incorrect.");
 
     public static readonly Error IncorrectPin =
         Error.Validation("Rental.IncorrectPin", "Mã PIN mở khóa không chính xác. Vui lòng kiểm tra lại.");
@@ -35,7 +35,7 @@ public static class RentalErrors
         Error.Conflict("Rental.OutsideBusinessHours", "Access is not available outside of facility business hours.");
 
     public static readonly Error TooManyFailedPinAttempts =
-        Error.Conflict("Rental.TooManyFailedPinAttempts", "Too many incorrect PIN attempts. PIN change is temporarily locked for 15 minutes.");
+        Error.Conflict("Rental.PinLockout", "Too many incorrect PIN attempts. PIN change is temporarily locked for 15 minutes.");
 
     public static readonly Error MoveOutAlreadyRequested =
         Error.Conflict("Rental.MoveOutAlreadyRequested", "A move-out request is already pending or processed for this rental agreement.");
@@ -100,6 +100,9 @@ public static class RentalErrors
     public static readonly Error CannotCancelPaidInvoice =
         Error.Conflict("Rental.CannotCancelPaidInvoice", "Không thể hủy hóa đơn đã thanh toán.");
 
+    public static readonly Error CannotCancelPenaltyInvoice =
+        Error.Conflict("Rental.CannotCancelPenaltyInvoice", "Không thể tự ý hủy hóa đơn phạt hoặc chi phí hư hại. Vui lòng liên hệ Quản lý cơ sở.");
+
     public static readonly Error RenewalNotFound =
         Error.NotFound("Rental.RenewalNotFound", "Renewal request was not found or does not belong to you.");
 
@@ -108,4 +111,16 @@ public static class RentalErrors
 
     public static readonly Error EmptyTransferReason =
         Error.Validation("Rental.EmptyTransferReason", "Transfer reason is required.");
+
+    public static readonly Error AccessForbidden =
+        Error.Forbidden("Rental.AccessForbidden", "You do not have permission to access this rental agreement.");
+
+    public static readonly Error AgreementNotActive =
+        Error.Conflict("Rental.AgreementNotActive", "This operation requires an active rental agreement.");
+
+    public static readonly Error AccessPointNotFound =
+        Error.Validation("Rental.AccessPointNotFound", "Access point was not found for this agreement's facility.");
+
+    public static readonly Error InvalidAuthorizedMemberWindow =
+        Error.Validation("Rental.InvalidAuthorizedMemberWindow", "Authorized member validity end time must be in the future.");
 }

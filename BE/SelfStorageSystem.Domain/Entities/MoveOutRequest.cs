@@ -15,6 +15,20 @@ public partial class MoveOutRequest
 
     public long? AppointmentId { get; set; }
 
+    public string? BankName { get; set; }
+
+    public string? BankAccountNo { get; set; }
+
+    public string? BankAccountHolder { get; set; }
+
+    public DateTimeOffset? BankSubmittedAt { get; set; }
+
+    public decimal DamageDeductionAmount { get; set; }
+
+    public decimal OverdueDeductionAmount { get; set; }
+
+    public decimal? NetRefundAmount { get; set; }
+
     public string Status { get; set; } = null!;
 
     public string? Reason { get; set; }

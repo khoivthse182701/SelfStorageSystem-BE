@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
+using SelfStorageSystem.Domain.Enums;
 
 namespace SelfStorageSystem.Domain.Entities;
 
@@ -32,6 +35,34 @@ public partial class Refund
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
+
+    [NotMapped, JsonIgnore]
+    public RefundStatus RefundStatus
+    {
+        get => EnumDbMapper.ParseRefundStatus(Status);
+        set => Status = value.ToDbValue();
+    }
+
+    public bool CanTransitionTo(RefundStatus nextStatus) =>
+        EnumDbMapper.TryParseRefundStatus(Status, out var current) &&
+        DomainStateMachine.CanTransition(current, nextStatus);
+
+    public void TransitionStatus(RefundStatus nextStatus, DateTimeOffset? utcNow = null)
+    {
+        if (!string.IsNullOrWhiteSpace(Status) && !CanTransitionTo(nextStatus))
+        {
+            throw new InvalidOperationException($"Invalid refund status transition from '{Status}' to '{nextStatus.ToDbValue()}'.");
+        }
+
+        var ts = utcNow ?? DateTimeOffset.UtcNow;
+        Status = nextStatus.ToDbValue();
+        if (nextStatus is RefundStatus.Succeeded or RefundStatus.Completed)
+        {
+            RefundedAt ??= ts;
+        }
+
+        UpdatedAt = ts;
+    }
 
     public virtual RentalAgreement? Agreement { get; set; }
 

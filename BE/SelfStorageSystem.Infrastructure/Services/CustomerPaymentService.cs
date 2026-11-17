@@ -1,16 +1,20 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
-using SelfStorageSystem.Infrastructure.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
+using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Customer.Payments;
 using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
+using SelfStorageSystem.Domain.Enums;
 using SelfStorageSystem.Domain.Errors;
 using SelfStorageSystem.Domain.Exceptions;
+using SelfStorageSystem.Infrastructure.Common;
 using SelfStorageSystem.Infrastructure.Persistence;
 
 namespace SelfStorageSystem.Infrastructure.Services;
@@ -23,13 +27,17 @@ public class CustomerPaymentService : ICustomerPaymentService
     private readonly SePayConfig _sePayConfig;
     private readonly RentalSettings _rentalSettings;
     private readonly ILogger<CustomerPaymentService> _logger;
+    private readonly IQrTokenService? _qrTokenService;
+    private readonly IRealtimeNotifier? _realtimeNotifier;
 
     public CustomerPaymentService(
         SelfStorageDbContext dbContext,
         IEmailService emailService,
         IOptions<PaymentSettings> paymentOptions,
         ILogger<CustomerPaymentService> logger,
-        IOptions<RentalSettings>? rentalOptions = null)
+        IOptions<RentalSettings>? rentalOptions = null,
+        IQrTokenService? qrTokenService = null,
+        IRealtimeNotifier? realtimeNotifier = null)
     {
         _dbContext = dbContext;
         _emailService = emailService;
@@ -37,6 +45,8 @@ public class CustomerPaymentService : ICustomerPaymentService
         _sePayConfig = paymentOptions.Value.SePay;
         _rentalSettings = rentalOptions?.Value ?? new RentalSettings();
         _logger = logger;
+        _qrTokenService = qrTokenService;
+        _realtimeNotifier = realtimeNotifier;
     }
 
     public async Task<CheckoutResponse> CreateCheckoutAsync(
@@ -60,6 +70,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         {
             var renewal = await _dbContext.RentalRenewals
                 .Include(r => r.Agreement)
+                    .ThenInclude(a => a.Facility)
                 .FirstOrDefaultAsync(r => r.Id == request.RenewalId.Value && r.RequestedBy == customerId, cancellationToken);
             if (renewal == null || renewal.Status != RenewalStatusConstants.PendingPayment ||
                 now - renewal.CreatedAt > TimeSpan.FromMinutes(_rentalSettings.RenewalHoldMinutes))
@@ -67,27 +78,73 @@ public class CustomerPaymentService : ICustomerPaymentService
                 throw AppException.FromError(PaymentErrors.InvoiceNotFound);
             }
 
-            var months = (renewal.RequestedEndDate.Year - renewal.OldEndDate.Year) * 12 + renewal.RequestedEndDate.Month - renewal.OldEndDate.Month;
-            var amount = (renewal.NewMonthlyRate ?? renewal.OldMonthlyRate) * Math.Max(1, months);
-            return BuildCheckoutResponse(0, 0, 0, $"{PaymentConstants.RenewalInvoicePrefix}{renewal.Id}", amount, _rentalSettings.CheckoutExpirySeconds, $"{PaymentConstants.RenewalCheckoutPrefix}{renewal.Id}");
+            var renewalPeriod = $"{PaymentConstants.RenewalInvoicePrefix}{renewal.Id}";
+            var renewalInvoice = await _dbContext.Invoices
+                .FirstOrDefaultAsync(i => i.AgreementId == renewal.AgreementId
+                                       && i.BillingPeriod == renewalPeriod
+                                       && i.Status != InvoiceStatusConstants.Voided, cancellationToken);
+
+            if (renewalInvoice == null)
+            {
+                var months = Math.Max(1, (renewal.RequestedEndDate.Year - renewal.OldEndDate.Year) * 12
+                    + renewal.RequestedEndDate.Month - renewal.OldEndDate.Month);
+                var amount = (renewal.NewMonthlyRate ?? renewal.OldMonthlyRate) * months;
+                var tzRnw = TimeZoneHelper.ResolveTimeZone(renewal.Agreement?.Facility?.Timezone, _rentalSettings.DefaultTimezone);
+                var todayRnw = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, tzRnw).DateTime);
+
+                renewalInvoice = new Invoice
+                {
+                    InvoiceNo = $"INV-RNW-{renewal.Id}-{now:yyMMdd}",
+                    AgreementId = renewal.AgreementId,
+                    CustomerId = customerId,
+                    BillingPeriod = renewalPeriod,
+                    IssueDate = todayRnw,
+                    DueDate = todayRnw.AddDays(3),
+                    Currency = PaymentConstants.CurrencyVnd,
+                    SubtotalAmount = amount,
+                    DiscountAmount = 0m,
+                    TaxAmount = 0m,
+                    TotalAmount = amount,
+                    PaidAmount = 0m,
+                    Status = InvoiceStatusConstants.Draft,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                _dbContext.Invoices.Add(renewalInvoice);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+
+                _dbContext.InvoiceLines.Add(new InvoiceLine
+                {
+                    InvoiceId = renewalInvoice.Id,
+                    LineType = InvoiceLineTypeConstants.Rent,
+                    Description = $"Gia hạn hợp đồng ({months} tháng)",
+                    Quantity = months,
+                    UnitPrice = renewal.NewMonthlyRate ?? renewal.OldMonthlyRate,
+                    LineAmount = amount,
+                    Metadata = "{}"
+                });
+                await _dbContext.SaveChangesAsync(cancellationToken);
+
+                renewalInvoice.Status = InvoiceStatusConstants.Open;
+                renewalInvoice.UpdatedAt = DateTimeOffset.UtcNow;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+
+            request.InvoiceId = renewalInvoice.Id;
+            request.RenewalId = null;
         }
 
-        Reservation? reservation = null;
+        Reservation? reservation;
         Invoice? invoice;
 
         if (request.ReservationId.HasValue)
         {
-            // Booking checkout: preserve the hold-period and confirmation rules.
             reservation = await _dbContext.Reservations
                 .Include(r => r.Facility)
                 .Include(r => r.UnitType)
                 .Include(r => r.Invoices)
-                .FirstOrDefaultAsync(r => r.Id == request.ReservationId.Value && r.CustomerId == customerId, cancellationToken);
-
-            if (reservation == null)
-            {
-                throw AppException.FromError(PaymentErrors.ReservationNotFound);
-            }
+                .FirstOrDefaultAsync(r => r.Id == request.ReservationId.Value && r.CustomerId == customerId, cancellationToken)
+                ?? throw AppException.FromError(PaymentErrors.ReservationNotFound);
 
             if (reservation.HoldUntil < now ||
                 reservation.Status == ReservationStatusConstants.Expired ||
@@ -96,56 +153,43 @@ public class CustomerPaymentService : ICustomerPaymentService
                 throw AppException.FromError(PaymentErrors.HoldExpired);
             }
 
-            if (reservation.Status == ReservationStatusConstants.Confirmed ||
-                reservation.Status == ReservationStatusConstants.Converted)
-            {
+            if (reservation.Status is ReservationStatusConstants.Confirmed or ReservationStatusConstants.Converted)
                 throw AppException.FromError(PaymentErrors.AlreadyConfirmed);
-            }
 
             invoice = reservation.Invoices.FirstOrDefault(i =>
-                i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft);
+                i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft || i.Status == InvoiceStatusConstants.PartiallyPaid);
         }
         else
         {
-            // Independent invoice checkout: damage, cleaning and overdue charges.
             invoice = await _dbContext.Invoices
-                .Include(i => i.Reservation)
-                    .ThenInclude(r => r!.Facility)
-                .Include(i => i.Reservation)
-                    .ThenInclude(r => r!.UnitType)
+                .Include(i => i.Reservation).ThenInclude(r => r!.Facility)
+                .Include(i => i.Reservation).ThenInclude(r => r!.UnitType)
                 .FirstOrDefaultAsync(i => i.Id == request.InvoiceId!.Value && i.CustomerId == customerId, cancellationToken);
             reservation = invoice?.Reservation;
-            // Invoice links must enforce the same booking rules as reservation links.
+
             if (reservation != null)
             {
-                if (reservation.Status == ReservationStatusConstants.Cancelled ||
-                    reservation.Status == ReservationStatusConstants.Expired || reservation.HoldUntil < now)
-                {
+                if (reservation.Status is ReservationStatusConstants.Cancelled or ReservationStatusConstants.Expired || reservation.HoldUntil < now)
                     throw AppException.FromError(PaymentErrors.HoldExpired);
-                }
-                if (reservation.Status == ReservationStatusConstants.Confirmed ||
-                    reservation.Status == ReservationStatusConstants.Converted)
-                {
+
+                if (reservation.Status is ReservationStatusConstants.Confirmed or ReservationStatusConstants.Converted)
                     throw AppException.FromError(PaymentErrors.AlreadyConfirmed);
-                }
             }
         }
 
-        if (invoice == null || (invoice.Status != InvoiceStatusConstants.Open && invoice.Status != InvoiceStatusConstants.Draft && invoice.Status != InvoiceStatusConstants.PartiallyPaid && invoice.Status != InvoiceStatusConstants.Overdue))
+        if (invoice == null || invoice.Status is not (
+            InvoiceStatusConstants.Open or InvoiceStatusConstants.Draft or InvoiceStatusConstants.PartiallyPaid or InvoiceStatusConstants.Overdue))
         {
             throw AppException.FromError(PaymentErrors.InvoiceNotFound);
         }
 
         var amountToPay = invoice.TotalAmount - invoice.PaidAmount;
         if (amountToPay <= 0)
-        {
             throw AppException.FromError(PaymentErrors.InvoiceAlreadyPaid);
-        }
 
         const string paymentMethod = PaymentConstants.MethodBankTransfer;
         const string provider = PaymentConstants.ProviderSePay;
 
-        // 3. Reuse or create initial Payment record in pending status (prevents duplicate spam on refreshes)
         var payment = await _dbContext.Payments
             .FirstOrDefaultAsync(p => p.CustomerId == customerId
                                    && p.TargetInvoiceId == invoice.Id
@@ -169,7 +213,6 @@ public class CustomerPaymentService : ICustomerPaymentService
                 CreatedAt = now,
                 UpdatedAt = now
             };
-
             _dbContext.Payments.Add(payment);
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
@@ -180,283 +223,232 @@ public class CustomerPaymentService : ICustomerPaymentService
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
-        // Independent invoices do not reserve a unit, but their QR session still
-        // expires after 15 minutes to avoid presenting a stale payment screen.
         var expiresInSeconds = reservation == null
             ? _rentalSettings.CheckoutExpirySeconds
             : (int)Math.Max(0, (reservation.HoldUntil - now).TotalSeconds);
 
-        // Dynamic invoice prefix configured from SePayConfig
         var prefix = !string.IsNullOrWhiteSpace(_sePayConfig.InvoicePrefix)
             ? _sePayConfig.InvoicePrefix.Trim()
             : SePayConstants.DefaultInvoicePrefix;
         var transferContent = $"{prefix}{invoice.Id}";
 
-        var qrUrl = VietQrUrlBuilder.Build(_vietQrConfig, amountToPay, transferContent);
-
-        return new CheckoutResponse
-        {
-            PaymentId = payment.Id,
-            ReservationId = reservation?.Id ?? 0,
-            InvoiceId = invoice.Id,
-            InvoiceNo = invoice.InvoiceNo,
-            Amount = amountToPay,
-            Currency = PaymentConstants.CurrencyVnd,
-            PaymentMethod = paymentMethod,
-            ExpiresInSeconds = expiresInSeconds,
-            VietQr = new VietQrPaymentInfo
-            {
-                BankCode = _vietQrConfig.BankCode ?? string.Empty,
-                AccountNo = _vietQrConfig.AccountNo ?? string.Empty,
-                AccountName = _vietQrConfig.AccountName ?? string.Empty,
-                Amount = amountToPay,
-                TransferContent = transferContent,
-                QrImageUrl = qrUrl
-            }
-        };
+        return BuildCheckoutResponse(
+            payment.Id,
+            reservation?.Id ?? 0,
+            invoice.Id,
+            invoice.InvoiceNo,
+            amountToPay,
+            expiresInSeconds,
+            transferContent);
     }
 
-    private CheckoutResponse BuildCheckoutResponse(long paymentId, long reservationId, long invoiceId, string invoiceNo, decimal amount, int expiresInSeconds, string transferContent)
+    public async Task<PaymentStatusDto> GetPaymentStatusAsync(
+        long customerId,
+        long paymentId,
+        CancellationToken cancellationToken = default)
     {
-        var qrUrl = VietQrUrlBuilder.Build(_vietQrConfig, amount, transferContent);
-        return new CheckoutResponse { PaymentId = paymentId, ReservationId = reservationId, InvoiceId = invoiceId, InvoiceNo = invoiceNo, Amount = amount, Currency = PaymentConstants.CurrencyVnd, PaymentMethod = PaymentConstants.MethodBankTransfer, ExpiresInSeconds = expiresInSeconds, VietQr = new VietQrPaymentInfo { BankCode = _vietQrConfig.BankCode ?? string.Empty, AccountNo = _vietQrConfig.AccountNo ?? string.Empty, AccountName = _vietQrConfig.AccountName ?? string.Empty, Amount = amount, TransferContent = transferContent, QrImageUrl = qrUrl } };
+        var payment = await _dbContext.Payments
+            .AsNoTracking()
+            .Include(p => p.TargetInvoice)
+                .ThenInclude(i => i.Reservation)
+                    .ThenInclude(r => r!.RentalAgreement)
+            .FirstOrDefaultAsync(p => p.Id == paymentId, cancellationToken)
+            ?? throw AppException.FromError(PaymentErrors.InvoiceNotFound);
+
+        if (payment.CustomerId != customerId)
+            throw AppException.FromError(ReservationErrors.Unauthorized);
+
+        var invoice = payment.TargetInvoice;
+        var reservation = invoice?.Reservation;
+        string? checkInQrToken = null;
+        if (reservation?.Status == ReservationStatusConstants.Confirmed)
+        {
+            checkInQrToken = _qrTokenService?.IssueToken(
+                "checkin",
+                reservation.Id,
+                reservation.RentalAgreement?.Id,
+                customerId,
+                reservation.FacilityId,
+                TimeSpan.FromDays(90));
+        }
+
+        return new PaymentStatusDto
+        {
+            PaymentId = payment.Id,
+            InvoiceId = payment.TargetInvoiceId,
+            InvoiceStatus = invoice?.Status ?? string.Empty,
+            ReservationId = reservation?.Id,
+            ReservationStatus = reservation?.Status,
+            PaymentStatus = payment.Status,
+            PaidAmount = invoice?.PaidAmount ?? payment.Amount,
+            TotalAmount = invoice?.TotalAmount ?? payment.Amount,
+            RequiresReconciliation = NeedsReconciliation(payment.Metadata),
+            CheckInQrToken = checkInQrToken
+        };
     }
 
     public async Task<bool> ProcessSePayWebhookAsync(
         SePayWebhookPayload payload,
         CancellationToken cancellationToken = default)
     {
-        if (payload == null || string.IsNullOrWhiteSpace(payload.Content))
-        {
-            return false;
-        }
+        var result = await ProcessSePayWebhookWithResultAsync(payload, cancellationToken);
+        return result.Processed;
+    }
 
-        // Validate positive incoming amount (prevent zero/negative or outgoing debit transactions from triggering payments)
+    public async Task<SePayWebhookResultDto> ProcessSePayWebhookWithResultAsync(
+        SePayWebhookPayload payload,
+        CancellationToken cancellationToken = default)
+    {
+        if (payload == null)
+            return Unmatched();
+
+        var contentText = $"{payload.Code} {payload.Content} {payload.Description}".Trim();
+        if (string.IsNullOrWhiteSpace(contentText))
+            return Unmatched();
+
         if (payload.TransferAmount <= 0)
         {
             _logger.LogWarning(PaymentLogMessages.NonPositiveTransfer, payload.TransferAmount);
-            return false;
+            return Unmatched();
         }
 
         if (string.Equals(payload.TransferType, SePayConstants.TransferTypeOut, StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogInformation(PaymentLogMessages.OutgoingDebitIgnored);
-            return false;
+            return Unmatched();
+        }
+
+        var externalEventId = ResolveExternalEventId(payload);
+        var transactionRef = !string.IsNullOrWhiteSpace(payload.ReferenceCode)
+            ? payload.ReferenceCode.Trim()
+            : (payload.Id > 0 ? payload.Id.ToString(CultureInfo.InvariantCulture) : externalEventId);
+
+        // 1. Primary Idempotency check in integration_events & payments
+        if (await IsDuplicateEventAsync(externalEventId, transactionRef, cancellationToken))
+        {
+            _logger.LogInformation(PaymentLogMessages.TransactionReplay, transactionRef);
+            var prev = await _dbContext.Payments.AsNoTracking()
+                .FirstOrDefaultAsync(p => p.Provider == PaymentConstants.ProviderSePay && p.ProviderTransactionId == transactionRef, cancellationToken);
+            return new SePayWebhookResultDto
+            {
+                Processed = true,
+                Action = "duplicate_ignored",
+                PaymentId = prev?.Id,
+                InvoiceId = prev?.TargetInvoiceId
+            };
         }
 
         var prefix = !string.IsNullOrWhiteSpace(_sePayConfig.InvoicePrefix)
             ? _sePayConfig.InvoicePrefix.Trim()
             : SePayConstants.DefaultInvoicePrefix;
-
-        var contentText = $"{payload.Content} {payload.Description}";
-
-        Invoice? invoice = null;
-
-        // 1. Try extracting invoice ID via configured prefix (e.g. DH1004, DH-1004)
         var prefixMatch = Regex.Match(contentText, $@"{Regex.Escape(prefix)}[\s\-_]*(\d+)", RegexOptions.IgnoreCase);
-        if (prefixMatch.Success && long.TryParse(prefixMatch.Groups[1].Value, out var invoiceId))
-        {
-            invoice = await _dbContext.Invoices
-                .Include(i => i.Reservation)
-                    .ThenInclude(r => r!.Facility)
-                .Include(i => i.Reservation)
-                    .ThenInclude(r => r!.UnitType)
-                .Include(i => i.Customer)
-                    .ThenInclude(c => c.User)
-                .FirstOrDefaultAsync(i => i.Id == invoiceId, cancellationToken);
-        }
 
-        // 2. Try matching invoice number pattern (e.g. INV-20261001-01002)
+        var invoice = await MatchInvoiceAsync(contentText, prefixMatch, cancellationToken);
         if (invoice == null)
         {
-            var invMatch = Regex.Match(contentText, @"INV[\s\-_]*([0-9A-Za-z\-_]+)", RegexOptions.IgnoreCase);
-            if (invMatch.Success)
-            {
-                var matchedCode = invMatch.Groups[0].Value.Replace(" ", "");
-                invoice = await _dbContext.Invoices
-                    .Include(i => i.Reservation)
-                        .ThenInclude(r => r!.Facility)
-                    .Include(i => i.Reservation)
-                        .ThenInclude(r => r!.UnitType)
-                    .Include(i => i.Customer)
-                        .ThenInclude(c => c.User)
-                    .FirstOrDefaultAsync(i => i.InvoiceNo.Contains(matchedCode) || matchedCode.Contains(i.InvoiceNo), cancellationToken);
-            }
-        }
+            var renewalResult = await TryProcessRenewalWebhookAsync(contentText, prefixMatch, payload, externalEventId, cancellationToken);
+            if (renewalResult != null) return renewalResult;
 
-        // 3. Try matching reservation code pattern (e.g. RSV-20261001-01002)
-        if (invoice == null)
-        {
-            var rsvMatch = Regex.Match(contentText, @"RSV[\s\-_]*([0-9A-Za-z\-_]+)", RegexOptions.IgnoreCase);
-            if (rsvMatch.Success)
-            {
-                var matchedRsv = rsvMatch.Groups[0].Value.Replace(" ", "");
-                invoice = await _dbContext.Invoices
-                    .Include(i => i.Reservation)
-                        .ThenInclude(r => r!.Facility)
-                    .Include(i => i.Reservation)
-                        .ThenInclude(r => r!.UnitType)
-                    .Include(i => i.Customer)
-                        .ThenInclude(c => c.User)
-                    .FirstOrDefaultAsync(i => i.Reservation != null && (i.Reservation.ReservationCode.Contains(matchedRsv) || matchedRsv.Contains(i.Reservation.ReservationCode)), cancellationToken);
-            }
-        }
-
-        if (invoice == null)
-        {
-            // Check if bank memo / content matches a rental renewal (e.g. RNW-1, DH1)
-            RentalRenewal? renewal = null;
-            var rnwMatch = Regex.Match(contentText, @"RNW[\s\-_]*(\d+)", RegexOptions.IgnoreCase);
-            if (rnwMatch.Success && long.TryParse(rnwMatch.Groups[1].Value, out var parsedRnwId))
-            {
-                renewal = await _dbContext.RentalRenewals
-                    .Include(r => r.Agreement)
-                    .FirstOrDefaultAsync(r => r.Id == parsedRnwId, cancellationToken);
-            }
-
-            if (renewal == null && prefixMatch.Success && long.TryParse(prefixMatch.Groups[1].Value, out var prefixNum))
-            {
-                renewal = await _dbContext.RentalRenewals
-                    .Include(r => r.Agreement)
-                    .FirstOrDefaultAsync(r => r.Id == prefixNum, cancellationToken);
-            }
-
-            if (renewal != null)
-            {
-                var months = (renewal.RequestedEndDate.Year - renewal.OldEndDate.Year) * 12 + renewal.RequestedEndDate.Month - renewal.OldEndDate.Month;
-                if (months <= 0) months = 1;
-                var renewalAmount = (renewal.NewMonthlyRate ?? renewal.OldMonthlyRate) * months;
-
-                if (payload.TransferAmount != renewalAmount)
-                {
-                    _logger.LogWarning("Renewal #{RenewalId} received {ReceivedAmount:N0} VND but requires {ExpectedAmount:N0} VND.", renewal.Id, payload.TransferAmount, renewalAmount);
-                    return false;
-                }
-
-                var renewalEventId = !string.IsNullOrWhiteSpace(payload.ReferenceCode)
-                    ? payload.ReferenceCode.Trim()
-                    : $"renewal-{payload.Id}";
-                var renewalAlreadyProcessed = await _dbContext.IntegrationEvents
-                    .AnyAsync(e => e.Source == "sepay_renewal" && e.ExternalEventId == renewalEventId && e.Status == "processed", cancellationToken);
-                if (renewalAlreadyProcessed)
-                {
-                    return true;
-                }
-
-                var nowTime = DateTimeOffset.UtcNow;
-                renewal.Status = RenewalStatusConstants.Paid;
-                renewal.ApprovedEndDate = renewal.RequestedEndDate;
-                renewal.ReviewedAt = nowTime;
-
-                if (renewal.Agreement != null)
-                {
-                    renewal.Agreement.EndDate = renewal.RequestedEndDate;
-                    if (renewal.Agreement.Status == RentalAgreementStatusConstants.ExpiringSoon)
-                    {
-                        renewal.Agreement.Status = RentalAgreementStatusConstants.Active;
-                    }
-                    renewal.Agreement.UpdatedAt = nowTime;
-                }
-
-                var activeAllocations = await _dbContext.UnitAllocations
-                    .Where(ua => ua.AgreementId == renewal.AgreementId && ua.Status == AllocationStatusConstants.Active)
-                    .ToListAsync(cancellationToken);
-                foreach (var alloc in activeAllocations)
-                {
-                    alloc.AllocationEndDate = renewal.RequestedEndDate;
-                }
-
-                _dbContext.IntegrationEvents.Add(new IntegrationEvent
-                {
-                    Source = "sepay_renewal",
-                    ExternalEventId = renewalEventId,
-                    EventType = "renewal_payment",
-                    Payload = $"{{\"renewalId\":{renewal.Id},\"amount\":{payload.TransferAmount.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}",
-                    Status = "processed",
-                    ReceivedAt = nowTime,
-                    ProcessedAt = nowTime
-                });
-
-                await _dbContext.SaveChangesAsync(cancellationToken);
-                _logger.LogInformation("Renewal #{RenewalId} marked as paid via SePay webhook.", renewal.Id);
-                return true;
-            }
-
-            _logger.LogWarning("SePay webhook received transaction without valid invoice/reservation/renewal reference: Content='{Content}', Amount={Amount}, ReferenceCode='{ReferenceCode}', GatewayId={GatewayId}", payload.Content, payload.TransferAmount, payload.ReferenceCode, payload.Id);
-            return false;
-        }
-
-        var transactionRef = !string.IsNullOrWhiteSpace(payload.ReferenceCode)
-            ? payload.ReferenceCode.Trim()
-            : (payload.Id > 0 ? payload.Id.ToString() : Guid.NewGuid().ToString("N"));
-
-        // 1. Idempotency Check: Prevent Replay Attacks
-        var existingPayment = await _dbContext.Payments
-            .FirstOrDefaultAsync(p => p.Provider == PaymentConstants.ProviderSePay && p.ProviderTransactionId == transactionRef, cancellationToken);
-
-        if (existingPayment != null && existingPayment.Status == PaymentConstants.StatusSucceeded)
-        {
-            _logger.LogInformation(PaymentLogMessages.TransactionReplay, transactionRef);
-            return true;
+            _logger.LogWarning("SePay webhook unmatched: Content='{Content}', Amount={Amount}, ReferenceCode='{ReferenceCode}', GatewayId={GatewayId}",
+                payload.Content, payload.TransferAmount, payload.ReferenceCode, payload.Id);
+            return Unmatched();
         }
 
         if (invoice.Status == InvoiceStatusConstants.Paid)
         {
             _logger.LogInformation(PaymentLogMessages.InvoiceAlreadyPaid, invoice.Id);
-            return true;
+            await RecordIntegrationEventAsync("sepay", externalEventId, "bank_transfer", invoice.Id, payload.TransferAmount, IntegrationEventStatus.Ignored, cancellationToken);
+            return new SePayWebhookResultDto { Processed = true, Action = "duplicate_ignored", InvoiceId = invoice.Id, ReservationId = invoice.ReservationId };
         }
 
         var now = DateTimeOffset.UtcNow;
-        var remainingBalance = invoice.TotalAmount - invoice.PaidAmount;
+        var remainingBalance = Math.Max(0m, invoice.TotalAmount - invoice.PaidAmount);
 
-        // 2. Partial Payment Handling: Validate transferred amount against remaining balance
         var requiresReconciliation = invoice.Status == InvoiceStatusConstants.Voided ||
-            invoice.Reservation?.Status == ReservationStatusConstants.Cancelled ||
-            invoice.Reservation?.Status == ReservationStatusConstants.Expired;
+            invoice.Reservation?.Status is ReservationStatusConstants.Cancelled or ReservationStatusConstants.Expired;
+
+        // 2. Partial Payment (Underpayment) on still-active invoice
         if (!requiresReconciliation && payload.TransferAmount < remainingBalance)
         {
-            _logger.LogWarning(PaymentLogMessages.PartialPayment,
-                payload.TransferAmount, remainingBalance, invoice.Id);
+            _logger.LogWarning(PaymentLogMessages.PartialPayment, payload.TransferAmount, remainingBalance, invoice.Id);
 
-            var partialPayment = new Payment
+            IDbContextTransaction? partialTx = _dbContext.Database.IsSqlServer()
+                ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+                : null;
+            try
             {
-                CustomerId = invoice.CustomerId,
-                TargetInvoiceId = invoice.Id,
-                TargetInvoice = invoice,
-                Customer = invoice.Customer,
-                Amount = payload.TransferAmount,
-                Currency = PaymentConstants.CurrencyVnd,
-                Method = PaymentConstants.MethodBankTransfer,
-                Provider = PaymentConstants.ProviderSePay,
-                ProviderTransactionId = transactionRef,
-                IdempotencyKey = $"SEPAY-{payload.Id}-{Guid.NewGuid():N}",
-                Status = PaymentConstants.StatusSucceeded,
-                PaidAt = now,
-                Metadata = "{\"note\": \"Partial payment received - reservation status kept pending until fully paid.\"}",
-                CreatedAt = now,
-                UpdatedAt = now
-            };
+                var partialPayment = new Payment
+                {
+                    CustomerId = invoice.CustomerId,
+                    TargetInvoiceId = invoice.Id,
+                    TargetInvoice = invoice,
+                    Customer = invoice.Customer,
+                    Amount = payload.TransferAmount,
+                    Currency = PaymentConstants.CurrencyVnd,
+                    Method = PaymentConstants.MethodBankTransfer,
+                    Provider = PaymentConstants.ProviderSePay,
+                    ProviderTransactionId = transactionRef,
+                    IdempotencyKey = $"SEPAY-{externalEventId}-{Guid.NewGuid():N}",
+                    Status = PaymentConstants.StatusSucceeded,
+                    PaidAt = now,
+                    Metadata = "{\"note\": \"Partial payment received - reservation status kept pending until fully paid.\"}",
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
 
-            _dbContext.Payments.Add(partialPayment);
-            await _dbContext.SaveChangesAsync(cancellationToken);
+                _dbContext.Payments.Add(partialPayment);
+                await _dbContext.SaveChangesAsync(cancellationToken);
 
-            _dbContext.PaymentAllocations.Add(new PaymentAllocation
+                _dbContext.PaymentAllocations.Add(new PaymentAllocation
+                {
+                    PaymentId = partialPayment.Id,
+                    InvoiceId = invoice.Id,
+                    AllocatedAmount = payload.TransferAmount,
+                    AllocatedAt = now
+                });
+
+                invoice.PaidAmount += payload.TransferAmount;
+                invoice.Status = InvoiceStatusConstants.PartiallyPaid;
+                invoice.UpdatedAt = now;
+
+                await RecordIntegrationEventAsync("sepay", externalEventId, "partial_payment", invoice.Id, payload.TransferAmount, IntegrationEventStatus.Processed, cancellationToken, save: false);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+
+                if (partialTx != null) await partialTx.CommitAsync(cancellationToken);
+
+                await NotifyPartialPaymentAsync(invoice, partialPayment, cancellationToken);
+
+                return new SePayWebhookResultDto
+                {
+                    Processed = true,
+                    Action = "partial_recorded",
+                    InvoiceId = invoice.Id,
+                    ReservationId = invoice.ReservationId,
+                    PaymentId = partialPayment.Id
+                };
+            }
+            catch (DbUpdateException)
             {
-                PaymentId = partialPayment.Id,
-                InvoiceId = invoice.Id,
-                AllocatedAmount = payload.TransferAmount,
-                AllocatedAt = now
-            });
-
-            invoice.PaidAmount += payload.TransferAmount;
-            invoice.Status = InvoiceStatusConstants.PartiallyPaid;
-            invoice.UpdatedAt = now;
-            await _dbContext.SaveChangesAsync(cancellationToken);
-
-            return true;
+                if (partialTx != null) await partialTx.RollbackAsync(cancellationToken);
+                _dbContext.ChangeTracker.Clear();
+                if (await IsDuplicateEventAsync(externalEventId, transactionRef, cancellationToken))
+                {
+                    return new SePayWebhookResultDto { Processed = true, Action = "duplicate_ignored", InvoiceId = invoice.Id, ReservationId = invoice.ReservationId };
+                }
+                throw;
+            }
+            catch
+            {
+                if (partialTx != null) await partialTx.RollbackAsync(cancellationToken);
+                throw;
+            }
+            finally
+            {
+                if (partialTx != null) await partialTx.DisposeAsync();
+            }
         }
 
-        // 3. Full or Final Payment Handling: Reuse existing pending checkout payment or insert new one
+        // 3. Full, Overpayment, Transfer, or Late Payment
         var payment = await _dbContext.Payments
             .FirstOrDefaultAsync(p => p.TargetInvoiceId == invoice.Id && p.Status == PaymentConstants.StatusPending, cancellationToken);
 
@@ -473,13 +465,12 @@ public class CustomerPaymentService : ICustomerPaymentService
                 Method = PaymentConstants.MethodBankTransfer,
                 Provider = PaymentConstants.ProviderSePay,
                 ProviderTransactionId = transactionRef,
-                IdempotencyKey = $"SEPAY-{payload.Id}-{Guid.NewGuid():N}",
+                IdempotencyKey = $"SEPAY-{externalEventId}-{Guid.NewGuid():N}",
                 Status = PaymentConstants.StatusPending,
                 Metadata = "{}",
                 CreatedAt = now,
                 UpdatedAt = now
             };
-
             _dbContext.Payments.Add(payment);
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
@@ -492,8 +483,7 @@ public class CustomerPaymentService : ICustomerPaymentService
             payment.UpdatedAt = now;
         }
 
-        await CompletePaymentAsync(payment, transactionRef, cancellationToken);
-        return true;
+        return await CompletePaymentWithResultAsync(payment, transactionRef, externalEventId, cancellationToken);
     }
 
     public async Task<List<PaymentHistoryDto>> GetMyPaymentHistoryAsync(
@@ -537,7 +527,6 @@ public class CustomerPaymentService : ICustomerPaymentService
             RequiresReconciliation = NeedsReconciliation(p.Metadata)
         }).ToList();
 
-        // Include customer's agreement renewals
         var renewals = await _dbContext.RentalRenewals
             .AsNoTracking()
             .Include(r => r.Agreement)
@@ -548,36 +537,18 @@ public class CustomerPaymentService : ICustomerPaymentService
         var now = DateTimeOffset.UtcNow;
         foreach (var r in renewals)
         {
-            var months = (r.RequestedEndDate.Year - r.OldEndDate.Year) * 12 + r.RequestedEndDate.Month - r.OldEndDate.Month;
-            if (months <= 0) months = 1;
+            var months = Math.Max(1, (r.RequestedEndDate.Year - r.OldEndDate.Year) * 12 + r.RequestedEndDate.Month - r.OldEndDate.Month);
             var amount = (r.NewMonthlyRate ?? r.OldMonthlyRate) * months;
-
-            string status = r.Status;
-            if (string.Equals(r.Status, RenewalStatusConstants.PendingPayment, StringComparison.OrdinalIgnoreCase))
+            var status = r.Status switch
             {
-                // 15-minute countdown hold check
-                if (now - r.CreatedAt > TimeSpan.FromMinutes(15))
-                {
-                    status = "expired";
-                }
-                else
-                {
-                    status = PaymentConstants.StatusPending;
-                }
-            }
-            else if (string.Equals(r.Status, RenewalStatusConstants.Paid, StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(r.Status, RenewalStatusConstants.Approved, StringComparison.OrdinalIgnoreCase))
-            {
-                status = PaymentConstants.StatusSucceeded;
-            }
-            else if (string.Equals(r.Status, RenewalStatusConstants.Cancelled, StringComparison.OrdinalIgnoreCase))
-            {
-                status = PaymentConstants.StatusCancelled;
-            }
-            else if (string.Equals(r.Status, RenewalStatusConstants.Rejected, StringComparison.OrdinalIgnoreCase))
-            {
-                status = PaymentConstants.StatusFailed;
-            }
+                _ when string.Equals(r.Status, RenewalStatusConstants.PendingPayment, StringComparison.OrdinalIgnoreCase) =>
+                    now - r.CreatedAt > TimeSpan.FromMinutes(_rentalSettings.RenewalHoldMinutes) ? "expired" : PaymentConstants.StatusPending,
+                _ when string.Equals(r.Status, RenewalStatusConstants.Paid, StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(r.Status, RenewalStatusConstants.Approved, StringComparison.OrdinalIgnoreCase) => PaymentConstants.StatusSucceeded,
+                _ when string.Equals(r.Status, RenewalStatusConstants.Cancelled, StringComparison.OrdinalIgnoreCase) => PaymentConstants.StatusCancelled,
+                _ when string.Equals(r.Status, RenewalStatusConstants.Rejected, StringComparison.OrdinalIgnoreCase) => PaymentConstants.StatusFailed,
+                _ => r.Status
+            };
 
             history.Add(new PaymentHistoryDto
             {
@@ -585,18 +556,14 @@ public class CustomerPaymentService : ICustomerPaymentService
                 InvoiceId = 0,
                 InvoiceNo = $"RNW-{r.Id}",
                 ReservationId = null,
-                ReservationCode = !string.IsNullOrWhiteSpace(r.Agreement?.AgreementNo) 
-                    ? $"RNW-{r.Agreement.AgreementNo}" 
-                    : $"RNW-{r.Id}",
+                ReservationCode = !string.IsNullOrWhiteSpace(r.Agreement?.AgreementNo) ? $"RNW-{r.Agreement.AgreementNo}" : $"RNW-{r.Id}",
                 Amount = amount,
                 Currency = PaymentConstants.CurrencyVnd,
                 Method = PaymentConstants.MethodBankTransfer,
                 Provider = PaymentConstants.ProviderSePay,
-                ProviderTransactionId = null,
                 Status = status,
                 PaidAt = r.ReviewedAt,
                 CreatedAt = r.CreatedAt,
-                FailureReason = null,
                 RenewalId = r.Id,
                 AgreementNo = r.Agreement?.AgreementNo
             });
@@ -605,21 +572,17 @@ public class CustomerPaymentService : ICustomerPaymentService
         return history.OrderByDescending(h => h.CreatedAt).ToList();
     }
 
-    private static bool NeedsReconciliation(string? metadata)
+    public async Task<PagedResult<PaymentHistoryDto>> GetMyPaymentHistoryPagedAsync(
+        long customerId,
+        int page = 1,
+        int pageSize = 20,
+        CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(metadata)) return false;
-        try
-        {
-            using var document = System.Text.Json.JsonDocument.Parse(metadata);
-            var root = document.RootElement;
-            return root.ValueKind == System.Text.Json.JsonValueKind.Object &&
-                ((root.TryGetProperty("requiresReconciliation", out var review) && review.ValueKind == System.Text.Json.JsonValueKind.True) ||
-                 (root.TryGetProperty("isLatePayment", out var late) && late.ValueKind == System.Text.Json.JsonValueKind.True));
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return false;
-        }
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var all = await GetMyPaymentHistoryAsync(customerId, cancellationToken);
+        var items = all.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        return new PagedResult<PaymentHistoryDto>(items, all.Count, page, pageSize);
     }
 
     public async Task<List<UnpaidInvoiceDto>> GetMyUnpaidInvoicesAsync(
@@ -659,56 +622,468 @@ public class CustomerPaymentService : ICustomerPaymentService
             .ToListAsync(cancellationToken);
     }
 
-    private async Task CompletePaymentAsync(
+    private CheckoutResponse BuildCheckoutResponse(long paymentId, long reservationId, long invoiceId, string invoiceNo, decimal amount, int expiresInSeconds, string transferContent)
+    {
+        var qrUrl = VietQrUrlBuilder.Build(_vietQrConfig, amount, transferContent);
+        return new CheckoutResponse
+        {
+            PaymentId = paymentId,
+            ReservationId = reservationId,
+            InvoiceId = invoiceId,
+            InvoiceNo = invoiceNo,
+            Amount = amount,
+            Currency = PaymentConstants.CurrencyVnd,
+            PaymentMethod = PaymentConstants.MethodBankTransfer,
+            ExpiresInSeconds = expiresInSeconds,
+            VietQr = new VietQrPaymentInfo
+            {
+                BankCode = _vietQrConfig.BankCode ?? string.Empty,
+                AccountNo = _vietQrConfig.AccountNo ?? string.Empty,
+                AccountName = _vietQrConfig.AccountName ?? string.Empty,
+                Amount = amount,
+                TransferContent = transferContent,
+                QrImageUrl = qrUrl
+            }
+        };
+    }
+
+    private async Task<Invoice?> MatchInvoiceAsync(string contentText, Match prefixMatch, CancellationToken ct)
+    {
+        if (prefixMatch.Success && long.TryParse(prefixMatch.Groups[1].Value, out var invoiceId))
+        {
+            var matched = await LoadInvoiceGraphAsync(i => i.Id == invoiceId, ct);
+            if (matched != null) return matched;
+        }
+
+        var invMatch = Regex.Match(contentText, @"INV[\s\-_]*([0-9A-Za-z\-_]+)", RegexOptions.IgnoreCase);
+        if (invMatch.Success)
+        {
+            var matchedCode = invMatch.Groups[0].Value.Replace(" ", "");
+            var exact = await LoadInvoiceGraphAsync(i => i.InvoiceNo == matchedCode, ct);
+            if (exact != null) return exact;
+
+            var matched = await LoadInvoiceGraphAsync(i => i.InvoiceNo.Contains(matchedCode) || matchedCode.Contains(i.InvoiceNo), ct);
+            if (matched != null) return matched;
+        }
+
+        var rsvMatch = Regex.Match(contentText, @"RSV[\s\-_]*([0-9A-Za-z\-_]+)", RegexOptions.IgnoreCase);
+        if (rsvMatch.Success)
+        {
+            var matchedRsv = rsvMatch.Groups[0].Value.Replace(" ", "");
+            var exact = await LoadInvoiceGraphAsync(i => i.Reservation != null && i.Reservation.ReservationCode == matchedRsv, ct);
+            if (exact != null) return exact;
+
+            return await LoadInvoiceGraphAsync(i => i.Reservation != null &&
+                (i.Reservation.ReservationCode.Contains(matchedRsv) || matchedRsv.Contains(i.Reservation.ReservationCode)), ct);
+        }
+
+        return null;
+    }
+
+    private Task<Invoice?> LoadInvoiceGraphAsync(System.Linq.Expressions.Expression<Func<Invoice, bool>> predicate, CancellationToken ct) =>
+        _dbContext.Invoices
+            .Include(i => i.Reservation).ThenInclude(r => r!.Facility)
+            .Include(i => i.Reservation).ThenInclude(r => r!.UnitType)
+            .Include(i => i.Customer).ThenInclude(c => c.User)
+            .FirstOrDefaultAsync(predicate, ct);
+
+    private async Task<SePayWebhookResultDto?> TryProcessRenewalWebhookAsync(
+        string contentText,
+        Match prefixMatch,
+        SePayWebhookPayload payload,
+        string externalEventId,
+        CancellationToken ct)
+    {
+        RentalRenewal? renewal = null;
+        var rnwMatch = Regex.Match(contentText, @"RNW[\s\-_]*(\d+)", RegexOptions.IgnoreCase);
+        if (rnwMatch.Success && long.TryParse(rnwMatch.Groups[1].Value, out var parsedRnwId))
+            renewal = await _dbContext.RentalRenewals.Include(r => r.Agreement).FirstOrDefaultAsync(r => r.Id == parsedRnwId, ct);
+
+        if (renewal == null && prefixMatch.Success && long.TryParse(prefixMatch.Groups[1].Value, out var prefixNum))
+            renewal = await _dbContext.RentalRenewals.Include(r => r.Agreement).FirstOrDefaultAsync(r => r.Id == prefixNum, ct);
+
+        if (renewal == null) return null;
+
+        var renewalPeriod = $"{PaymentConstants.RenewalInvoicePrefix}{renewal.Id}";
+        var renewalInvoice = await _dbContext.Invoices
+            .FirstOrDefaultAsync(i => i.AgreementId == renewal.AgreementId
+                                   && i.BillingPeriod == renewalPeriod
+                                   && i.Status != InvoiceStatusConstants.Voided, ct);
+
+        var months = Math.Max(1, (renewal.RequestedEndDate.Year - renewal.OldEndDate.Year) * 12 + renewal.RequestedEndDate.Month - renewal.OldEndDate.Month);
+        var renewalAmount = renewalInvoice != null
+            ? Math.Max(0m, renewalInvoice.TotalAmount - renewalInvoice.PaidAmount)
+            : (renewal.NewMonthlyRate ?? renewal.OldMonthlyRate) * months;
+
+        if (payload.TransferAmount != renewalAmount)
+        {
+            _logger.LogWarning("Renewal #{RenewalId} received {ReceivedAmount:N0} VND but requires {ExpectedAmount:N0} VND.", renewal.Id, payload.TransferAmount, renewalAmount);
+            return Unmatched();
+        }
+
+        var renewalEventId = !string.IsNullOrWhiteSpace(payload.ReferenceCode)
+            ? payload.ReferenceCode.Trim()
+            : $"renewal-{payload.Id}";
+
+        if (await _dbContext.IntegrationEvents.AnyAsync(e =>
+                (e.Source == "sepay_renewal" || e.Source == "sepay") &&
+                (e.ExternalEventId == renewalEventId || e.ExternalEventId == externalEventId) &&
+                e.Status == "processed", ct))
+        {
+            return new SePayWebhookResultDto { Processed = true, Action = "duplicate_ignored" };
+        }
+
+        var nowTime = DateTimeOffset.UtcNow;
+
+        if (renewalInvoice != null && renewalInvoice.Status != InvoiceStatusConstants.Paid)
+        {
+            var payment = await _dbContext.Payments
+                .FirstOrDefaultAsync(p => p.TargetInvoiceId == renewalInvoice.Id && p.Status == PaymentConstants.StatusPending, ct);
+
+            if (payment == null)
+            {
+                payment = new Payment
+                {
+                    CustomerId = renewalInvoice.CustomerId,
+                    TargetInvoiceId = renewalInvoice.Id,
+                    Amount = payload.TransferAmount,
+                    Currency = renewalInvoice.Currency ?? PaymentConstants.CurrencyVnd,
+                    Method = PaymentConstants.MethodBankTransfer,
+                    Provider = PaymentConstants.ProviderSePay,
+                    ProviderTransactionId = renewalEventId,
+                    IdempotencyKey = $"RNW-{renewal.Id}-{renewalEventId}",
+                    Status = PaymentConstants.StatusSucceeded,
+                    Metadata = "{}",
+                    PaidAt = nowTime,
+                    CreatedAt = nowTime,
+                    UpdatedAt = nowTime
+                };
+                _dbContext.Payments.Add(payment);
+            }
+            else
+            {
+                payment.Status = PaymentConstants.StatusSucceeded;
+                payment.PaidAt = nowTime;
+                payment.ProviderTransactionId = renewalEventId;
+                payment.UpdatedAt = nowTime;
+            }
+            await _dbContext.SaveChangesAsync(ct);
+
+            var hasAlloc = await _dbContext.PaymentAllocations
+                .AnyAsync(pa => pa.PaymentId == payment.Id && pa.InvoiceId == renewalInvoice.Id, ct);
+            if (!hasAlloc && payload.TransferAmount > 0)
+            {
+                _dbContext.PaymentAllocations.Add(new PaymentAllocation
+                {
+                    PaymentId = payment.Id,
+                    InvoiceId = renewalInvoice.Id,
+                    AllocatedAmount = Math.Min(payload.TransferAmount, Math.Max(0m, renewalInvoice.TotalAmount - renewalInvoice.PaidAmount)),
+                    AllocatedAt = nowTime
+                });
+                await _dbContext.SaveChangesAsync(ct);
+            }
+
+            renewalInvoice.PaidAmount = renewalInvoice.TotalAmount;
+            renewalInvoice.Status = InvoiceStatusConstants.Paid;
+            renewalInvoice.UpdatedAt = nowTime;
+        }
+
+        await ApplyRenewalAndCureAgreementAsync(renewal, renewalInvoice?.Id, nowTime, ct);
+
+        _dbContext.IntegrationEvents.Add(new IntegrationEvent
+        {
+            Source = "sepay_renewal",
+            ExternalEventId = renewalEventId,
+            EventType = "renewal_payment",
+            Payload = $"{{\"renewalId\":{renewal.Id},\"amount\":{payload.TransferAmount.ToString(CultureInfo.InvariantCulture)}}}",
+            Status = IntegrationEventStatus.Processed.ToDbValue(),
+            ReceivedAt = nowTime,
+            ProcessedAt = nowTime
+        });
+
+        await _dbContext.SaveChangesAsync(ct);
+        _logger.LogInformation("Renewal #{RenewalId} confirmed and agreement restored via SePay webhook.", renewal.Id);
+        return new SePayWebhookResultDto
+        {
+            Processed = true,
+            Action = "renewal_confirmed",
+            InvoiceId = renewalInvoice?.Id
+        };
+    }
+
+    private async Task ApplyRenewalAndCureAgreementAsync(
+        RentalRenewal renewal,
+        long? renewalInvoiceId,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        renewal.Status = RenewalStatusConstants.Approved;
+        renewal.ApprovedEndDate = renewal.RequestedEndDate;
+        renewal.ReviewedAt = now;
+
+        var agreement = renewal.Agreement ?? await _dbContext.RentalAgreements
+            .FirstOrDefaultAsync(a => a.Id == renewal.AgreementId, ct);
+
+        if (agreement != null)
+        {
+            agreement.EndDate = renewal.RequestedEndDate;
+            if (renewal.NewMonthlyRate.HasValue && renewal.NewMonthlyRate.Value > 0)
+            {
+                agreement.MonthlyRateSnapshot = renewal.NewMonthlyRate.Value;
+            }
+            if (agreement.Status is RentalAgreementStatusConstants.ExpiringSoon
+                or RentalAgreementStatusConstants.Overdue
+                or "extended"
+                or "expired")
+            {
+                agreement.Status = RentalAgreementStatusConstants.Active;
+            }
+            agreement.UpdatedAt = now;
+
+            // Settle carried-over past-due non-transfer invoices covered by renewal
+            var overdueInvoices = await _dbContext.Invoices
+                .Where(i => i.AgreementId == agreement.Id
+                            && (renewalInvoiceId == null || i.Id != renewalInvoiceId.Value)
+                            && (i.Status == InvoiceStatusConstants.Overdue || i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.PartiallyPaid)
+                            && (i.BillingPeriod == null || (!i.BillingPeriod.StartsWith(TransferConstants.BillingPeriodPrefix)
+                                                             && !i.BillingPeriod.StartsWith(PaymentConstants.RenewalInvoicePrefix))))
+                .ToListAsync(ct);
+
+            foreach (var ovd in overdueInvoices)
+            {
+                if (ovd.Status == InvoiceStatusConstants.Overdue || ovd.DueDate <= DateOnly.FromDateTime(now.UtcDateTime))
+                {
+                    ovd.PaidAmount = ovd.TotalAmount;
+                    ovd.Status = InvoiceStatusConstants.Paid;
+                    ovd.UpdatedAt = now;
+                }
+            }
+        }
+
+        var activeAllocations = await _dbContext.UnitAllocations
+            .Where(ua => ua.AgreementId == renewal.AgreementId && ua.Status == AllocationStatusConstants.Active)
+            .ToListAsync(ct);
+        foreach (var alloc in activeAllocations)
+        {
+            alloc.AllocationEndDate = renewal.RequestedEndDate;
+        }
+
+        // Cure any open delinquency cases on this agreement
+        var openCases = await _dbContext.DelinquencyCases
+            .Where(dc => dc.AgreementId == renewal.AgreementId && dc.ResolvedAt == null
+                         && dc.Status != DelinquencyCaseStatusConstants.Cured && dc.Status != DelinquencyCaseStatusConstants.Waived)
+            .ToListAsync(ct);
+
+        foreach (var dc in openCases)
+        {
+            dc.Status = DelinquencyCaseStatusConstants.Cured;
+            dc.ResolvedAt = now;
+            _dbContext.DelinquencyActions.Add(new DelinquencyAction
+            {
+                DelinquencyCaseId = dc.Id,
+                ActionType = DelinquencyActionTypeConstants.Note,
+                Details = JsonSerializer.Serialize(new { note = $"Delinquency cured automatically by renewal #{renewal.Id}.", system = true }),
+                PerformedBy = null,
+                OccurredAt = now
+            });
+        }
+
+        // Restore any suspended PIN / access credentials
+        var suspendedCreds = await _dbContext.AccessCredentials
+            .Where(ac => ac.AgreementId == renewal.AgreementId && ac.Status == CredentialStatusConstants.Suspended)
+            .ToListAsync(ct);
+
+        foreach (var cred in suspendedCreds)
+        {
+            cred.Status = CredentialStatusConstants.Active;
+            cred.RevokedAt = null;
+        }
+
+        if (_realtimeNotifier != null && agreement != null)
+        {
+            await _realtimeNotifier.SendNotificationToUserAsync(
+                agreement.CustomerId,
+                $"Gia hạn hợp đồng #{agreement.AgreementNo} thành công",
+                $"Hợp đồng #{agreement.AgreementNo} đã được gia hạn đến {renewal.RequestedEndDate:dd/MM/yyyy} và quyền truy cập đã được khôi phục.",
+                new { agreementId = agreement.Id, renewalId = renewal.Id, newEndDate = renewal.RequestedEndDate });
+        }
+    }
+
+    private async Task TryCureOverdueAgreementOnInvoiceSettledAsync(long agreementId, DateTimeOffset now, CancellationToken ct)
+    {
+        var agreement = await _dbContext.RentalAgreements
+            .Include(a => a.Facility)
+            .Include(a => a.Invoices)
+            .FirstOrDefaultAsync(a => a.Id == agreementId, ct);
+
+        if (agreement == null) return;
+
+        var tz = TimeZoneHelper.ResolveTimeZone(agreement.Facility?.Timezone, _rentalSettings.DefaultTimezone);
+        var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, tz).DateTime);
+
+        var hasRemainingDebt = agreement.Invoices.Any(i =>
+            (i.Status == InvoiceStatusConstants.Overdue || ((i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.PartiallyPaid) && i.DueDate < localToday))
+            && (i.TotalAmount - i.PaidAmount) > 0
+            && (i.BillingPeriod == null || !i.BillingPeriod.StartsWith(TransferConstants.BillingPeriodPrefix, StringComparison.OrdinalIgnoreCase)));
+
+        if (hasRemainingDebt) return;
+
+        var openCases = await _dbContext.DelinquencyCases
+            .Where(dc => dc.AgreementId == agreementId && dc.ResolvedAt == null
+                         && dc.Status != DelinquencyCaseStatusConstants.Cured && dc.Status != DelinquencyCaseStatusConstants.Waived)
+            .ToListAsync(ct);
+
+        foreach (var dc in openCases)
+        {
+            dc.Status = DelinquencyCaseStatusConstants.Cured;
+            dc.ResolvedAt = now;
+            _dbContext.DelinquencyActions.Add(new DelinquencyAction
+            {
+                DelinquencyCaseId = dc.Id,
+                ActionType = DelinquencyActionTypeConstants.Note,
+                Details = JsonSerializer.Serialize(new { note = "Overdue invoices settled via payment.", system = true }),
+                PerformedBy = null,
+                OccurredAt = now
+            });
+        }
+
+        var suspendedCreds = await _dbContext.AccessCredentials
+            .Where(ac => ac.AgreementId == agreementId && ac.Status == CredentialStatusConstants.Suspended)
+            .ToListAsync(ct);
+
+        foreach (var cred in suspendedCreds)
+        {
+            cred.Status = CredentialStatusConstants.Active;
+            cred.RevokedAt = null;
+        }
+
+        if (agreement.Status == RentalAgreementStatusConstants.Overdue && agreement.EndDate >= localToday)
+        {
+            agreement.Status = RentalAgreementStatusConstants.Active;
+            agreement.UpdatedAt = now;
+        }
+
+        if (agreement.DepositBalance < 0)
+        {
+            agreement.DepositBalance = 0m;
+            agreement.NegativeDebtNotifiedAt = null;
+            agreement.UpdatedAt = now;
+        }
+    }
+
+    private async Task ExecutePaidUnitTransferAsync(
+        UnitTransferRequest transfer,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        transfer.Status = TransferRequestStatusConstants.Completed;
+        transfer.CompletedAt = now;
+
+        var agreement = transfer.Agreement;
+        if (agreement == null)
+        {
+            agreement = await _dbContext.RentalAgreements
+                .Include(a => a.UnitAllocations)
+                .FirstOrDefaultAsync(a => a.Id == transfer.AgreementId, ct);
+        }
+
+        if (agreement == null) return;
+
+        var today = DateOnly.FromDateTime(now.UtcDateTime);
+        var activeAlloc = agreement.UnitAllocations
+            .FirstOrDefault(ua => ua.Status == AllocationStatusConstants.Active);
+
+        if (activeAlloc != null)
+        {
+            activeAlloc.Status = AllocationStatusConstants.Released;
+            activeAlloc.EndedAt = now;
+            await _dbContext.SaveChangesAsync(ct);
+        }
+
+        if (transfer.FromUnit != null)
+        {
+            transfer.FromUnit.PhysicalStatus = StorageUnitStatusConstants.Available;
+            transfer.FromUnit.UpdatedAt = now;
+        }
+
+        if (transfer.ToUnit != null)
+        {
+            transfer.ToUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
+            transfer.ToUnit.UpdatedAt = now;
+
+            _dbContext.UnitAllocations.Add(new UnitAllocation
+            {
+                AgreementId = agreement.Id,
+                StorageUnitId = transfer.ToUnit.Id,
+                AllocationKind = AllocationKindConstants.Rental,
+                AllocationStartDate = today,
+                AllocationEndDate = agreement.EndDate,
+                Status = AllocationStatusConstants.Active,
+                CreatedAt = now
+            });
+
+            agreement.FacilityId = transfer.ToUnit.FacilityId;
+        }
+
+        var targetRate = await _dbContext.FacilityRates
+            .AsNoTracking()
+            .Where(r => r.FacilityId == transfer.RequestedFacilityId
+                     && r.UnitTypeId == transfer.RequestedUnitTypeId
+                     && r.ValidFrom <= today
+                     && (r.ValidTo == null || r.ValidTo >= today))
+            .OrderByDescending(r => r.ValidFrom)
+            .FirstOrDefaultAsync(ct);
+
+        if (targetRate != null && targetRate.MonthlyRate > 0)
+        {
+            agreement.MonthlyRateSnapshot = targetRate.MonthlyRate;
+        }
+
+        if (transfer.DiffDepositAmount > 0)
+        {
+            agreement.DepositSnapshot += transfer.DiffDepositAmount;
+            agreement.DepositBalance += transfer.DiffDepositAmount;
+        }
+
+        agreement.UpdatedAt = now;
+        await _dbContext.SaveChangesAsync(ct);
+    }
+
+    private async Task<SePayWebhookResultDto> CompletePaymentWithResultAsync(
         Payment payment,
         string transactionNo,
+        string externalEventId,
         CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
-
-        // Ensure TargetInvoice and navigations are thoroughly populated
         var invoice = payment.TargetInvoice;
         if (invoice == null && payment.TargetInvoiceId > 0)
         {
-            invoice = await _dbContext.Invoices
-                .Include(i => i.Reservation)
-                    .ThenInclude(r => r!.Facility)
-                .Include(i => i.Reservation)
-                    .ThenInclude(r => r!.UnitType)
-                .Include(i => i.Customer)
-                    .ThenInclude(c => c.User)
-                .FirstOrDefaultAsync(i => i.Id == payment.TargetInvoiceId, cancellationToken);
-            if (invoice != null)
-            {
-                payment.TargetInvoice = invoice;
-            }
+            invoice = await LoadInvoiceGraphAsync(i => i.Id == payment.TargetInvoiceId, cancellationToken);
+            if (invoice != null) payment.TargetInvoice = invoice;
         }
 
         var customer = payment.Customer ?? invoice?.Customer;
         var reservation = invoice?.Reservation;
 
-        // 1. Late Payment Handling: Payment arrived after reservation expired or cancelled
         var isLatePayment = invoice?.Status == InvoiceStatusConstants.Voided ||
-            (reservation != null &&
-             (reservation.Status == ReservationStatusConstants.Expired || reservation.Status == ReservationStatusConstants.Cancelled));
+            (reservation != null && reservation.Status is ReservationStatusConstants.Expired or ReservationStatusConstants.Cancelled);
 
         if (isLatePayment)
         {
             _logger.LogWarning(PaymentLogMessages.LatePaymentState,
                 reservation?.ReservationCode ?? invoice?.InvoiceNo, reservation?.Status ?? invoice?.Status);
 
-            IDbContextTransaction? lateTx = null;
-            if (_dbContext.Database.IsSqlServer())
-            {
-                lateTx = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
-            }
+            IDbContextTransaction? lateTx = _dbContext.Database.IsSqlServer()
+                ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+                : null;
 
             try
             {
                 payment.Status = PaymentConstants.StatusSucceeded;
                 payment.PaidAt = now;
                 payment.ProviderTransactionId = transactionNo;
-                payment.Metadata = System.Text.Json.JsonSerializer.Serialize(new
+                payment.Metadata = JsonSerializer.Serialize(new
                 {
                     note = "Late payment received after invoice or reservation was closed. Manual reconciliation required.",
                     isLatePayment = true,
@@ -717,62 +1092,56 @@ public class CustomerPaymentService : ICustomerPaymentService
                     reservationStatus = reservation?.Status
                 });
                 payment.UpdatedAt = now;
-
                 await _dbContext.SaveChangesAsync(cancellationToken);
 
-                if (lateTx != null)
+                if (payment.Amount > 0)
                 {
-                    await lateTx.CommitAsync(cancellationToken);
+                    _dbContext.Refunds.Add(new Refund
+                    {
+                        PaymentId = payment.Id,
+                        AgreementId = null,
+                        Amount = payment.Amount,
+                        Currency = payment.Currency ?? PaymentConstants.CurrencyVnd,
+                        Provider = PaymentConstants.ProviderSePay,
+                        IdempotencyKey = $"REFUND-LATE-{payment.Id}",
+                        Reason = "Late payment received after reservation hold expired or invoice voided.",
+                        Status = RefundStatusConstants.Pending,
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    });
                 }
 
-                // Notify customer via email regarding late payment
-                var userEmail = customer?.User?.Email;
-                if (reservation != null && !string.IsNullOrWhiteSpace(userEmail))
+                await RecordIntegrationEventAsync("sepay", externalEventId, "late_payment", invoice?.Id ?? 0, payment.Amount, IntegrationEventStatus.Processed, cancellationToken, save: false);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+
+                if (lateTx != null) await lateTx.CommitAsync(cancellationToken);
+
+                await NotifyLatePaymentAsync(payment, customer, reservation, cancellationToken);
+
+                return new SePayWebhookResultDto
                 {
-                    try
-                    {
-                        var customerName = customer?.FullName ?? "Valued Customer";
-                        var subject = $"[Self-Storage] Payment Recorded for Reservation {reservation.ReservationCode} (Action Required)";
-                        var body = $@"
-                            <h3>Dear {customerName},</h3>
-                            <p>We have successfully received your payment of <strong>{payment.Amount:N0} VND</strong> via SePay.</p>
-                            <p>However, the temporary hold period for reservation <strong>{reservation.ReservationCode}</strong> had expired before the transaction was confirmed, and the unit was released back to inventory per BR-RSV-01.</p>
-                            <p>Our Customer Support team will reach out to you within 24 business hours to reassign an equivalent available storage unit or provide a full 100% refund.</p>
-                            <p>Best regards,<br/>Self Storage System Support Team</p>";
-
-                        await _emailService.SendEmailAsync(userEmail, subject, body, cancellationToken);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, PaymentLogMessages.LatePaymentEmailFailed, userEmail);
-                    }
-                }
-
-                return;
+                    Processed = true,
+                    Action = "late_payment_flagged",
+                    InvoiceId = invoice?.Id,
+                    ReservationId = reservation?.Id,
+                    PaymentId = payment.Id
+                };
             }
             catch (Exception ex)
             {
-                if (lateTx != null)
-                {
-                    await lateTx.RollbackAsync(cancellationToken);
-                }
+                if (lateTx != null) await lateTx.RollbackAsync(cancellationToken);
                 _logger.LogError(ex, PaymentLogMessages.LatePaymentFailed, payment.Id, ex.Message);
                 throw;
             }
             finally
             {
-                if (lateTx != null)
-                {
-                    await lateTx.DisposeAsync();
-                }
+                if (lateTx != null) await lateTx.DisposeAsync();
             }
         }
 
-        IDbContextTransaction? transaction = null;
-        if (_dbContext.Database.IsSqlServer())
-        {
-            transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
-        }
+        IDbContextTransaction? transaction = _dbContext.Database.IsSqlServer()
+            ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
 
         try
         {
@@ -782,61 +1151,97 @@ public class CustomerPaymentService : ICustomerPaymentService
             payment.UpdatedAt = now;
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            // Safe allocation amount calculation: cannot exceed remaining invoice balance (prevents SQL trigger 51011 throw)
-            var remainingBalance = invoice != null ? Math.Max(0, invoice.TotalAmount - invoice.PaidAmount) : payment.Amount;
+            var remainingBalance = invoice != null ? Math.Max(0m, invoice.TotalAmount - invoice.PaidAmount) : payment.Amount;
             var allocatedAmount = Math.Min(payment.Amount, remainingBalance);
+            var overpaymentAmount = Math.Max(0m, payment.Amount - remainingBalance);
 
-            // Create PaymentAllocation if not already present
             var existingAllocation = await _dbContext.PaymentAllocations
                 .FirstOrDefaultAsync(pa => pa.PaymentId == payment.Id && pa.InvoiceId == payment.TargetInvoiceId, cancellationToken);
 
             if (existingAllocation == null && allocatedAmount > 0)
             {
-                var allocation = new PaymentAllocation
+                _dbContext.PaymentAllocations.Add(new PaymentAllocation
                 {
                     PaymentId = payment.Id,
                     InvoiceId = payment.TargetInvoiceId,
                     AllocatedAmount = allocatedAmount,
                     AllocatedAt = now
-                };
-                _dbContext.PaymentAllocations.Add(allocation);
+                });
                 await _dbContext.SaveChangesAsync(cancellationToken);
             }
 
-            // Sync invoice paid amount and status in-memory / DB
+            var isTransfer = false;
             if (invoice != null)
             {
                 invoice.PaidAmount += allocatedAmount;
-                if (invoice.PaidAmount >= invoice.TotalAmount)
-                {
-                    invoice.Status = InvoiceStatusConstants.Paid;
-                }
-                else if (invoice.PaidAmount > 0)
-                {
-                    invoice.Status = InvoiceStatusConstants.PartiallyPaid;
-                }
+                invoice.Status = invoice.PaidAmount >= invoice.TotalAmount
+                    ? InvoiceStatusConstants.Paid
+                    : (invoice.PaidAmount > 0 ? InvoiceStatusConstants.PartiallyPaid : invoice.Status);
                 invoice.UpdatedAt = now;
 
-                // Transfer invoices are identified by a stable internal marker, so
-                // the same SePay webhook can activate reservations and transfers.
                 if (invoice.Status == InvoiceStatusConstants.Paid &&
                     !string.IsNullOrWhiteSpace(invoice.BillingPeriod) &&
                     invoice.BillingPeriod.StartsWith("TRANSFER:", StringComparison.OrdinalIgnoreCase) &&
                     long.TryParse(invoice.BillingPeriod["TRANSFER:".Length..], out var transferId))
                 {
-                    var transfer = await _dbContext.UnitTransferRequests.FindAsync(new object[] { transferId }, cancellationToken);
+                    var transfer = await _dbContext.UnitTransferRequests
+                        .Include(t => t.Agreement)
+                            .ThenInclude(a => a.UnitAllocations)
+                        .Include(t => t.FromUnit)
+                        .Include(t => t.ToUnit)
+                        .FirstOrDefaultAsync(t => t.Id == transferId, cancellationToken);
                     if (transfer != null && transfer.Status == TransferRequestStatusConstants.PendingPayment)
                     {
-                        transfer.Status = TransferRequestStatusConstants.Paid;
+                        await ExecutePaidUnitTransferAsync(transfer, now, cancellationToken);
+                        isTransfer = true;
                     }
+                }
+                else if (invoice.Status == InvoiceStatusConstants.Paid &&
+                    !string.IsNullOrWhiteSpace(invoice.BillingPeriod) &&
+                    invoice.BillingPeriod.StartsWith(PaymentConstants.RenewalInvoicePrefix, StringComparison.OrdinalIgnoreCase) &&
+                    long.TryParse(invoice.BillingPeriod[PaymentConstants.RenewalInvoicePrefix.Length..], out var paidRenewalId))
+                {
+                    var renewal = await _dbContext.RentalRenewals
+                        .Include(r => r.Agreement)
+                        .FirstOrDefaultAsync(r => r.Id == paidRenewalId, cancellationToken);
+                    if (renewal != null)
+                    {
+                        await ApplyRenewalAndCureAgreementAsync(renewal, invoice.Id, now, cancellationToken);
+                    }
+                }
+                else if (invoice.Status == InvoiceStatusConstants.Paid && invoice.AgreementId.HasValue)
+                {
+                    await TryCureOverdueAgreementOnInvoiceSettledAsync(invoice.AgreementId.Value, now, cancellationToken);
                 }
             }
 
-            // Cancel any older/duplicate pending payments for this invoice
+            if (overpaymentAmount > 0)
+            {
+                payment.Metadata = JsonSerializer.Serialize(new
+                {
+                    overpaymentAmount,
+                    requiresReconciliation = true,
+                    note = "Overpayment detected; excess amount queued for refund."
+                });
+
+                _dbContext.Refunds.Add(new Refund
+                {
+                    PaymentId = payment.Id,
+                    AgreementId = invoice?.AgreementId,
+                    Amount = overpaymentAmount,
+                    Currency = payment.Currency ?? PaymentConstants.CurrencyVnd,
+                    Provider = PaymentConstants.ProviderSePay,
+                    IdempotencyKey = $"REFUND-OVERPAY-{payment.Id}",
+                    Reason = $"Overpayment refund ({overpaymentAmount:N0} VND excess over invoice balance).",
+                    Status = RefundStatusConstants.Pending,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                });
+            }
+
             var otherPendingPayments = await _dbContext.Payments
                 .Where(p => p.TargetInvoiceId == payment.TargetInvoiceId && p.Id != payment.Id && p.Status == PaymentConstants.StatusPending)
                 .ToListAsync(cancellationToken);
-
             foreach (var opp in otherPendingPayments)
             {
                 opp.Status = PaymentConstants.StatusCancelled;
@@ -844,42 +1249,41 @@ public class CustomerPaymentService : ICustomerPaymentService
                 opp.UpdatedAt = now;
             }
 
-            // Update Reservation status to confirmed (BR-RSV-01, BR-RSV-04)
+            RentalAgreement? createdAgreement = null;
             if (reservation != null && reservation.Status != ReservationStatusConstants.Confirmed)
             {
                 reservation.Status = ReservationStatusConstants.Confirmed;
                 reservation.ConfirmedAt = now;
                 reservation.UpdatedAt = now;
 
-                // Finalize applied promotions
                 var redemptions = await _dbContext.PromotionRedemptions
                     .Where(pr => pr.ReservationId == reservation.Id && pr.Status == PromotionRedemptionStatusConstants.Reserved)
                     .ToListAsync(cancellationToken);
-
                 foreach (var red in redemptions)
-                {
                     red.Status = PromotionRedemptionStatusConstants.Applied;
-                }
 
-                // Create draft RentalAgreement linked to invoice and reservation (Flow 1).
-                // Per BR-RSV-04, unit remains Reserved and agreement awaits on-site Staff Check-in & Handover (Flow 2) to become Active with Issued PIN.
-                var existingAgreement = await _dbContext.RentalAgreements
+                createdAgreement = await _dbContext.RentalAgreements
                     .FirstOrDefaultAsync(a => a.ReservationId == reservation.Id, cancellationToken);
 
-                if (existingAgreement == null)
+                if (createdAgreement == null)
                 {
-                    var agreementNo = $"AGR-HCM-{now:yyyyMMdd}-{reservation.Id:D4}";
-
                     var policyVersionId = await _dbContext.PolicyVersions
                         .Where(p => p.PolicyType == "rental_terms")
                         .OrderByDescending(p => p.ValidFrom)
                         .Select(p => p.Id)
                         .FirstOrDefaultAsync(cancellationToken);
+                    if (policyVersionId <= 0)
+                    {
+                        policyVersionId = await _dbContext.PolicyVersions
+                            .OrderByDescending(p => p.ValidFrom)
+                            .Select(p => p.Id)
+                            .FirstOrDefaultAsync(cancellationToken);
+                    }
                     if (policyVersionId <= 0) policyVersionId = 1;
 
-                    var agreement = new RentalAgreement
+                    createdAgreement = new RentalAgreement
                     {
-                        AgreementNo = agreementNo,
+                        AgreementNo = $"AGR-HCM-{now:yyyyMMdd}-{reservation.Id:D4}",
                         ReservationId = reservation.Id,
                         CustomerId = reservation.CustomerId,
                         FacilityId = reservation.FacilityId,
@@ -890,76 +1294,319 @@ public class CustomerPaymentService : ICustomerPaymentService
                         DepositSnapshot = reservation.DepositSnapshot,
                         DepositBalance = reservation.DepositSnapshot,
                         Status = RentalAgreementStatusConstants.Draft,
-                        SignedAt = null,
-                        CheckedInAt = null,
                         CreatedAt = now,
                         UpdatedAt = now
                     };
-                    _dbContext.RentalAgreements.Add(agreement);
+                    _dbContext.RentalAgreements.Add(createdAgreement);
                     await _dbContext.SaveChangesAsync(cancellationToken);
 
-                    if (invoice != null)
-                    {
-                        invoice.AgreementId = agreement.Id;
-                    }
+                    if (invoice != null) invoice.AgreementId = createdAgreement.Id;
                 }
             }
 
+            await RecordIntegrationEventAsync("sepay", externalEventId, "payment_settled", invoice?.Id ?? 0, payment.Amount, IntegrationEventStatus.Processed, cancellationToken, save: false);
+
+            await PersistConfirmedNotificationsAsync(payment, invoice, reservation, now, cancellationToken);
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            if (transaction != null)
-            {
-                await transaction.CommitAsync(cancellationToken);
-            }
+            if (transaction != null) await transaction.CommitAsync(cancellationToken);
 
             _logger.LogInformation(PaymentLogMessages.PaymentCompleted,
                 payment.Id, payment.TargetInvoiceId, reservation?.ReservationCode ?? "N/A");
 
-            // Send confirmation email
-            var customerEmail = customer?.User?.Email;
-            if (reservation != null && !string.IsNullOrWhiteSpace(customerEmail))
-            {
-                try
-                {
-                    var customerName = customer?.FullName ?? "Valued Customer";
-                    var subject = $"[Self-Storage] Reservation Confirmed - Code: {reservation.ReservationCode}";
-                    var body = $@"
-                        <h3>Dear {customerName},</h3>
-                        <p>Thank you for completing your payment for your storage unit reservation!</p>
-                        <ul>
-                            <li><strong>Reservation Code:</strong> {reservation.ReservationCode}</li>
-                            <li><strong>Facility:</strong> {reservation.Facility?.Name}</li>
-                            <li><strong>Address:</strong> {reservation.Facility?.AddressLine}</li>
-                            <li><strong>Unit Type:</strong> {reservation.UnitType?.Name}</li>
-                            <li><strong>Paid Amount:</strong> {payment.Amount:N0} VND</li>
-                            <li><strong>Start Date:</strong> {reservation.StartDate:yyyy-MM-dd}</li>
-                        </ul>
-                        <p><strong>Check-In Instructions:</strong> Please present your national ID/Passport and your Reservation Code on your mobile app when visiting our facility for handover as per BR-RSV-04.</p>
-                        <p>Best regards,<br/>Self Storage System Support Team</p>";
+            await DispatchRealtimeAndEmailSuccessAsync(payment, invoice, reservation, customer, createdAgreement, cancellationToken);
 
-                    await _emailService.SendEmailAsync(customerEmail, subject, body, cancellationToken);
-                }
-                catch (Exception ex)
+            var action = overpaymentAmount > 0
+                ? "overpayment_refund_created"
+                : (isTransfer ? "transfer_confirmed" : "confirmed_full");
+
+            return new SePayWebhookResultDto
+            {
+                Processed = true,
+                Action = action,
+                InvoiceId = invoice?.Id,
+                ReservationId = reservation?.Id,
+                PaymentId = payment.Id
+            };
+        }
+        catch (DbUpdateException ex)
+        {
+            if (transaction != null) await transaction.RollbackAsync(cancellationToken);
+            _dbContext.ChangeTracker.Clear();
+            if (await IsDuplicateEventAsync(externalEventId, transactionNo, cancellationToken))
+            {
+                return new SePayWebhookResultDto
                 {
-                    _logger.LogWarning(ex, PaymentLogMessages.ConfirmationEmailFailed, customerEmail);
-                }
+                    Processed = true,
+                    Action = "duplicate_ignored",
+                    InvoiceId = invoice?.Id,
+                    ReservationId = reservation?.Id,
+                    PaymentId = payment.Id
+                };
             }
+
+            _logger.LogError(ex, PaymentLogMessages.PaymentCompletionError, payment.Id, ex.Message);
+            throw;
         }
         catch (Exception ex)
         {
-            if (transaction != null)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-            }
+            if (transaction != null) await transaction.RollbackAsync(cancellationToken);
             _logger.LogError(ex, PaymentLogMessages.PaymentCompletionError, payment.Id, ex.Message);
             throw;
         }
         finally
         {
-            if (transaction != null)
+            if (transaction != null) await transaction.DisposeAsync();
+        }
+    }
+
+    private async Task<bool> IsDuplicateEventAsync(string externalEventId, string transactionRef, CancellationToken ct)
+    {
+        if (await _dbContext.IntegrationEvents.AsNoTracking().AnyAsync(e =>
+                (e.Source == "sepay" || e.Source == "sepay_renewal") &&
+                e.ExternalEventId == externalEventId &&
+                e.Status == "processed", ct))
+        {
+            return true;
+        }
+
+        return await _dbContext.Payments.AsNoTracking().AnyAsync(p =>
+            p.Provider == PaymentConstants.ProviderSePay &&
+            p.ProviderTransactionId == transactionRef &&
+            p.Status == PaymentConstants.StatusSucceeded, ct);
+    }
+
+    private async Task RecordIntegrationEventAsync(
+        string source,
+        string externalEventId,
+        string eventType,
+        long invoiceId,
+        decimal amount,
+        IntegrationEventStatus status,
+        CancellationToken ct,
+        bool save = true)
+    {
+        var exists = await _dbContext.IntegrationEvents.AnyAsync(e => e.Source == source && e.ExternalEventId == externalEventId, ct);
+        if (exists) return;
+
+        var now = DateTimeOffset.UtcNow;
+        _dbContext.IntegrationEvents.Add(new IntegrationEvent
+        {
+            Source = source,
+            ExternalEventId = externalEventId,
+            EventType = eventType,
+            Payload = JsonSerializer.Serialize(new { invoiceId, amount }),
+            Status = status.ToDbValue(),
+            ReceivedAt = now,
+            ProcessedAt = now
+        });
+
+        if (save) await _dbContext.SaveChangesAsync(ct);
+    }
+
+    private async Task PersistConfirmedNotificationsAsync(
+        Payment payment,
+        Invoice? invoice,
+        Reservation? reservation,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        if (reservation == null) return;
+
+        var custUserExists = await _dbContext.Users.AsNoTracking().AnyAsync(u => u.Id == reservation.CustomerId, ct);
+        if (custUserExists)
+        {
+            _dbContext.Notifications.Add(new Notification
             {
-                await transaction.DisposeAsync();
+                UserId = reservation.CustomerId,
+                Channel = NotificationChannel.InApp.ToDbValue(),
+                TemplateCode = "reservation_confirmed",
+                Subject = $"Reservation {reservation.ReservationCode} confirmed",
+                Payload = JsonSerializer.Serialize(new { reservationId = reservation.Id, reservationCode = reservation.ReservationCode, paymentId = payment.Id, invoiceId = invoice?.Id }),
+                Status = NotificationStatus.Sent.ToDbValue(),
+                ScheduledAt = now,
+                SentAt = now,
+                Attempts = 1,
+                DeduplicationKey = $"rsv-conf-cust-{reservation.Id}-{payment.Id}",
+                CreatedAt = now
+            });
+        }
+
+        var assignedStaffIds = await _dbContext.StaffFacilityAssignments
+            .AsNoTracking()
+            .Where(a => a.FacilityId == reservation.FacilityId && a.StartsAt <= now && (a.EndsAt == null || a.EndsAt > now))
+            .Select(a => a.EmployeeId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        foreach (var staffId in assignedStaffIds)
+        {
+            _dbContext.Notifications.Add(new Notification
+            {
+                UserId = staffId,
+                Channel = NotificationChannel.InApp.ToDbValue(),
+                TemplateCode = "staff_new_confirmed_reservation",
+                Subject = $"New confirmed booking {reservation.ReservationCode}",
+                Payload = JsonSerializer.Serialize(new { reservationId = reservation.Id, reservationCode = reservation.ReservationCode, facilityId = reservation.FacilityId }),
+                Status = NotificationStatus.Sent.ToDbValue(),
+                ScheduledAt = now,
+                SentAt = now,
+                Attempts = 1,
+                DeduplicationKey = $"rsv-conf-staff-{reservation.Id}-{staffId}",
+                CreatedAt = now
+            });
+        }
+    }
+
+    private async Task DispatchRealtimeAndEmailSuccessAsync(
+        Payment payment,
+        Invoice? invoice,
+        Reservation? reservation,
+        CustomerProfile? customer,
+        RentalAgreement? agreement,
+        CancellationToken cancellationToken)
+    {
+        if (_realtimeNotifier != null)
+        {
+            var qrToken = reservation != null
+                ? _qrTokenService?.IssueToken("checkin", reservation.Id, agreement?.Id, reservation.CustomerId, reservation.FacilityId, TimeSpan.FromDays(90))
+                : null;
+
+            await _realtimeNotifier.SendPaymentSucceededAsync(payment.CustomerId, new
+            {
+                paymentId = payment.Id,
+                invoiceId = payment.TargetInvoiceId,
+                reservationId = reservation?.Id,
+                amount = payment.Amount,
+                status = payment.Status,
+                checkInQrToken = qrToken
+            });
+
+            if (reservation != null)
+            {
+                await _realtimeNotifier.SendReservationConfirmedAsync(reservation.CustomerId, reservation.FacilityId, new
+                {
+                    reservationId = reservation.Id,
+                    reservationCode = reservation.ReservationCode,
+                    facilityId = reservation.FacilityId,
+                    status = reservation.Status,
+                    checkInQrToken = qrToken
+                });
+
+                await _realtimeNotifier.SendNotificationToUserAsync(
+                    reservation.CustomerId,
+                    "Payment confirmed",
+                    $"Reservation {reservation.ReservationCode} has been confirmed.",
+                    new { reservationId = reservation.Id, paymentId = payment.Id });
             }
+        }
+
+        var customerEmail = customer?.User?.Email;
+        if (reservation != null && !string.IsNullOrWhiteSpace(customerEmail))
+        {
+            try
+            {
+                var customerName = customer?.FullName ?? "Valued Customer";
+                var subject = $"[Self-Storage] Reservation Confirmed - Code: {reservation.ReservationCode}";
+                var body = $@"
+                    <h3>Dear {customerName},</h3>
+                    <p>Thank you for completing your payment for your storage unit reservation!</p>
+                    <ul>
+                        <li><strong>Reservation Code:</strong> {reservation.ReservationCode}</li>
+                        <li><strong>Facility:</strong> {reservation.Facility?.Name}</li>
+                        <li><strong>Address:</strong> {reservation.Facility?.AddressLine}</li>
+                        <li><strong>Unit Type:</strong> {reservation.UnitType?.Name}</li>
+                        <li><strong>Paid Amount:</strong> {payment.Amount:N0} VND</li>
+                        <li><strong>Start Date:</strong> {reservation.StartDate:yyyy-MM-dd}</li>
+                    </ul>
+                    <p><strong>Check-In Instructions:</strong> Please present your national ID/Passport and your Reservation Code on your mobile app when visiting our facility for handover as per BR-RSV-04.</p>
+                    <p>Best regards,<br/>Self Storage System Support Team</p>";
+
+                await _emailService.SendEmailAsync(customerEmail, subject, body, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, PaymentLogMessages.ConfirmationEmailFailed, customerEmail);
+            }
+        }
+    }
+
+    private async Task NotifyPartialPaymentAsync(Invoice invoice, Payment payment, CancellationToken ct)
+    {
+        if (_realtimeNotifier == null) return;
+        await _realtimeNotifier.SendPaymentPartialReceivedAsync(invoice.CustomerId, new
+        {
+            paymentId = payment.Id,
+            invoiceId = invoice.Id,
+            reservationId = invoice.ReservationId,
+            paidAmount = invoice.PaidAmount,
+            totalAmount = invoice.TotalAmount,
+            remainingAmount = Math.Max(0m, invoice.TotalAmount - invoice.PaidAmount)
+        });
+        await _realtimeNotifier.SendNotificationToUserAsync(
+            invoice.CustomerId,
+            "Partial payment received",
+            $"Received {payment.Amount:N0} VND. Remaining balance: {Math.Max(0m, invoice.TotalAmount - invoice.PaidAmount):N0} VND.",
+            new { paymentId = payment.Id, invoiceId = invoice.Id });
+    }
+
+    private async Task NotifyLatePaymentAsync(Payment payment, CustomerProfile? customer, Reservation? reservation, CancellationToken ct)
+    {
+        if (_realtimeNotifier != null)
+        {
+            await _realtimeNotifier.SendNotificationToUserAsync(
+                payment.CustomerId,
+                "Late payment queued for reconciliation",
+                $"Payment of {payment.Amount:N0} VND was received after reservation hold expiry and queued for staff/manager reconciliation.",
+                new { paymentId = payment.Id, reservationId = reservation?.Id, requiresReconciliation = true });
+        }
+
+        var userEmail = customer?.User?.Email;
+        if (reservation != null && !string.IsNullOrWhiteSpace(userEmail))
+        {
+            try
+            {
+                var customerName = customer?.FullName ?? "Valued Customer";
+                var subject = $"[Self-Storage] Payment Recorded for Reservation {reservation.ReservationCode} (Action Required)";
+                var body = $@"
+                    <h3>Dear {customerName},</h3>
+                    <p>We have successfully received your payment of <strong>{payment.Amount:N0} VND</strong> via SePay.</p>
+                    <p>However, the temporary hold period for reservation <strong>{reservation.ReservationCode}</strong> had expired before the transaction was confirmed, and the unit was released back to inventory per BR-RSV-01.</p>
+                    <p>Our Customer Support team will reach out to you within 24 business hours to reassign an equivalent available storage unit or provide a full 100% refund.</p>
+                    <p>Best regards,<br/>Self Storage System Support Team</p>";
+
+                await _emailService.SendEmailAsync(userEmail, subject, body, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, PaymentLogMessages.LatePaymentEmailFailed, userEmail);
+            }
+        }
+    }
+
+    private static string ResolveExternalEventId(SePayWebhookPayload payload) =>
+        payload.Id > 0
+            ? payload.Id.ToString(CultureInfo.InvariantCulture)
+            : (!string.IsNullOrWhiteSpace(payload.ReferenceCode)
+                ? payload.ReferenceCode.Trim()
+                : $"{payload.TransactionDate}:{payload.TransferAmount}:{payload.Content.GetHashCode()}");
+
+    private static SePayWebhookResultDto Unmatched() => new() { Processed = false, Action = "unmatched_ignored" };
+
+    private static bool NeedsReconciliation(string? metadata)
+    {
+        if (string.IsNullOrWhiteSpace(metadata)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(metadata);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                ((root.TryGetProperty("requiresReconciliation", out var review) && review.ValueKind == JsonValueKind.True) ||
+                 (root.TryGetProperty("isLatePayment", out var late) && late.ValueKind == JsonValueKind.True));
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 }

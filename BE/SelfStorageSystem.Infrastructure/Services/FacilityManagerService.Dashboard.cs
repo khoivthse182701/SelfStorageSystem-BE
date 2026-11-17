@@ -232,244 +232,76 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
     private async Task EnsureFacilityAccessAsync(
-
         long facilityId,
-
         long currentUserId,
-
         bool isSystemAdmin,
-
         CancellationToken cancellationToken)
-
     {
-
         var facilityExists = await _dbContext.Facilities
-
             .AnyAsync(f => f.Id == facilityId, cancellationToken);
 
-
-
         if (!facilityExists)
-
         {
-
             throw AppException.FromError(ManagerErrors.FacilityNotFound);
-
         }
 
-
-
-        if (isSystemAdmin)
-
-        {
-
-            return;
-
-        }
-
-
-
-        var now = DateTimeOffset.UtcNow;
-
-        var hasAccess = await _dbContext.StaffFacilityAssignments
-
-            .AnyAsync(sfa => sfa.EmployeeId == currentUserId &&
-
-                             sfa.FacilityId == facilityId &&
-
-                             (sfa.AssignmentRole == StaffAssignmentRoles.FacilityManager ||
-
-                              sfa.AssignmentRole == RoleConstants.FacilityManager ||
-
-                              sfa.AssignmentRole.ToLower() == "manager" ||
-
-                              sfa.AssignmentRole.ToLower() == "facility_manager") &&
-
-                             (sfa.EndsAt == null || sfa.EndsAt > now),
-
-                      cancellationToken);
-
-
-
-        if (!hasAccess)
-
-        {
-
-            throw AppException.FromError(ManagerErrors.NotAssignedToFacility);
-
-        }
-
+        // Manager and Admin have global operational access across all facilities.
     }
-
-
 
     private async Task<long> GetManagerEmployeeIdAsync(
-
         long currentUserId,
-
         CancellationToken cancellationToken)
-
     {
-
         var employee = await _dbContext.EmployeeProfiles
-
             .FirstOrDefaultAsync(ep => ep.UserId == currentUserId, cancellationToken);
 
-
-
         if (employee != null)
-
         {
-
             return employee.UserId;
-
         }
-
-
-
-        // Check if user exists in Users table
 
         var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.Id == currentUserId, cancellationToken);
-
         if (user == null)
-
         {
-
             throw AppException.FromError(ManagerErrors.ManagerEmployeeProfileNotFound);
-
         }
 
-
-
-        // Auto-create employee profile for administrator performing manager duties if needed
-
         var now = DateTimeOffset.UtcNow;
-
         var newEmployee = new EmployeeProfile
-
         {
-
             UserId = user.Id,
-
             EmployeeCode = $"{AdminConstants.DefaultEmployeeCodePrefix}{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % AdminConstants.AutoEmployeeCodeModulo:D6}",
-
             FullName = user.Email,
-
             HireDate = DateOnly.FromDateTime(DateTime.UtcNow),
-
             EmploymentStatus = EmploymentStatusConstants.Active,
-
             CreatedAt = now,
-
             UpdatedAt = now
-
         };
-
         _dbContext.EmployeeProfiles.Add(newEmployee);
-
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-
-
         return newEmployee.UserId;
-
     }
 
-
-
     public async Task<List<ManagerFacilityScopeDto>> GetMyFacilitiesAsync(
-
         long currentUserId,
-
         bool isSystemAdmin,
-
         CancellationToken cancellationToken = default)
-
     {
-
-        if (isSystemAdmin)
-
-        {
-
-            return await _dbContext.Facilities
-
-                .AsNoTracking()
-
-                .OrderBy(f => f.Name)
-
-                .Select(f => new ManagerFacilityScopeDto
-
-                {
-
-                    Id = f.Id,
-
-                    Code = f.Code,
-
-                    Name = f.Name,
-
-                    AddressLine = f.AddressLine,
-
-                    City = f.City,
-
-                    Status = f.Status,
-
-                    AssignmentRole = RoleConstants.SystemAdministrator
-
-                })
-
-                .ToListAsync(cancellationToken);
-
-        }
-
-
-
-        var now = DateTimeOffset.UtcNow;
-
-        var assigned = await _dbContext.StaffFacilityAssignments
-
+        // Manager and Admin have global access to all facilities
+        return await _dbContext.Facilities
             .AsNoTracking()
-
-            .Include(sfa => sfa.Facility)
-
-            .Where(sfa => sfa.EmployeeId == currentUserId &&
-
-                          (sfa.AssignmentRole == StaffAssignmentRoles.FacilityManager ||
-
-                           sfa.AssignmentRole == RoleConstants.FacilityManager ||
-
-                           sfa.AssignmentRole.ToLower() == "manager" ||
-
-                           sfa.AssignmentRole.ToLower() == "facility_manager") &&
-
-                          (sfa.EndsAt == null || sfa.EndsAt > now))
-
-            .OrderBy(sfa => sfa.Facility.Name)
-
-            .Select(sfa => new ManagerFacilityScopeDto
-
+            .OrderBy(f => f.Name)
+            .Select(f => new ManagerFacilityScopeDto
             {
-
-                Id = sfa.Facility.Id,
-
-                Code = sfa.Facility.Code,
-
-                Name = sfa.Facility.Name,
-
-                AddressLine = sfa.Facility.AddressLine,
-
-                City = sfa.Facility.City,
-
-                Status = sfa.Facility.Status,
-
-                AssignmentRole = StaffAssignmentRoles.FacilityManager
-
+                Id = f.Id,
+                Code = f.Code,
+                Name = f.Name,
+                AddressLine = f.AddressLine,
+                City = f.City,
+                Status = f.Status,
+                AssignmentRole = isSystemAdmin ? RoleConstants.Admin : RoleConstants.Manager
             })
-
             .ToListAsync(cancellationToken);
-
-
-
-        return assigned;
-
     }
 }

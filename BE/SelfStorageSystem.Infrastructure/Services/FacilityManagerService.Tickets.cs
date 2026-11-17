@@ -1210,6 +1210,13 @@ public partial class FacilityManagerService : IFacilityManagerService
                             inspectionStatus = "completed";
                             postInspectionStatus = "refunded";
                         }
+                        else if (rStatus == RefundStatusConstants.PendingManagerPayout.ToLowerInvariant()
+                              || rStatus == RefundStatusConstants.PendingCounterPayout.ToLowerInvariant()
+                              || rStatus == RefundStatusConstants.Approved.ToLowerInvariant()
+                              || !string.IsNullOrWhiteSpace(bAcc))
+                        {
+                            postInspectionStatus = "waiting_manager_payout";
+                        }
                         else
                         {
                             postInspectionStatus = "waiting_bank_info";
@@ -1335,60 +1342,69 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var inspection = new Inspection
+        var existingInspection = await _dbContext.Inspections
+            .FirstOrDefaultAsync(i => i.AgreementId == agreement.Id &&
+                                      i.InspectionType == "check_out" &&
+                                      i.Status != InspectionStatusConstants.Completed &&
+                                      i.Status != InspectionStatusConstants.Failed, cancellationToken);
 
+        Inspection inspection;
+        if (existingInspection != null)
         {
-
-            FacilityId = agreement.FacilityId,
-
-            AgreementId = agreement.Id,
-
-            StorageUnitId = storageUnitId,
-
-            InspectedBy = request.EmployeeId,
-
-            InspectionType = "check_out",
-
-            Status = InspectionStatusConstants.Draft,
-
-            OverallCondition = "good",
-
-            Summary = request.Notes,
-
-            CreatedAt = now
-
-        };
-
-        _dbContext.Inspections.Add(inspection);
-
-
+            existingInspection.InspectedBy = request.EmployeeId;
+            existingInspection.Summary = request.Notes ?? existingInspection.Summary;
+            existingInspection.StorageUnitId = storageUnitId;
+            inspection = existingInspection;
+        }
+        else
+        {
+            inspection = new Inspection
+            {
+                FacilityId = agreement.FacilityId,
+                AgreementId = agreement.Id,
+                StorageUnitId = storageUnitId,
+                InspectedBy = request.EmployeeId,
+                InspectionType = "check_out",
+                Status = InspectionStatusConstants.Draft,
+                OverallCondition = "good",
+                Summary = request.Notes,
+                CreatedAt = now
+            };
+            _dbContext.Inspections.Add(inspection);
+        }
 
         if (agreement.Status == RentalAgreementStatusConstants.Active ||
-
             agreement.Status == RentalAgreementStatusConstants.ExpiringSoon ||
-
             agreement.Status == RentalAgreementStatusConstants.Overdue)
-
         {
-
             agreement.Status = RentalAgreementStatusConstants.MoveOutScheduled;
-
         }
 
         if (agreement.MoveOutRequest != null)
-
         {
-
             agreement.MoveOutRequest.Status = MoveOutStatusConstants.InspectionPending;
-
             agreement.MoveOutRequest.UpdatedAt = now;
-
+        }
+        else
+        {
+            var moveOutReq = new MoveOutRequest
+            {
+                AgreementId = agreement.Id,
+                RequestedBy = agreement.CustomerId,
+                RequestedMoveOutDate = DateOnly.FromDateTime(request.ScheduledAt?.DateTime ?? agreement.EndDate.ToDateTime(TimeOnly.MinValue)),
+                Status = MoveOutStatusConstants.InspectionPending,
+                Reason = request.Notes ?? "Quản lý tạo lịch nghiệm thu trả kho theo hạn hợp đồng",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.MoveOutRequests.Add(moveOutReq);
+            agreement.MoveOutRequest = moveOutReq;
         }
 
         agreement.UpdatedAt = now;
 
-
-
+        // Nghiệm thu trả kho thuộc về quy trình Trả kho (StaffMoveOutTab/Inspections),
+        // không đưa vào bảng StaffTasks (vốn dành riêng cho ticket Sự cố / Bảo trì / Dọn dẹp)
         var existingInspectionTask = await _dbContext.StaffTasks
             .FirstOrDefaultAsync(t => t.FacilityId == agreement.FacilityId &&
                                       t.TaskType == "inspection" &&
@@ -1396,32 +1412,8 @@ public partial class FacilityManagerService : IFacilityManagerService
 
         if (existingInspectionTask != null)
         {
-            existingInspectionTask.AssignedEmployeeId = request.EmployeeId;
-            existingInspectionTask.DueAt = request.ScheduledAt ?? existingInspectionTask.DueAt ?? now.AddHours(24);
-            existingInspectionTask.Title = $"[Nghiệm thu trả kho HĐ #{agreement.AgreementNo}] Ô kho {activeUnit?.UnitCode ?? ""}";
-            existingInspectionTask.Status = "todo";
-            existingInspectionTask.ProgressPercent = 0;
-            existingInspectionTask.UpdatedAt = now;
+            _dbContext.StaffTasks.Remove(existingInspectionTask);
         }
-        else
-        {
-            var staffTask = new StaffTask
-            {
-                FacilityId = agreement.FacilityId,
-                AssignedEmployeeId = request.EmployeeId,
-                TaskType = "inspection",
-                Title = $"[Nghiệm thu trả kho HĐ #{agreement.AgreementNo}] Ô kho {activeUnit?.UnitCode ?? ""}",
-                Status = "todo",
-                CreatedBy = currentUserId,
-                DueAt = request.ScheduledAt ?? now.AddHours(24),
-                ProgressPercent = 0,
-                CreatedAt = now,
-                UpdatedAt = now
-            };
-            _dbContext.StaffTasks.Add(staffTask);
-        }
-
-
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 

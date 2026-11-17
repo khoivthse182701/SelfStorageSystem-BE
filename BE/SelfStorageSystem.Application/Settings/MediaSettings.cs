@@ -17,4 +17,8 @@ public class MediaSettings
     ];
 
     public string UploadFolder { get; set; } = "uploads/media";
+
+    public string WebRootPath { get; set; } = string.Empty;
+
+    public string PublicBaseUrl { get; set; } = string.Empty;
 }

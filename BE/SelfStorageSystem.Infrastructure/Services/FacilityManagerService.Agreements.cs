@@ -286,7 +286,7 @@ public partial class FacilityManagerService : IFacilityManagerService
 
                 s.ItemName,
 
-                s.Category,
+                s.Category ?? StoredItemCategoryConstants.Other,
 
                 s.Description,
 
@@ -458,777 +458,549 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
         if (newUnit == null)
-
             throw AppException.FromError(ManagerErrors.UnitNotFound);
 
-
-
-        if (newUnit.FacilityId != agreement.FacilityId)
-
-            throw AppException.FromError(ManagerErrors.TargetUnitDifferentFacility);
-
-
-
-        if (!string.Equals(newUnit.PhysicalStatus, StorageUnitStatusConstants.Available, StringComparison.OrdinalIgnoreCase))
-
+        if (newUnit.Id == oldUnit.Id)
             throw AppException.FromError(ManagerErrors.TargetUnitNotAvailable);
 
+        if (newUnit.FacilityId != agreement.FacilityId)
+            throw AppException.FromError(ManagerErrors.TargetUnitDifferentFacility);
 
+        if (!string.Equals(newUnit.PhysicalStatus, StorageUnitStatusConstants.Available, StringComparison.OrdinalIgnoreCase) ||
+            (_dbContext.Database.IsSqlServer() && !newUnit.IsListed))
+            throw AppException.FromError(ManagerErrors.TargetUnitNotAvailable);
 
         var now = DateTimeOffset.UtcNow;
-
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var newAllocStartDate = today < agreement.StartDate ? agreement.StartDate : today;
+        var newAllocEndDate = agreement.EndDate;
+        if (newAllocEndDate <= newAllocStartDate)
+            throw AppException.FromError(ManagerErrors.AgreementNotActive);
 
+        var hasOverlap = await _dbContext.UnitAllocations.AnyAsync(ua =>
+            ua.StorageUnitId == newUnit.Id &&
+            ua.Id != activeAlloc.Id &&
+            ua.Status == AllocationStatusConstants.Active &&
+            ua.AllocationStartDate < newAllocEndDate &&
+            ua.AllocationEndDate > newAllocStartDate, cancellationToken);
+        if (hasOverlap)
+            throw AppException.FromError(ManagerErrors.TargetUnitNotAvailable);
 
+        IDbContextTransaction? transaction = _dbContext.Database.IsRelational() && _dbContext.Database.CurrentTransaction == null
+            ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
 
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
-
-
-
-        // 1. Release old allocation and set old unit status
-
-        activeAlloc.Status = AllocationStatusConstants.Released;
-
-        activeAlloc.EndedAt = now;
-
-        if (today > activeAlloc.AllocationStartDate)
-
+        try
         {
-
-            activeAlloc.AllocationEndDate = today;
-
-        }
-
-        else if (activeAlloc.AllocationEndDate <= activeAlloc.AllocationStartDate)
-
-        {
-
-            activeAlloc.AllocationEndDate = activeAlloc.AllocationStartDate.AddDays(1);
-
-        }
-
-
-
-        var oldUnitNewStatus = StorageUnitStatusConstants.Maintenance;
-
-
-
-        if (oldUnit.PhysicalStatus != StorageUnitStatusConstants.Maintenance &&
-
-            oldUnit.PhysicalStatus != StorageUnitStatusConstants.UnderMaintenanceValue)
-
-        {
-
-            var previousOldUnitStatus = oldUnit.PhysicalStatus;
-
-            oldUnit.PhysicalStatus = oldUnitNewStatus;
-
-            oldUnit.UpdatedAt = now;
-
-
-
-            _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
-
+            // 1. Release old allocation and set old unit status
+            activeAlloc.Status = AllocationStatusConstants.Released;
+            activeAlloc.EndedAt = now;
+            if (today > activeAlloc.AllocationStartDate)
             {
-
-                StorageUnitId = oldUnit.Id,
-
-                OldStatus = previousOldUnitStatus,
-
-                NewStatus = oldUnitNewStatus,
-
-                Reason = $"Manager unit re-assignment for agreement #{agreement.AgreementNo}: {request.Reason}",
-
-                ChangedBy = currentUserId,
-
-                ChangedAt = now
-
-            });
-
-        }
-
-        else
-
-        {
-
-            oldUnit.UpdatedAt = now;
-
-        }
-
-
-
-        // Persist the release of the old allocation first inside the transaction
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-
-
-        // 2. Occupy new unit and allocate to agreement
-
-        var previousNewUnitStatus = newUnit.PhysicalStatus;
-
-        newUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
-
-        newUnit.UpdatedAt = now;
-
-
-
-        _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
-
-        {
-
-            StorageUnitId = newUnit.Id,
-
-            OldStatus = previousNewUnitStatus,
-
-            NewStatus = StorageUnitStatusConstants.Occupied,
-
-            Reason = $"Manager unit re-assignment from unit {oldUnit.UnitCode} for agreement #{agreement.AgreementNo}",
-
-            ChangedBy = currentUserId,
-
-            ChangedAt = now
-
-        });
-
-
-
-        var newAllocStartDate = today;
-
-        var newAllocEndDate = agreement.EndDate > newAllocStartDate ? agreement.EndDate : newAllocStartDate.AddDays(1);
-
-
-
-        _dbContext.UnitAllocations.Add(new UnitAllocation
-
-        {
-
-            StorageUnitId = newUnit.Id,
-
-            AgreementId = agreement.Id,
-
-            AllocationKind = AllocationKindConstants.Rental,
-
-            AllocationStartDate = newAllocStartDate,
-
-            AllocationEndDate = newAllocEndDate,
-
-            Status = AllocationStatusConstants.Active,
-
-            CreatedAt = now,
-
-            EndedAt = null
-
-        });
-
-
-
-        // 3. Issue fresh 6-digit PIN credential for new unit
-
-        var randomPin = Random.Shared.Next(100000, 999999).ToString("D6");
-
-        var pinCred = await _dbContext.AccessCredentials
-
-            .FirstOrDefaultAsync(c => c.AgreementId == agreement.Id && c.CredentialType == CredentialTypeConstants.Pin, cancellationToken);
-
-
-
-        if (pinCred != null)
-
-        {
-
-            pinCred.SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin);
-
-            pinCred.DisplayHint = PinProtectionHelper.Encrypt(randomPin);
-
-            pinCred.IssuedAt = now;
-
-            pinCred.Status = CredentialStatusConstants.Active;
-
-        }
-
-        else
-
-        {
-
-            _dbContext.AccessCredentials.Add(new AccessCredential
-
+                activeAlloc.AllocationEndDate = today;
+            }
+            else if (activeAlloc.AllocationEndDate <= activeAlloc.AllocationStartDate)
             {
-
-                AgreementId = agreement.Id,
-
-                CredentialType = CredentialTypeConstants.Pin,
-
-                SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin),
-
-                DisplayHint = PinProtectionHelper.Encrypt(randomPin),
-
-                IssuedAt = now,
-
-                ExpiresAt = now.AddYears(1),
-
-                Status = CredentialStatusConstants.Active,
-
-                CreatedAt = now
-
-            });
-
-        }
-
-
-
-        if (request.TicketId.HasValue && request.TicketId.Value > 0)
-
-        {
-
-            var ticket = await _dbContext.SupportTickets.FirstOrDefaultAsync(t => t.Id == request.TicketId.Value, cancellationToken);
-
-            if (ticket != null)
-
-            {
-
-                ticket.Status = TicketStatusConstants.Resolved;
-
-                ticket.ResolvedAt = now;
-
-                ticket.UpdatedAt = now;
-
+                activeAlloc.AllocationEndDate = activeAlloc.AllocationStartDate.AddDays(1);
             }
 
+            string oldUnitNewStatus;
+            if (request.SetOldUnitUnderMaintenance)
+            {
+                oldUnitNewStatus = StorageUnitStatusConstants.Maintenance;
+            }
+            else
+            {
+                var otherAllocExists = await _dbContext.UnitAllocations.AnyAsync(ua =>
+                    ua.StorageUnitId == oldUnit.Id &&
+                    ua.Id != activeAlloc.Id &&
+                    ua.Status == AllocationStatusConstants.Active, cancellationToken);
+                oldUnitNewStatus = otherAllocExists ? StorageUnitStatusConstants.Reserved : StorageUnitStatusConstants.Available;
+            }
+
+            if (oldUnit.PhysicalStatus != oldUnitNewStatus)
+            {
+                var previousOldUnitStatus = oldUnit.PhysicalStatus;
+                oldUnit.PhysicalStatus = oldUnitNewStatus;
+                oldUnit.UpdatedAt = now;
+
+                _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
+                {
+                    StorageUnitId = oldUnit.Id,
+                    OldStatus = previousOldUnitStatus,
+                    NewStatus = oldUnitNewStatus,
+                    Reason = TruncateText($"Manager unit re-assignment for agreement #{agreement.AgreementNo}: {request.Reason}", 255),
+                    ChangedBy = currentUserId,
+                    ChangedAt = now
+                });
+            }
+            else
+            {
+                oldUnit.UpdatedAt = now;
+            }
+
+            // Persist the release of the old allocation first inside the transaction
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            // 2. Occupy new unit and allocate to agreement
+            var previousNewUnitStatus = newUnit.PhysicalStatus;
+            newUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
+            newUnit.UpdatedAt = now;
+
+            _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
+            {
+                StorageUnitId = newUnit.Id,
+                OldStatus = previousNewUnitStatus,
+                NewStatus = StorageUnitStatusConstants.Occupied,
+                Reason = TruncateText($"Manager unit re-assignment from unit {oldUnit.UnitCode} for agreement #{agreement.AgreementNo}", 255),
+                ChangedBy = currentUserId,
+                ChangedAt = now
+            });
+
+            _dbContext.UnitAllocations.Add(new UnitAllocation
+            {
+                StorageUnitId = newUnit.Id,
+                AgreementId = agreement.Id,
+                AllocationKind = AllocationKindConstants.Rental,
+                AllocationStartDate = newAllocStartDate,
+                AllocationEndDate = newAllocEndDate,
+                Status = AllocationStatusConstants.Active,
+                CreatedAt = now,
+                EndedAt = null
+            });
+
+            // 3. Issue fresh 6-digit PIN credential for new unit
+            var randomPin = System.Security.Cryptography.RandomNumberGenerator.GetInt32(100000, 1000000).ToString("D6");
+            var pinCred = await _dbContext.AccessCredentials
+                .FirstOrDefaultAsync(c => c.AgreementId == agreement.Id && c.CredentialType == CredentialTypeConstants.Pin, cancellationToken);
+
+            if (pinCred != null)
+            {
+                pinCred.SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin);
+                pinCred.DisplayHint = PinProtectionHelper.Encrypt(randomPin);
+                pinCred.IssuedAt = now;
+                pinCred.ExpiresAt = agreement.EndDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc);
+                pinCred.RevokedAt = null;
+                pinCred.Status = CredentialStatusConstants.Active;
+            }
+            else
+            {
+                _dbContext.AccessCredentials.Add(new AccessCredential
+                {
+                    AgreementId = agreement.Id,
+                    CredentialType = CredentialTypeConstants.Pin,
+                    SecretDigest = BCrypt.Net.BCrypt.HashPassword(randomPin),
+                    DisplayHint = PinProtectionHelper.Encrypt(randomPin),
+                    IssuedAt = now,
+                    ExpiresAt = agreement.EndDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc),
+                    Status = CredentialStatusConstants.Active,
+                    CreatedAt = now
+                });
+            }
+
+            if (request.TicketId.HasValue && request.TicketId.Value > 0)
+            {
+                var ticket = await _dbContext.SupportTickets
+                    .FirstOrDefaultAsync(t => t.Id == request.TicketId.Value && t.FacilityId == agreement.FacilityId, cancellationToken);
+                if (ticket != null)
+                {
+                    ticket.Status = TicketStatusConstants.Resolved;
+                    ticket.Resolution = TruncateText($"Đã xử lý: Chuyển sang kho {newUnit.UnitCode}. Lý do: {request.Reason}", 255);
+                    ticket.ResolvedAt = now;
+                    ticket.UpdatedAt = now;
+                }
+            }
+
+            agreement.UpdatedAt = now;
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            if (transaction != null) await transaction.CommitAsync(cancellationToken);
+
+            _logger.LogInformation("Manager {UserId} reassigned agreement #{AgreementNo} from unit {OldUnit} to unit {NewUnit}. Reason: {Reason}",
+                currentUserId, agreement.AgreementNo, oldUnit.UnitCode, newUnit.UnitCode, request.Reason);
+
+            return new ManagerReassignUnitResponseDto
+            {
+                AgreementId = agreement.Id,
+                AgreementNo = agreement.AgreementNo,
+                CustomerId = agreement.CustomerId,
+                CustomerName = agreement.Customer.FullName,
+                FacilityId = agreement.FacilityId,
+                OldStorageUnitId = oldUnit.Id,
+                OldUnitCode = oldUnit.UnitCode,
+                OldUnitStatus = oldUnit.PhysicalStatus,
+                NewStorageUnitId = newUnit.Id,
+                NewUnitCode = newUnit.UnitCode,
+                NewUnitStatus = newUnit.PhysicalStatus,
+                NewUnitTypeName = newUnit.UnitType.Name,
+                NewPinCode = randomPin,
+                Reason = request.Reason,
+                ReassignedAt = now,
+                Message = $"Customer successfully reassigned from unit {oldUnit.UnitCode} to equivalent unit {newUnit.UnitCode}. New PIN: {randomPin}."
+            };
         }
-
-
-
-        agreement.UpdatedAt = now;
-
-
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        await transaction.CommitAsync(cancellationToken);
-
-
-
-        _logger.LogInformation("Manager {UserId} reassigned agreement #{AgreementNo} from unit {OldUnit} to unit {NewUnit}. Reason: {Reason}",
-
-            currentUserId, agreement.AgreementNo, oldUnit.UnitCode, newUnit.UnitCode, request.Reason);
-
-
-
-        return new ManagerReassignUnitResponseDto
-
+        catch (DbUpdateConcurrencyException)
         {
-
-            AgreementId = agreement.Id,
-
-            AgreementNo = agreement.AgreementNo,
-
-            CustomerId = agreement.CustomerId,
-
-            CustomerName = agreement.Customer.FullName,
-
-            FacilityId = agreement.FacilityId,
-
-            OldStorageUnitId = oldUnit.Id,
-
-            OldUnitCode = oldUnit.UnitCode,
-
-            OldUnitStatus = oldUnit.PhysicalStatus,
-
-            NewStorageUnitId = newUnit.Id,
-
-            NewUnitCode = newUnit.UnitCode,
-
-            NewUnitStatus = newUnit.PhysicalStatus,
-
-            NewUnitTypeName = newUnit.UnitType.Name,
-
-            NewPinCode = randomPin,
-
-            Reason = request.Reason,
-
-            ReassignedAt = now,
-
-            Message = $"Customer successfully reassigned from unit {oldUnit.UnitCode} to equivalent unit {newUnit.UnitCode}. New PIN: {randomPin}."
-
-        };
+            if (transaction != null) await transaction.RollbackAsync(cancellationToken);
+            throw AppException.FromError(ManagerErrors.TargetUnitNotAvailable);
+        }
+        catch
+        {
+            if (transaction != null) await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+        finally
+        {
+            if (transaction != null) await transaction.DisposeAsync();
+        }
 
     }
 
 
 
     public async Task<ManagerEmergencyCancelRefundResponseDto> EmergencyCancelAndRefundAgreementAsync(
-
         long agreementId,
-
         ManagerEmergencyCancelRefundRequest request,
-
         long currentUserId,
-
         bool isSystemAdmin,
-
         CancellationToken cancellationToken = default)
-
     {
-
         var agreement = await _dbContext.RentalAgreements
-
             .Include(a => a.Customer)
-
                 .ThenInclude(c => c.User)
-
             .Include(a => a.UnitAllocations.Where(ua => ua.Status == AllocationStatusConstants.Active))
-
                 .ThenInclude(ua => ua.StorageUnit)
-
             .FirstOrDefaultAsync(a => a.Id == agreementId, cancellationToken);
 
-
-
         if (agreement == null)
-
             throw AppException.FromError(ManagerErrors.AgreementNotFound);
-
-
 
         await EnsureFacilityAccessAsync(agreement.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
 
+        if (agreement.Status is RentalAgreementStatusConstants.Cancelled
+            or RentalAgreementStatusConstants.Completed
+            or RentalAgreementStatusConstants.Terminated)
+        {
+            throw AppException.FromError(ManagerErrors.AgreementAlreadyClosed);
+        }
 
+        var reservation = agreement.ReservationId > 0
+            ? await _dbContext.Reservations
+                .Include(r => r.UnitAllocation)
+                    .ThenInclude(ua => ua!.StorageUnit)
+                .FirstOrDefaultAsync(r => r.Id == agreement.ReservationId, cancellationToken)
+            : null;
 
-        var activeAlloc = agreement.UnitAllocations.FirstOrDefault(ua => ua.Status == AllocationStatusConstants.Active);
+        var activeAlloc = agreement.UnitAllocations.FirstOrDefault(ua => ua.Status == AllocationStatusConstants.Active)
+            ?? (reservation?.UnitAllocation is { Status: AllocationStatusConstants.Active } rsvAlloc ? rsvAlloc : null);
 
-        var oldUnit = activeAlloc?.StorageUnit ?? await _dbContext.StorageUnits.FirstOrDefaultAsync(u => u.Id == (activeAlloc != null ? activeAlloc.StorageUnitId : 0), cancellationToken);
-
-
+        var oldUnit = activeAlloc?.StorageUnit ?? (activeAlloc != null
+            ? await _dbContext.StorageUnits.FirstOrDefaultAsync(u => u.Id == activeAlloc.StorageUnitId, cancellationToken)
+            : null);
 
         var now = DateTimeOffset.UtcNow;
-
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
+        IDbContextTransaction? transaction = _dbContext.Database.IsRelational() && _dbContext.Database.CurrentTransaction == null
+            ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
 
-
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
-
-
-
-        // 1. Release active allocation
-
-        if (activeAlloc != null)
-
+        try
         {
-
-            activeAlloc.Status = AllocationStatusConstants.Released;
-
-            activeAlloc.EndedAt = now;
-
-            if (today > activeAlloc.AllocationStartDate)
-
+            // 1. Release active allocation (agreement rental allocation or pre-check-in reservation hold)
+            if (activeAlloc != null)
             {
-
-                activeAlloc.AllocationEndDate = today;
-
-            }
-
-            else if (activeAlloc.AllocationEndDate <= activeAlloc.AllocationStartDate)
-
-            {
-
-                activeAlloc.AllocationEndDate = activeAlloc.AllocationStartDate.AddDays(1);
-
-            }
-
-        }
-
-
-
-        // 2. Put unit into maintenance with lock notes
-
-        if (oldUnit != null)
-
-        {
-
-            if (oldUnit.PhysicalStatus != StorageUnitStatusConstants.Maintenance &&
-
-                oldUnit.PhysicalStatus != StorageUnitStatusConstants.UnderMaintenanceValue)
-
-            {
-
-                var previousStatus = oldUnit.PhysicalStatus;
-
-                oldUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
-
-                _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
-
+                activeAlloc.Status = AllocationStatusConstants.Released;
+                activeAlloc.EndedAt = now;
+                if (today > activeAlloc.AllocationStartDate)
                 {
+                    activeAlloc.AllocationEndDate = today;
+                }
+                else if (activeAlloc.AllocationEndDate <= activeAlloc.AllocationStartDate)
+                {
+                    activeAlloc.AllocationEndDate = activeAlloc.AllocationStartDate.AddDays(1);
+                }
+            }
 
-                    StorageUnitId = oldUnit.Id,
+            if (reservation != null && reservation.Status is ReservationStatusConstants.Pending
+                or ReservationStatusConstants.AwaitingDeposit
+                or ReservationStatusConstants.Confirmed)
+            {
+                reservation.Status = ReservationStatusConstants.Cancelled;
+                reservation.CancelledAt = now;
+                reservation.CancellationReason = TruncateText(request.Reason, 255);
+                reservation.UpdatedAt = now;
+            }
 
-                    OldStatus = previousStatus,
+            // 2. Put unit into maintenance with lock notes
+            if (oldUnit != null)
+            {
+                if (oldUnit.PhysicalStatus != StorageUnitStatusConstants.Maintenance &&
+                    oldUnit.PhysicalStatus != StorageUnitStatusConstants.UnderMaintenanceValue)
+                {
+                    var previousStatus = oldUnit.PhysicalStatus;
+                    oldUnit.PhysicalStatus = StorageUnitStatusConstants.Maintenance;
+                    _dbContext.UnitStatusHistories.Add(new UnitStatusHistory
+                    {
+                        StorageUnitId = oldUnit.Id,
+                        OldStatus = previousStatus,
+                        NewStatus = StorageUnitStatusConstants.Maintenance,
+                        Reason = TruncateText($"Emergency cancel & full refund: {request.Reason}", 255),
+                        ChangedBy = currentUserId,
+                        ChangedAt = now
+                    });
+                }
 
-                    NewStatus = StorageUnitStatusConstants.Maintenance,
+                oldUnit.Notes = TruncateText($"[LOCKED_BY:{currentUserId}:Manager] Sự cố Check-in - Hết kho thay thế: {request.Reason}", 250);
+                oldUnit.UpdatedAt = now;
+            }
 
-                    Reason = $"Emergency cancel & full refund: {request.Reason}",
+            // 3. Mark agreement cancelled & void unpaid invoices
+            agreement.Status = RentalAgreementStatusConstants.Cancelled;
+            agreement.ActualEndDate = today;
+            agreement.UpdatedAt = now;
 
-                    ChangedBy = currentUserId,
+            var unpaidInvoices = await _dbContext.Invoices
+                .Where(inv => (inv.AgreementId == agreement.Id ||
+                              (agreement.ReservationId > 0 && inv.ReservationId == agreement.ReservationId)) &&
+                              (inv.Status == InvoiceStatusConstants.Draft ||
+                               inv.Status == InvoiceStatusConstants.Open ||
+                               inv.Status == InvoiceStatusConstants.Overdue))
+                .ToListAsync(cancellationToken);
+            foreach (var inv in unpaidInvoices)
+            {
+                inv.Status = InvoiceStatusConstants.Voided;
+                inv.VoidedAt = now;
+                inv.UpdatedAt = now;
+            }
 
-                    ChangedAt = now
+            // 4. Revoke active access credentials
+            var credentials = await _dbContext.AccessCredentials
+                .Where(c => c.AgreementId == agreement.Id && c.Status == CredentialStatusConstants.Active)
+                .ToListAsync(cancellationToken);
 
+            foreach (var cred in credentials)
+            {
+                cred.Status = CredentialStatusConstants.Revoked;
+                cred.RevokedAt = now;
+            }
+
+            // 5. Resolve ticket if provided
+            if (request.TicketId.HasValue && request.TicketId.Value > 0)
+            {
+                var ticket = await _dbContext.SupportTickets
+                    .FirstOrDefaultAsync(t => t.Id == request.TicketId.Value && t.FacilityId == agreement.FacilityId, cancellationToken);
+                if (ticket != null)
+                {
+                    ticket.Status = TicketStatusConstants.Resolved;
+                    ticket.Resolution = TruncateText($"Đã xử lý: Hủy hợp đồng #{agreement.AgreementNo} và hoàn tiền 100% ({request.Reason}).", 255);
+                    ticket.ResolvedAt = now;
+                    ticket.UpdatedAt = now;
+                }
+            }
+
+            // 6. Calculate remaining refundable balance across settled payments & satisfy trg_refunds_guard
+            var settledPayments = await _dbContext.Payments
+                .Include(p => p.TargetInvoice)
+                .Where(p => (p.Status == PaymentConstants.StatusSucceeded ||
+                             p.Status == PaymentConstants.StatusPartiallyRefunded) &&
+                            ((p.TargetInvoice != null && p.TargetInvoice.AgreementId == agreement.Id) ||
+                             (agreement.ReservationId > 0 && p.TargetInvoice != null && p.TargetInvoice.ReservationId == agreement.ReservationId)))
+                .OrderBy(p => p.Id)
+                .ToListAsync(cancellationToken);
+
+            var empProfile = await _dbContext.EmployeeProfiles.FirstOrDefaultAsync(ep => ep.UserId == currentUserId, cancellationToken);
+            long decidedByEmpId = empProfile != null
+                ? currentUserId
+                : await _dbContext.EmployeeProfiles.Select(ep => ep.UserId).FirstOrDefaultAsync(cancellationToken);
+
+            var createdRefunds = new List<Refund>();
+            decimal totalRefundAmount = 0m;
+
+            if (settledPayments.Count > 0)
+            {
+                var paymentIds = settledPayments.Select(p => p.Id).ToList();
+                var existingRefundsByPayment = await _dbContext.Refunds
+                    .AsNoTracking()
+                    .Where(r => paymentIds.Contains(r.PaymentId) &&
+                                r.Status != "failed" &&
+                                r.Status != RefundStatusConstants.Rejected)
+                    .GroupBy(r => r.PaymentId)
+                    .Select(g => new { PaymentId = g.Key, Total = g.Sum(x => x.Amount) })
+                    .ToDictionaryAsync(x => x.PaymentId, x => x.Total, cancellationToken);
+
+                foreach (var srcPayment in settledPayments)
+                {
+                    var alreadyRefunded = existingRefundsByPayment.GetValueOrDefault(srcPayment.Id, 0m);
+                    var remainingRefundable = srcPayment.Amount - alreadyRefunded;
+                    if (remainingRefundable <= 0m)
+                        continue;
+
+                    var refundItem = new Refund
+                    {
+                        PaymentId = srcPayment.Id,
+                        AgreementId = agreement.Id,
+                        Amount = remainingRefundable,
+                        Currency = srcPayment.Currency ?? PaymentConstants.CurrencyVnd,
+                        Reason = TruncateText($"Hủy HĐ #{agreement.AgreementNo} & hoàn tiền 100%: {request.Reason}", 255),
+                        Provider = srcPayment.Provider ?? PaymentConstants.ProviderManual,
+                        IdempotencyKey = $"REFUND-EMERGENCY-CANCEL-{agreement.Id}-{srcPayment.Id}-{now.ToUnixTimeSeconds()}",
+                        Status = RefundStatusConstants.Approved,
+                        RequestedBy = currentUserId,
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    _dbContext.Refunds.Add(refundItem);
+                    createdRefunds.Add(refundItem);
+                    totalRefundAmount += remainingRefundable;
+                }
+            }
+            else
+            {
+                var deposit = agreement.DepositSnapshot > 0 ? agreement.DepositSnapshot : agreement.DepositBalance;
+                var rent = agreement.MonthlyRateSnapshot;
+                totalRefundAmount = Math.Max(0m, deposit + rent);
+
+                if (totalRefundAmount > 0m)
+                {
+                    var depInvoice = new Invoice
+                    {
+                        InvoiceNo = $"INV-CANC-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                        AgreementId = agreement.Id,
+                        CustomerId = agreement.CustomerId,
+                        BillingPeriod = $"REF-{now:yyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}",
+                        IssueDate = today,
+                        DueDate = today,
+                        Currency = PaymentConstants.CurrencyVnd,
+                        SubtotalAmount = totalRefundAmount,
+                        TaxAmount = 0m,
+                        TotalAmount = totalRefundAmount,
+                        PaidAmount = totalRefundAmount,
+                        Status = InvoiceStatusConstants.Paid,
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    _dbContext.Invoices.Add(depInvoice);
+                    await _dbContext.SaveChangesAsync(cancellationToken);
+
+                    var syntheticPayment = new Payment
+                    {
+                        CustomerId = agreement.CustomerId,
+                        TargetInvoiceId = depInvoice.Id,
+                        Amount = totalRefundAmount,
+                        Currency = PaymentConstants.CurrencyVnd,
+                        Method = PaymentConstants.MethodBankTransfer,
+                        Provider = PaymentConstants.ProviderManual,
+                        IdempotencyKey = $"PAY-CANC-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                        Status = PaymentConstants.StatusSucceeded,
+                        PaidAt = now,
+                        Metadata = "{}",
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    _dbContext.Payments.Add(syntheticPayment);
+                    await _dbContext.SaveChangesAsync(cancellationToken);
+
+                    var refundItem = new Refund
+                    {
+                        PaymentId = syntheticPayment.Id,
+                        AgreementId = agreement.Id,
+                        Amount = totalRefundAmount,
+                        Currency = PaymentConstants.CurrencyVnd,
+                        Reason = TruncateText($"Hủy HĐ #{agreement.AgreementNo} & hoàn tiền 100%: {request.Reason}", 255),
+                        Provider = PaymentConstants.ProviderManual,
+                        IdempotencyKey = $"REFUND-EMERGENCY-CANCEL-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                        Status = RefundStatusConstants.Approved,
+                        RequestedBy = currentUserId,
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    _dbContext.Refunds.Add(refundItem);
+                    createdRefunds.Add(refundItem);
+                }
+            }
+
+            if (createdRefunds.Count > 0)
+            {
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                var approvalReason = TruncateText($"Emergency cancel approved: {request.Reason}", 255);
+                foreach (var createdRefund in createdRefunds)
+                {
+                    _dbContext.RefundApprovals.Add(new RefundApproval
+                    {
+                        RefundId = createdRefund.Id,
+                        Decision = "approved",
+                        DecidedBy = decidedByEmpId,
+                        Reason = approvalReason,
+                        DecidedAt = now
+                    });
+                }
+            }
+
+            // 7. Send in-app notification to customer
+            var customerUserId = agreement.Customer?.UserId;
+            if (customerUserId.HasValue)
+            {
+                _dbContext.Notifications.Add(new Notification
+                {
+                    UserId = customerUserId.Value,
+                    Channel = "in_app",
+                    TemplateCode = "AGREEMENT_CANCELLED_FULL_REFUND",
+                    Subject = TruncateText($"[Hủy hợp đồng & Hoàn tiền 100%] HĐ #{agreement.AgreementNo}", 255),
+                    Payload = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        agreementId = agreement.Id,
+                        agreementNo = agreement.AgreementNo,
+                        amount = totalRefundAmount,
+                        message = $"Hợp đồng #{agreement.AgreementNo} đã được hủy do cơ sở không còn kho thay thế sự cố. Khoản tiền {totalRefundAmount:N0} VND đã được duyệt hoàn 100% cho bạn."
+                    }),
+                    Status = "pending",
+                    ScheduledAt = now,
+                    CreatedAt = now
                 });
-
             }
 
-            var cancelNote = $"[LOCKED_BY:{currentUserId}:Manager] Sự cố Check-in - Hết kho thay thế: {request.Reason}".Trim();
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            if (transaction != null) await transaction.CommitAsync(cancellationToken);
 
-            if (cancelNote.Length > 250) cancelNote = cancelNote.Substring(0, 250);
+            var primaryRefund = createdRefunds.FirstOrDefault();
 
-            oldUnit.Notes = cancelNote;
+            _logger.LogInformation("Manager {UserId} emergency-cancelled agreement #{AgreementNo} with 100% refund {Amount} VND due to no replacement units. Unit {UnitCode} put into maintenance.",
+                currentUserId, agreement.AgreementNo, totalRefundAmount, oldUnit?.UnitCode);
 
-            oldUnit.UpdatedAt = now;
-
-        }
-
-
-
-        // 3. Mark agreement cancelled
-
-        agreement.Status = RentalAgreementStatusConstants.Cancelled;
-
-        agreement.ActualEndDate = today;
-
-        agreement.UpdatedAt = now;
-
-
-
-        // 4. Revoke active access credentials
-
-        var credentials = await _dbContext.AccessCredentials
-
-            .Where(c => c.AgreementId == agreement.Id && c.Status == CredentialStatusConstants.Active)
-
-            .ToListAsync(cancellationToken);
-
-        foreach (var cred in credentials)
-
-        {
-
-            cred.Status = CredentialStatusConstants.Revoked;
-
-            cred.RevokedAt = now;
-
-        }
-
-
-
-        // 5. Resolve ticket if provided
-
-        if (request.TicketId.HasValue && request.TicketId.Value > 0)
-
-        {
-
-            var ticket = await _dbContext.SupportTickets.FirstOrDefaultAsync(t => t.Id == request.TicketId.Value, cancellationToken);
-
-            if (ticket != null)
-
+            return new ManagerEmergencyCancelRefundResponseDto
             {
-
-                ticket.Status = TicketStatusConstants.Resolved;
-
-                ticket.Resolution = $"Đã xử lý: Hủy hợp đồng #{agreement.AgreementNo} và phê duyệt hoàn tiền 100% cho khách do cơ sở không còn kho thay thế ({request.Reason}).";
-
-                ticket.ResolvedAt = now;
-
-                ticket.UpdatedAt = now;
-
-            }
-
-        }
-
-
-
-        // 6. Calculate total paid amount and create refund record satisfying trg_refunds_guard
-
-        var validPayment = await _dbContext.Payments
-
-            .Include(p => p.TargetInvoice)
-
-            .FirstOrDefaultAsync(p => p.Status == PaymentConstants.StatusSucceeded &&
-
-                ((p.TargetInvoice != null && p.TargetInvoice.AgreementId == agreement.Id) ||
-
-                 (agreement.ReservationId > 0 && p.TargetInvoice != null && p.TargetInvoice.ReservationId == agreement.ReservationId)), cancellationToken);
-
-
-
-        decimal refundAmount = 0m;
-
-        if (validPayment != null)
-
-        {
-
-            refundAmount = validPayment.Amount;
-
-        }
-
-        else
-
-        {
-
-            var deposit = agreement.DepositSnapshot > 0 ? agreement.DepositSnapshot : agreement.DepositBalance;
-
-            var rent = agreement.MonthlyRateSnapshot;
-
-            refundAmount = Math.Max(0m, deposit + rent);
-
-        }
-
-
-
-        long resolvedPaymentId = validPayment?.Id ?? 0;
-
-        if (resolvedPaymentId == 0)
-
-        {
-
-            var depInvoice = new Invoice
-
-            {
-
-                InvoiceNo = $"INV-CANC-{agreement.Id}-{now.ToUnixTimeSeconds()}",
-
                 AgreementId = agreement.Id,
-
+                AgreementNo = agreement.AgreementNo,
                 CustomerId = agreement.CustomerId,
-
-                BillingPeriod = $"REF-{now:yyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}",
-
-                IssueDate = today,
-
-                DueDate = today,
-
-                Currency = PaymentConstants.CurrencyVnd,
-
-                SubtotalAmount = refundAmount,
-
-                TaxAmount = 0m,
-
-                TotalAmount = refundAmount,
-
-                PaidAmount = refundAmount,
-
-                Status = InvoiceStatusConstants.Paid,
-
-                CreatedAt = now,
-
-                UpdatedAt = now
-
+                CustomerName = agreement.Customer?.FullName ?? "Khách hàng",
+                StorageUnitId = oldUnit?.Id ?? 0,
+                UnitCode = oldUnit?.UnitCode ?? "—",
+                TotalRefundAmount = totalRefundAmount,
+                RefundId = primaryRefund?.Id,
+                RefundStatus = primaryRefund?.Status ?? "none",
+                AgreementStatus = agreement.Status,
+                UnitStatus = oldUnit?.PhysicalStatus ?? StorageUnitStatusConstants.Maintenance,
+                CancelledAt = now,
+                Message = $"Đã hủy hợp đồng #{agreement.AgreementNo} và phê duyệt hoàn trả 100% ({totalRefundAmount:N0} VNĐ) cho khách hàng thành công."
             };
-
-            _dbContext.Invoices.Add(depInvoice);
-
-            await _dbContext.SaveChangesAsync(cancellationToken);
-
-
-
-            var payment = new Payment
-
-            {
-
-                CustomerId = agreement.CustomerId,
-
-                TargetInvoiceId = depInvoice.Id,
-
-                Amount = refundAmount,
-
-                Currency = PaymentConstants.CurrencyVnd,
-
-                Method = PaymentConstants.MethodBankTransfer,
-
-                Provider = PaymentConstants.ProviderManual,
-
-                IdempotencyKey = $"PAY-CANC-{agreement.Id}-{now.ToUnixTimeSeconds()}",
-
-                Status = PaymentConstants.StatusSucceeded,
-
-                PaidAt = now,
-
-                Metadata = "{}",
-
-                CreatedAt = now,
-
-                UpdatedAt = now
-
-            };
-
-            _dbContext.Payments.Add(payment);
-
-            await _dbContext.SaveChangesAsync(cancellationToken);
-
-            resolvedPaymentId = payment.Id;
-
         }
-
-
-
-        var refund = new Refund
-
+        catch
         {
-
-            PaymentId = resolvedPaymentId,
-
-            AgreementId = agreement.Id,
-
-            Amount = refundAmount,
-
-            Currency = PaymentConstants.CurrencyVnd,
-
-            Reason = $"Hủy HĐ #{agreement.AgreementNo} & hoàn tiền 100% do sự cố kho và cơ sở hết kho thay thế: {request.Reason}",
-
-            Provider = PaymentConstants.ProviderManual,
-
-            IdempotencyKey = $"REFUND-EMERGENCY-CANCEL-{agreement.Id}-{now.ToUnixTimeSeconds()}",
-
-            Status = RefundStatusConstants.Approved,
-
-            RequestedBy = currentUserId,
-
-            CreatedAt = now,
-
-            UpdatedAt = now
-
-        };
-
-        _dbContext.Refunds.Add(refund);
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-
-
-        var empProfile = await _dbContext.EmployeeProfiles.FirstOrDefaultAsync(ep => ep.UserId == currentUserId, cancellationToken);
-
-        long decidedByEmpId = empProfile != null ? currentUserId : (await _dbContext.EmployeeProfiles.Select(ep => ep.UserId).FirstOrDefaultAsync(cancellationToken));
-
-
-
-        var refundApproval = new RefundApproval
-
-        {
-
-            RefundId = refund.Id,
-
-            Decision = "approved",
-
-            DecidedBy = decidedByEmpId,
-
-            Reason = System.Text.Json.JsonSerializer.Serialize(new
-
-            {
-
-                decision = "approved",
-
-                emergencyCancel = true,
-
-                reason = request.Reason,
-
-                notes = request.Notes
-
-            }),
-
-            DecidedAt = now
-
-        };
-
-        _dbContext.RefundApprovals.Add(refundApproval);
-
-
-
-        // 7. Send in-app notification to customer
-
-        var customerUserId = agreement.Customer?.UserId;
-
-        if (customerUserId.HasValue)
-
-        {
-
-            _dbContext.Notifications.Add(new Notification
-
-            {
-
-                UserId = customerUserId.Value,
-
-                Channel = "in_app",
-
-                TemplateCode = "AGREEMENT_CANCELLED_FULL_REFUND",
-
-                Subject = $"[Hủy hợp đồng & Hoàn tiền 100%] HĐ #{agreement.AgreementNo}",
-
-                Payload = System.Text.Json.JsonSerializer.Serialize(new
-
-                {
-
-                    agreementId = agreement.Id,
-
-                    agreementNo = agreement.AgreementNo,
-
-                    amount = refundAmount,
-
-                    message = $"Hợp đồng #{agreement.AgreementNo} đã được hủy do cơ sở không còn kho thay thế sự cố. Khoản tiền {refundAmount:N0} VND đã được duyệt hoàn 100% cho bạn."
-
-                }),
-
-                Status = "pending",
-
-                ScheduledAt = now,
-
-                CreatedAt = now
-
-            });
-
+            if (transaction != null) await transaction.RollbackAsync(cancellationToken);
+            throw;
         }
-
-
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        await transaction.CommitAsync(cancellationToken);
-
-
-
-        _logger.LogInformation("Manager {UserId} emergency-cancelled agreement #{AgreementNo} with 100% refund {Amount} VND due to no replacement units. Unit {UnitCode} put into maintenance.",
-
-            currentUserId, agreement.AgreementNo, refundAmount, oldUnit?.UnitCode);
-
-
-
-        return new ManagerEmergencyCancelRefundResponseDto
-
+        finally
         {
+            if (transaction != null) await transaction.DisposeAsync();
+        }
+    }
 
-            AgreementId = agreement.Id,
-
-            AgreementNo = agreement.AgreementNo,
-
-            CustomerId = agreement.CustomerId,
-
-            CustomerName = agreement.Customer?.FullName ?? "Khách hàng",
-
-            StorageUnitId = oldUnit?.Id ?? 0,
-
-            UnitCode = oldUnit?.UnitCode ?? "—",
-
-            TotalRefundAmount = refundAmount,
-
-            RefundId = refund.Id,
-
-            AgreementStatus = agreement.Status,
-
-            UnitStatus = oldUnit?.PhysicalStatus ?? StorageUnitStatusConstants.Maintenance,
-
-            CancelledAt = now,
-
-            Message = $"Đã hủy hợp đồng #{agreement.AgreementNo} và phê duyệt hoàn trả 100% ({refundAmount:N0} VNĐ) cho khách hàng thành công."
-
-        };
-
+    private static string TruncateText(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxLength ? trimmed : trimmed[..maxLength];
     }
 
 
@@ -1476,9 +1248,7 @@ public partial class FacilityManagerService : IFacilityManagerService
     {
 
         var dCase = await _dbContext.DelinquencyCases
-
             .Include(d => d.Agreement)
-
             .FirstOrDefaultAsync(d => d.Id == caseId, cancellationToken);
 
 
@@ -1509,13 +1279,62 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var detailsObj = new { note = request.Note ?? string.Empty, registeredBy = currentUserId };
+        var detailsObj = new
+        {
+            note = request.Note ?? string.Empty,
+            lateFeeAmount = request.LateFeeAmount,
+            registeredBy = currentUserId
+        };
 
         var jsonDetails = JsonSerializer.Serialize(detailsObj);
 
-
-
         var now = DateTimeOffset.UtcNow;
+
+        if (actionType == DelinquencyActionTypeConstants.LateFeeAdded && request.LateFeeAmount.HasValue && request.LateFeeAmount.Value > 0m)
+        {
+            var targetInvoice = await _dbContext.Invoices.FirstOrDefaultAsync(i => i.Id == dCase.InvoiceId, cancellationToken);
+            if (targetInvoice != null)
+            {
+                var feeAmt = request.LateFeeAmount.Value;
+                _dbContext.InvoiceLines.Add(new InvoiceLine
+                {
+                    InvoiceId = targetInvoice.Id,
+                    LineType = InvoiceLineTypeConstants.LateFee,
+                    Description = string.IsNullOrWhiteSpace(request.Note)
+                        ? $"Phí phạt quá hạn thủ công ({now:yyyy-MM-dd})"
+                        : request.Note.Trim(),
+                    Quantity = 1,
+                    UnitPrice = feeAmt,
+                    LineAmount = feeAmt,
+                    Metadata = JsonSerializer.Serialize(new { manualBy = currentUserId, amount = feeAmt })
+                });
+
+                if (_dbContext.Database.IsSqlServer())
+                {
+                    await _dbContext.SaveChangesAsync(cancellationToken);
+                    await _dbContext.Entry(targetInvoice).ReloadAsync(cancellationToken);
+                }
+                else
+                {
+                    targetInvoice.SubtotalAmount += feeAmt;
+                    targetInvoice.TotalAmount += feeAmt;
+                    targetInvoice.UpdatedAt = now;
+                }
+                dCase.OutstandingSnapshot = Math.Max(1m, targetInvoice.TotalAmount - targetInvoice.PaidAmount);
+            }
+        }
+
+        if (actionType == DelinquencyActionTypeConstants.CredentialSuspended)
+        {
+            var activeCreds = await _dbContext.AccessCredentials
+                .Where(c => c.AgreementId == dCase.AgreementId && (c.Status == CredentialStatusConstants.Active || c.Status == CredentialStatusConstants.Pending))
+                .ToListAsync(cancellationToken);
+            foreach (var cred in activeCreds)
+            {
+                cred.Status = CredentialStatusConstants.Suspended;
+                cred.RevokedAt = null;
+            }
+        }
 
         var action = new DelinquencyAction
 

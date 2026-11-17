@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Http;
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using SelfStorageSystem.Application.Interfaces;
@@ -16,16 +16,13 @@ public class AdminManagementService : IAdminManagementService
 {
     private readonly SelfStorageDbContext _dbContext;
     private readonly ILogger<AdminManagementService> _logger;
-    private readonly IHttpContextAccessor? _httpContextAccessor;
 
     public AdminManagementService(
         SelfStorageDbContext dbContext,
-        ILogger<AdminManagementService> logger,
-        IHttpContextAccessor? httpContextAccessor = null)
+        ILogger<AdminManagementService> logger)
     {
         _dbContext = dbContext;
         _logger = logger;
-        _httpContextAccessor = httpContextAccessor;
     }
 
     // ==========================================
@@ -1547,15 +1544,12 @@ public async Task<AdminUserDetailDto> CreateInternalUserAsync(
     {
         try
         {
-            var httpContext = _httpContextAccessor?.HttpContext;
-            var rawForwarded = httpContext?.Request.Headers["X-Forwarded-For"].FirstOrDefault();
-            var clientIp = rawForwarded?.Split(',')[0].Trim();
-            var resolvedIp = ipAddress ?? clientIp ?? httpContext?.Connection.RemoteIpAddress?.ToString();
+            var resolvedIp = ipAddress;
             if (resolvedIp != null && resolvedIp.Length > 45)
             {
                 resolvedIp = resolvedIp[..45];
             }
-            var requestId = httpContext?.TraceIdentifier;
+            var requestId = Activity.Current?.Id;
 
             var auditLog = new AuditLog
             {

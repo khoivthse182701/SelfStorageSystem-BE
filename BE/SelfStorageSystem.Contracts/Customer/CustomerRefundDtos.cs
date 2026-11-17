@@ -21,16 +21,34 @@ public class CustomerSubmitBankInfoRequest
 
 public class CustomerSubmitRefundBankInfoRequest : CustomerSubmitBankInfoRequest
 {
+    public string? BankCode
+    {
+        get => BankName;
+        set { if (!string.IsNullOrWhiteSpace(value)) BankName = value; }
+    }
+
     public string AccountNumber
     {
         get => BankAccountNumber;
         set => BankAccountNumber = value;
     }
 
+    public string? BankAccountNo
+    {
+        get => BankAccountNumber;
+        set { if (!string.IsNullOrWhiteSpace(value)) BankAccountNumber = value; }
+    }
+
     public string AccountHolderName
     {
         get => BankAccountHolder;
         set => BankAccountHolder = value;
+    }
+
+    public string? BankAccountName
+    {
+        get => BankAccountHolder;
+        set { if (!string.IsNullOrWhiteSpace(value)) BankAccountHolder = value; }
     }
 }
 

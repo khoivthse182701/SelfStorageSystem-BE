@@ -29,7 +29,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         bool? onlyAssignedToMe = null,
         CancellationToken cancellationToken = default)
     {
-        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, facilityId, cancellationToken);
+        var targetFacilityId = await EnsureStrictFacilityAccessAsync(employeeUserId, facilityId, cancellationToken);
 
         var query = _dbContext.SupportTickets
             .AsNoTracking()
@@ -458,28 +458,81 @@ public partial class FacilityStaffService : IFacilityStaffService
         StaffCreateCheckInIncidentTicketRequest request,
         CancellationToken cancellationToken = default)
     {
-        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, request.FacilityId > 0 ? request.FacilityId : null, cancellationToken);
+        var requestedFacilityId = request.FacilityId > 0 ? request.FacilityId : (long?)null;
+        long? targetFacilityId = requestedFacilityId.HasValue
+            ? await EnsureStrictFacilityAccessAsync(employeeUserId, requestedFacilityId, cancellationToken)
+            : null;
         var now = DateTimeOffset.UtcNow;
 
         long customerId = 0;
+        string? resolvedCustomerName = null;
+        string? resolvedAgreementNo = request.AgreementNo;
+        StorageUnit? resolvedUnit = null;
+
         if (request.AgreementId.HasValue && request.AgreementId.Value > 0)
         {
-            var agr = await _dbContext.RentalAgreements.AsNoTracking().FirstOrDefaultAsync(a => a.Id == request.AgreementId.Value, cancellationToken);
-            if (agr != null) customerId = agr.CustomerId;
+            var agr = await _dbContext.RentalAgreements
+                .AsNoTracking()
+                .Include(a => a.Customer)
+                .FirstOrDefaultAsync(a => a.Id == request.AgreementId.Value, cancellationToken)
+                ?? throw AppException.FromError(Error.NotFound("Staff.AgreementNotFound", "Rental agreement was not found."));
+
+            if (targetFacilityId.HasValue && agr.FacilityId != targetFacilityId.Value)
+                throw AppException.FromError(StaffErrors.FacilityMismatch);
+
+            targetFacilityId ??= await EnsureStrictFacilityAccessAsync(employeeUserId, agr.FacilityId, cancellationToken);
+            customerId = agr.CustomerId;
+            resolvedCustomerName = agr.Customer?.FullName;
+            resolvedAgreementNo ??= agr.AgreementNo;
         }
 
-        if (customerId <= 0 && request.StorageUnitId.HasValue && request.StorageUnitId.Value > 0)
+        if (request.ReservationId.HasValue && request.ReservationId.Value > 0)
+        {
+            var rsv = await _dbContext.Reservations
+                .AsNoTracking()
+                .Include(r => r.Customer)
+                .FirstOrDefaultAsync(r => r.Id == request.ReservationId.Value, cancellationToken)
+                ?? throw AppException.FromError(StaffErrors.ReservationNotFound);
+
+            if (targetFacilityId.HasValue && rsv.FacilityId != targetFacilityId.Value)
+                throw AppException.FromError(StaffErrors.FacilityMismatch);
+
+            targetFacilityId ??= await EnsureStrictFacilityAccessAsync(employeeUserId, rsv.FacilityId, cancellationToken);
+            if (customerId > 0 && rsv.CustomerId != customerId)
+                throw AppException.FromError(Error.Validation("Staff.CustomerMismatch", "Reservation does not belong to the same customer as the agreement."));
+
+            customerId = rsv.CustomerId;
+            resolvedCustomerName ??= rsv.Customer?.FullName;
+        }
+
+        if (request.StorageUnitId.HasValue && request.StorageUnitId.Value > 0)
+        {
+            resolvedUnit = await _dbContext.StorageUnits
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == request.StorageUnitId.Value, cancellationToken)
+                ?? throw AppException.FromError(StaffErrors.UnitNotFound);
+
+            if (targetFacilityId.HasValue && resolvedUnit.FacilityId != targetFacilityId.Value)
+                throw AppException.FromError(StaffErrors.FacilityMismatch);
+
+            targetFacilityId ??= await EnsureStrictFacilityAccessAsync(employeeUserId, resolvedUnit.FacilityId, cancellationToken);
+        }
+
+        targetFacilityId ??= await EnsureStrictFacilityAccessAsync(employeeUserId, null, cancellationToken);
+
+        if (customerId <= 0 && resolvedUnit != null)
         {
             var activeAlloc = await _dbContext.UnitAllocations
                 .AsNoTracking()
-                .Include(ua => ua.Agreement)
-                .Include(ua => ua.Reservation)
-                .Where(ua => ua.StorageUnitId == request.StorageUnitId.Value)
+                .Include(ua => ua.Agreement).ThenInclude(a => a!.Customer)
+                .Include(ua => ua.Reservation).ThenInclude(r => r!.Customer)
+                .Where(ua => ua.StorageUnitId == resolvedUnit.Id)
                 .OrderByDescending(ua => ua.Status == AllocationStatusConstants.Active ? 1 : 0)
                 .ThenByDescending(ua => ua.Id)
                 .FirstOrDefaultAsync(cancellationToken);
 
             customerId = activeAlloc?.Agreement?.CustomerId ?? activeAlloc?.Reservation?.CustomerId ?? 0;
+            resolvedCustomerName ??= activeAlloc?.Agreement?.Customer?.FullName ?? activeAlloc?.Reservation?.Customer?.FullName;
         }
 
         if (customerId <= 0)
@@ -487,25 +540,36 @@ public partial class FacilityStaffService : IFacilityStaffService
             throw AppException.FromError(Error.Validation("Staff.CustomerNotResolved", "Không xác định được khách hàng hợp lệ từ hợp đồng hoặc ô kho được chọn."));
         }
 
-        var unitCode = request.UnitCode;
-        if (string.IsNullOrWhiteSpace(unitCode) && request.StorageUnitId.HasValue)
+        var unitCode = resolvedUnit?.UnitCode ?? request.UnitCode;
+        var facilityName = await _dbContext.Facilities
+            .AsNoTracking()
+            .Where(f => f.Id == targetFacilityId.Value)
+            .Select(f => f.Name)
+            .FirstOrDefaultAsync(cancellationToken) ?? "Facility";
+
+        var normalizedPriority = string.IsNullOrWhiteSpace(request.Priority)
+            ? TicketPriorityConstants.Urgent
+            : request.Priority.Trim().ToLowerInvariant();
+        if (!TicketPriorityConstants.All.Contains(normalizedPriority))
         {
-            var su = await _dbContext.StorageUnits.FirstOrDefaultAsync(u => u.Id == request.StorageUnitId.Value, cancellationToken);
-            if (su != null) unitCode = su.UnitCode;
+            throw AppException.FromError(Error.Validation("Staff.InvalidPriority", "Ticket priority must be low, normal, high, or urgent."));
         }
+
+        var rawSubject = $"[Sự cố Check-in] Kho {unitCode ?? (request.StorageUnitId.HasValue ? $"#{request.StorageUnitId}" : "Chưa gán")}";
+        var rawDescription = request.Description.Trim();
 
         var ticket = new SupportTicket
         {
             TicketNo = $"TCK-URG-{DateTime.UtcNow:yyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpper()}",
-            FacilityId = targetFacilityId,
+            FacilityId = targetFacilityId.Value,
             CustomerId = customerId,
             AgreementId = request.AgreementId > 0 ? request.AgreementId : null,
             StorageUnitId = request.StorageUnitId > 0 ? request.StorageUnitId : null,
-            Category = "incident",
-            Priority = string.IsNullOrWhiteSpace(request.Priority) ? "urgent" : request.Priority,
-            Subject = $"[Sự cố Check-in] Kho {unitCode ?? (request.StorageUnitId.HasValue ? $"#{request.StorageUnitId}" : "Chưa gán")}",
-            Description = request.Description.Trim(),
-            Status = "open",
+            Category = TicketCategoryConstants.Unit,
+            Priority = normalizedPriority,
+            Subject = rawSubject.Length <= 255 ? rawSubject : rawSubject[..255],
+            Description = rawDescription.Length <= 255 ? rawDescription : rawDescription[..255],
+            Status = TicketStatusConstants.Open,
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -517,13 +581,13 @@ public partial class FacilityStaffService : IFacilityStaffService
             Id: ticket.Id,
             TicketNo: ticket.TicketNo,
             FacilityId: ticket.FacilityId,
-            FacilityName: "Facility",
+            FacilityName: facilityName,
             StorageUnitId: ticket.StorageUnitId,
             UnitCode: unitCode,
             CustomerId: ticket.CustomerId,
-            CustomerName: request.CustomerName ?? "Customer",
+            CustomerName: resolvedCustomerName ?? request.CustomerName ?? "Customer",
             AgreementId: ticket.AgreementId,
-            AgreementNo: request.AgreementNo,
+            AgreementNo: resolvedAgreementNo,
             Category: ticket.Category,
             Priority: ticket.Priority,
             Subject: ticket.Subject,
@@ -549,7 +613,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         DateOnly? date = null,
         CancellationToken cancellationToken = default)
     {
-        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, facilityId, cancellationToken);
+        var targetFacilityId = await EnsureStrictFacilityAccessAsync(employeeUserId, facilityId, cancellationToken);
 
         var moveOutQuery = _dbContext.MoveOutRequests
             .AsNoTracking()
@@ -735,7 +799,7 @@ public partial class FacilityStaffService : IFacilityStaffService
                     ?? agr.UnitAllocations.OrderByDescending(ua => ua.Id).FirstOrDefault();
                 var storageUnitId = alloc?.StorageUnitId ?? throw AppException.FromError(StaffErrors.UnitNotFound);
 
-                await ResolveFacilityIdAsync(employeeUserId, agr.FacilityId, cancellationToken);
+                await EnsureStrictFacilityAccessAsync(employeeUserId, agr.FacilityId, cancellationToken);
 
                 inspection = new Inspection
                 {
@@ -757,7 +821,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         if (inspection == null)
             throw AppException.FromError(StaffErrors.InspectionNotFound);
 
-        await ResolveFacilityIdAsync(employeeUserId, inspection.FacilityId, cancellationToken);
+        await EnsureStrictFacilityAccessAsync(employeeUserId, inspection.FacilityId, cancellationToken);
 
         var agreement = inspection.Agreement;
         if (agreement == null)
@@ -866,7 +930,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         }
         else
         {
-            nextUnitStatus = StorageUnitStatusConstants.UnderMaintenanceValue;
+            nextUnitStatus = StorageUnitStatusConstants.Maintenance;
             if (unit != null)
             {
                 var maintNote = $"[LOCKED_BY:{employeeUserId}:{staffName}] Hư hại sau trả kho: {request.Summary ?? "Hư hỏng cần bảo trì"}";
@@ -1024,12 +1088,16 @@ public partial class FacilityStaffService : IFacilityStaffService
                 TaxAmount = 0m,
                 TotalAmount = extraPenalty,
                 PaidAmount = 0m,
-                Status = InvoiceStatusConstants.Open,
+                Status = InvoiceStatusConstants.Draft,
                 CreatedAt = now,
                 UpdatedAt = now
             };
-            penaltyInvoice.InvoiceLines.Add(new InvoiceLine
+            _dbContext.Invoices.Add(penaltyInvoice);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            _dbContext.InvoiceLines.Add(new InvoiceLine
             {
+                InvoiceId = penaltyInvoice.Id,
                 LineType = InvoiceLineTypeConstants.Damage,
                 Description = $"Phạt hư hỏng kho vượt quá tiền cọc (Tổng thiệt hại {damage:N0} đ - Cọc thu hồi {deposit:N0} đ)",
                 Quantity = 1,
@@ -1037,7 +1105,10 @@ public partial class FacilityStaffService : IFacilityStaffService
                 LineAmount = extraPenalty,
                 Metadata = "{}"
             });
-            _dbContext.Invoices.Add(penaltyInvoice);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            penaltyInvoice.Status = InvoiceStatusConstants.Open;
+            penaltyInvoice.UpdatedAt = DateTimeOffset.UtcNow;
             await _dbContext.SaveChangesAsync(cancellationToken);
             penaltyInvoiceId = penaltyInvoice.Id;
 
@@ -1134,7 +1205,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         long? facilityId = null,
         CancellationToken cancellationToken = default)
     {
-        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, facilityId, cancellationToken);
+        var targetFacilityId = await EnsureStrictFacilityAccessAsync(employeeUserId, facilityId, cancellationToken);
 
         var refunds = await _dbContext.Refunds
             .AsNoTracking()
@@ -1275,7 +1346,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         if (refund.Agreement == null)
             throw AppException.FromError(StaffErrors.AgreementNotFound);
 
-        await ResolveFacilityIdAsync(employeeUserId, refund.Agreement.FacilityId, cancellationToken);
+        await EnsureStrictFacilityAccessAsync(employeeUserId, refund.Agreement.FacilityId, cancellationToken);
 
         if (refund.Amount <= 0m)
             throw AppException.FromError(StaffErrors.RefundAmountInvalid);
@@ -1301,6 +1372,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         var approvalReason = System.Text.Json.JsonSerializer.Serialize(new
         {
             payoutMethod = RefundPayoutMethodConstants.Cash,
+            receiptReference = request.ReceiptReference?.Trim(),
             proofImageUrl = request.ProofImageUrl?.Trim(),
             note = request.Note?.Trim()
         });
@@ -1351,6 +1423,7 @@ public partial class FacilityStaffService : IFacilityStaffService
             Status = refund.Status,
             PayoutMethod = refund.Provider,
             ProofImageUrl = request.ProofImageUrl,
+            ReceiptReference = request.ReceiptReference?.Trim(),
             ProcessedByUserId = employeeUserId,
             ProcessedAt = now,
             Message = "Đã chi trả tiền mặt tại quầy và tất toán hợp đồng thành công."

@@ -62,7 +62,9 @@ public class CustomerPaymentsController : ControllerBase
         CancellationToken cancellationToken)
     {
         var expectedKey = _paymentSettings.SePay?.ApiKey?.Trim();
-        if (string.IsNullOrWhiteSpace(expectedKey))
+        if (string.IsNullOrWhiteSpace(expectedKey) ||
+            expectedKey.StartsWith("__SET_", StringComparison.OrdinalIgnoreCase) ||
+            expectedKey.Contains("CHANGE_ME", StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogCritical("SePay Webhook rejected: API key is not configured on server.");
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { success = false, message = "Webhook service unconfigured." });

@@ -1,3 +1,4 @@
+using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Customer.Payments;
 
 namespace SelfStorageSystem.Application.Interfaces;
@@ -13,9 +14,21 @@ public interface ICustomerPaymentService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns live status for a payment and its linked invoice/reservation (used for VietQR polling).
+    /// </summary>
+    Task<PaymentStatusDto> GetPaymentStatusAsync(
+        long customerId,
+        long paymentId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Processes bank transfer balance update webhook received from SePay.
     /// </summary>
     Task<bool> ProcessSePayWebhookAsync(
+        SePayWebhookPayload payload,
+        CancellationToken cancellationToken = default);
+
+    Task<SePayWebhookResultDto> ProcessSePayWebhookWithResultAsync(
         SePayWebhookPayload payload,
         CancellationToken cancellationToken = default);
 
@@ -24,6 +37,12 @@ public interface ICustomerPaymentService
     /// </summary>
     Task<List<PaymentHistoryDto>> GetMyPaymentHistoryAsync(
         long customerId,
+        CancellationToken cancellationToken = default);
+
+    Task<PagedResult<PaymentHistoryDto>> GetMyPaymentHistoryPagedAsync(
+        long customerId,
+        int page = 1,
+        int pageSize = 20,
         CancellationToken cancellationToken = default);
 
     Task<List<UnpaidInvoiceDto>> GetMyUnpaidInvoicesAsync(

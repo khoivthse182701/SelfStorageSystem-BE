@@ -120,6 +120,8 @@ CREATE TABLE [core].customer_profiles (
     address nvarchar(255),
     emergency_contact_name nvarchar(255),
     emergency_contact_phone nvarchar(255),
+    profile_edit_month char(7),
+    profile_edit_count int NOT NULL DEFAULT 0 CHECK (profile_edit_count >= 0 AND profile_edit_count <= 2),
     created_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME()
 );
@@ -153,7 +155,7 @@ CREATE TABLE [core].facilities (
     opening_time time,
     closing_time time,
     status nvarchar(255) NOT NULL DEFAULT 'active'
-        CHECK (status IN ('draft', 'active', 'temporarily_closed', 'closed')),
+        CHECK (status IN ('draft', 'active', 'inactive', 'maintenance', 'suspended_new_bookings', 'temporarily_closed', 'closed')),
     created_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME(),
     CHECK (latitude IS NULL OR latitude BETWEEN -90 AND 90),
@@ -181,6 +183,8 @@ CREATE INDEX staff_facility_assignments_facility_idx
 CREATE INDEX staff_facility_assignments_assigned_by_idx
     ON [core].staff_facility_assignments (assigned_by)
     WHERE assigned_by IS NOT NULL;
+CREATE INDEX ix_staff_facility_assignments_lookup
+    ON [core].staff_facility_assignments (employee_id, facility_id, ends_at);
 
 CREATE TABLE [core].facility_areas (
     id bigint IDENTITY(1,1) PRIMARY KEY,
@@ -231,7 +235,7 @@ CREATE TABLE [core].storage_units (
     physical_status nvarchar(255) NOT NULL DEFAULT 'available'
         CHECK (physical_status IN (
             'available', 'reserved', 'occupied', 'pending_inspection',
-            'maintenance', 'cleaning', 'under_maintenance', 'out_of_service'
+            'cleaning', 'maintenance', 'damaged', 'out_of_service'
         )),
     is_listed bit NOT NULL DEFAULT 1,
     notes nvarchar(255),
@@ -335,7 +339,8 @@ CREATE TABLE [core].fee_rules (
     facility_id bigint REFERENCES [core].facilities(id) ON DELETE NO ACTION,
     code nvarchar(255) NOT NULL,
     fee_type nvarchar(255) NOT NULL CHECK (fee_type IN (
-        'late_fee', 'damage_fee', 'lost_key_fee', 'maintenance_fee', 'other'
+        'late_fee', 'damage_fee', 'lost_key_fee', 'maintenance_fee',
+        'booking', 'booking_fee', 'tax', 'vat_tax', 'other'
     )),
     calculation_method nvarchar(255) NOT NULL CHECK (calculation_method IN ('flat', 'percentage', 'per_day')),
     amount numeric(14, 2) CHECK (amount IS NULL OR amount >= 0),
@@ -389,7 +394,7 @@ CREATE TABLE [core].promotion_rules (
     id bigint IDENTITY(1,1) PRIMARY KEY,
     promotion_id bigint NOT NULL REFERENCES [core].promotions(id) ON DELETE CASCADE,
     rule_type nvarchar(255) NOT NULL CHECK (rule_type IN (
-        'minimum_months', 'minimum_amount', 'facility', 'unit_type', 'new_customer'
+        'minimum_months', 'month', 'minimum_amount', 'facility', 'unit_type', 'new_customer'
     )),
     operator nvarchar(255) NOT NULL DEFAULT 'eq' CHECK (operator IN ('eq', 'gte', 'lte', 'in')),
     rule_value nvarchar(max) NOT NULL,
@@ -449,17 +454,19 @@ CREATE TABLE [core].rental_agreements (
     end_date date NOT NULL,
     monthly_rate_snapshot numeric(14, 2) NOT NULL CHECK (monthly_rate_snapshot >= 0),
     deposit_snapshot numeric(14, 2) NOT NULL CHECK (deposit_snapshot >= 0),
-    deposit_balance numeric(14, 2) NOT NULL CHECK (deposit_balance >= 0),
+    deposit_balance numeric(14, 2) NOT NULL,
     status nvarchar(255) NOT NULL DEFAULT 'draft'
         CHECK (status IN (
-            'draft', 'scheduled', 'active', 'extended', 'overdue', 'defaulted',
-            'move_out_scheduled', 'checkout_pending', 'expired', 'terminated',
-            'completed', 'closed', 'cancelled'
+            'draft', 'scheduled', 'active', 'expiring_soon', 'extended', 'overdue',
+            'defaulted', 'move_out_scheduled', 'checkout_pending', 'expired',
+            'terminated', 'completed', 'closed', 'cancelled'
         )),
     signed_at datetimeoffset(7),
     checked_in_at datetimeoffset(7),
     checked_out_at datetimeoffset(7),
     actual_end_date date,
+    negative_debt_notified_at datetimeoffset(7),
+    overdue_bank_reminder_sent_at datetimeoffset(7),
     created_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME(),
     CHECK (end_date > start_date),
@@ -526,6 +533,9 @@ CREATE INDEX unit_allocations_unit_period_idx
     ON [core].unit_allocations (storage_unit_id, allocation_start_date, allocation_end_date);
 CREATE INDEX unit_allocations_assigned_by_idx ON [core].unit_allocations (assigned_by)
     WHERE assigned_by IS NOT NULL;
+CREATE INDEX unit_allocations_availability_idx
+    ON [core].unit_allocations (storage_unit_id, status, allocation_start_date, allocation_end_date)
+    WHERE status = 'active';
 
 CREATE TABLE [core].appointments (
     id bigint IDENTITY(1,1) PRIMARY KEY,
@@ -683,6 +693,9 @@ CREATE TABLE [core].unit_transfer_requests (
     requested_facility_id bigint NOT NULL REFERENCES [core].facilities(id) ON DELETE NO ACTION,
     from_unit_id bigint NOT NULL REFERENCES [core].storage_units(id) ON DELETE NO ACTION,
     to_unit_id bigint REFERENCES [core].storage_units(id) ON DELETE NO ACTION,
+    transfer_type nvarchar(32) NOT NULL DEFAULT 'upgrade'
+        CHECK (transfer_type IN ('upgrade', 'downgrade', 'same_tier', 'relocation')),
+    target_invoice_id bigint,
     requested_effective_date date NOT NULL,
     move_out_date date NOT NULL,
     move_in_date date NOT NULL,
@@ -692,6 +705,7 @@ CREATE TABLE [core].unit_transfer_requests (
     penalty_amount decimal(18,2) NOT NULL DEFAULT 0,
     credit_amount decimal(18,2) NOT NULL DEFAULT 0,
     total_paid_amount decimal(18,2) NOT NULL DEFAULT 0,
+    cleaning_fee decimal(18,2) NOT NULL DEFAULT 0,
     reason nvarchar(255) NOT NULL,
     status nvarchar(255) NOT NULL DEFAULT 'pending_payment'
         CHECK (status IN ('pending_payment', 'paid', 'moved_out_in_transit', 'cancelled_overdue_move_out', 'pending', 'approved', 'scheduled', 'completed', 'rejected', 'cancelled')),
@@ -723,6 +737,13 @@ CREATE TABLE [core].move_out_requests (
     requested_by bigint NOT NULL REFERENCES [core].users(id) ON DELETE NO ACTION,
     requested_move_out_date date NOT NULL,
     appointment_id bigint REFERENCES [core].appointments(id) ON DELETE NO ACTION,
+    bank_name nvarchar(128),
+    bank_account_no nvarchar(64),
+    bank_account_holder nvarchar(128),
+    bank_submitted_at datetimeoffset(7),
+    damage_deduction_amount numeric(14, 2) NOT NULL DEFAULT 0,
+    overdue_deduction_amount numeric(14, 2) NOT NULL DEFAULT 0,
+    net_refund_amount numeric(14, 2),
     status nvarchar(255) NOT NULL DEFAULT 'requested'
         CHECK (status IN (
             'requested', 'scheduled', 'in_progress', 'inspection_pending',
@@ -790,8 +811,9 @@ CREATE TABLE [core].support_tickets (
     subject nvarchar(255) NOT NULL,
     description nvarchar(255) NOT NULL,
     status nvarchar(255) NOT NULL DEFAULT 'open' CHECK (status IN (
-        'open', 'in_progress', 'waiting_for_customer', 'waiting_for_maintenance',
-        'resolved', 'closed', 'cancelled'
+        'open', 'pending_manager_review', 'assigned', 'in_progress',
+        'waiting_for_customer', 'waiting_for_maintenance',
+        'severe_need_relocation', 'assessed', 'resolved', 'closed', 'cancelled'
     )),
     resolution nvarchar(255),
     resolved_at datetimeoffset(7),
@@ -952,13 +974,15 @@ CREATE INDEX invoices_open_due_idx ON [core].invoices (due_date)
     WHERE status IN ('open', 'partially_paid', 'overdue');
 CREATE UNIQUE INDEX invoices_ticket_charge_proposal_id_uidx ON [core].invoices (ticket_charge_proposal_id)
     WHERE ticket_charge_proposal_id IS NOT NULL;
+CREATE INDEX ix_invoices_status_due_date ON [core].invoices (status, due_date);
+CREATE INDEX ix_invoices_status_amounts ON [core].invoices (status, total_amount, paid_amount);
 
 CREATE TABLE [core].invoice_lines (
     id bigint IDENTITY(1,1) PRIMARY KEY,
     invoice_id bigint NOT NULL REFERENCES [core].invoices(id) ON DELETE NO ACTION,
     line_type nvarchar(255) NOT NULL CHECK (line_type IN (
         'deposit', 'rent', 'renewal', 'late_fee', 'damage', 'maintenance',
-        'booking_fee', 'discount', 'other'
+        'booking_fee', 'discount', 'penalty', 'service', 'fee', 'tax', 'other'
     )),
     description nvarchar(255) NOT NULL,
     quantity numeric(12, 3) NOT NULL DEFAULT 1 CHECK (quantity > 0),
@@ -976,7 +1000,7 @@ CREATE TABLE [core].payments (
     target_invoice_id bigint NOT NULL REFERENCES [core].invoices(id) ON DELETE NO ACTION,
     amount numeric(14, 2) NOT NULL CHECK (amount > 0),
     currency char(3) NOT NULL DEFAULT 'VND',
-    method nvarchar(255) NOT NULL CHECK (method IN ('cash', 'bank_transfer', 'vnpay', 'payos', 'stripe', 'other')),
+    method nvarchar(255) NOT NULL CHECK (method IN ('cash', 'bank_transfer', 'credit_card', 'vnpay', 'payos', 'stripe', 'other')),
     provider nvarchar(255) NOT NULL,
     provider_transaction_id nvarchar(255),
     idempotency_key nvarchar(255) NOT NULL UNIQUE,
@@ -999,6 +1023,7 @@ CREATE UNIQUE INDEX payments_provider_transaction_uidx
     WHERE provider_transaction_id IS NOT NULL;
 CREATE INDEX payments_customer_created_idx ON [core].payments (customer_id, created_at DESC);
 CREATE INDEX payments_target_invoice_id_idx ON [core].payments (target_invoice_id);
+CREATE INDEX ix_payments_customer_invoice_status ON [core].payments (customer_id, target_invoice_id, status);
 
 CREATE TABLE [core].payment_allocations (
     payment_id bigint NOT NULL REFERENCES [core].payments(id) ON DELETE NO ACTION,
@@ -1022,13 +1047,16 @@ CREATE TABLE [core].refunds (
     provider_refund_id nvarchar(255),
     idempotency_key nvarchar(255) NOT NULL UNIQUE,
     status nvarchar(255) NOT NULL DEFAULT 'requested'
-        CHECK (status IN ('requested', 'approved', 'processing', 'succeeded', 'failed', 'rejected')),
+        CHECK (status IN (
+            'requested', 'pending', 'approved', 'processing', 'succeeded', 'completed',
+            'failed', 'rejected', 'pending_manager_payout', 'pending_counter_payout'
+        )),
     requested_by bigint REFERENCES [core].users(id) ON DELETE NO ACTION,
     refunded_at datetimeoffset(7),
     created_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at datetimeoffset(7) NOT NULL DEFAULT SYSUTCDATETIME(),
     CHECK (currency = upper(currency)),
-    CHECK ((status = 'succeeded' AND refunded_at IS NOT NULL) OR status <> 'succeeded')
+    CHECK ((status IN ('succeeded', 'completed') AND refunded_at IS NOT NULL) OR status NOT IN ('succeeded', 'completed'))
 );
 
 CREATE UNIQUE INDEX refunds_provider_refund_uidx
@@ -1612,8 +1640,8 @@ BEGIN
         JOIN [core].[storage_units] su ON su.id = i.storage_unit_id
         WHERE i.status = 'active'
           AND (
-            (i.allocation_kind = 'reservation_hold' AND (su.is_listed = 0 OR su.physical_status IN ('occupied','maintenance','under_maintenance','out_of_service','pending_inspection')))
-            OR (i.allocation_kind = 'rental' AND su.physical_status IN ('maintenance','under_maintenance','out_of_service','pending_inspection'))
+            (i.allocation_kind = 'reservation_hold' AND (su.is_listed = 0 OR su.physical_status IN ('occupied','maintenance','damaged','out_of_service','pending_inspection')))
+            OR (i.allocation_kind = 'rental' AND su.physical_status IN ('maintenance','damaged','out_of_service','pending_inspection'))
           )
     )
     BEGIN
@@ -2048,12 +2076,13 @@ BEGIN
         SELECT 1 FROM inserted i JOIN deleted d ON d.id=i.id
         WHERE i.physical_status<>d.physical_status
           AND NOT (
-              (d.physical_status='available' AND i.physical_status IN ('reserved','occupied','maintenance','cleaning','under_maintenance','pending_inspection','out_of_service')) OR
-              (d.physical_status='reserved' AND i.physical_status IN ('available','occupied','maintenance','cleaning','under_maintenance','out_of_service')) OR
-              (d.physical_status='occupied' AND i.physical_status IN ('pending_inspection','cleaning','maintenance','under_maintenance','available','out_of_service')) OR
-              (d.physical_status IN ('pending_inspection','cleaning') AND i.physical_status IN ('available','maintenance','cleaning','under_maintenance','pending_inspection','out_of_service','occupied')) OR
-              (d.physical_status IN ('maintenance','under_maintenance') AND i.physical_status IN ('available','cleaning','pending_inspection','out_of_service','maintenance','under_maintenance','occupied')) OR
-              (d.physical_status='out_of_service' AND i.physical_status IN ('maintenance','under_maintenance','available','cleaning'))
+              (d.physical_status='available' AND i.physical_status IN ('reserved','occupied','maintenance','cleaning','damaged','pending_inspection','out_of_service')) OR
+              (d.physical_status='reserved' AND i.physical_status IN ('available','occupied','maintenance','cleaning','damaged','out_of_service')) OR
+              (d.physical_status='occupied' AND i.physical_status IN ('pending_inspection','cleaning','maintenance','damaged','available','out_of_service')) OR
+              (d.physical_status IN ('pending_inspection','cleaning') AND i.physical_status IN ('available','maintenance','cleaning','damaged','pending_inspection','out_of_service','occupied')) OR
+              (d.physical_status='maintenance' AND i.physical_status IN ('available','cleaning','pending_inspection','out_of_service','maintenance','damaged','occupied')) OR
+              (d.physical_status='damaged' AND i.physical_status IN ('maintenance','cleaning','pending_inspection','out_of_service','available')) OR
+              (d.physical_status='out_of_service' AND i.physical_status IN ('maintenance','damaged','available','cleaning'))
           )
     )
     BEGIN
@@ -2100,13 +2129,14 @@ BEGIN
         SELECT 1 FROM inserted i JOIN deleted d ON d.id=i.id
         WHERE i.status<>d.status
           AND NOT (
-              (d.status='draft' AND i.status IN ('scheduled','cancelled')) OR
+              (d.status='draft' AND i.status IN ('scheduled','active','cancelled')) OR
               (d.status='scheduled' AND i.status IN ('active','cancelled')) OR
-              (d.status='active' AND i.status IN ('extended','overdue','expired','terminated','move_out_scheduled','cancelled')) OR
-              (d.status='extended' AND i.status IN ('active','overdue','expired','move_out_scheduled')) OR
+              (d.status='active' AND i.status IN ('expiring_soon','extended','overdue','expired','terminated','move_out_scheduled','checkout_pending','cancelled')) OR
+              (d.status='expiring_soon' AND i.status IN ('active','extended','overdue','expired','terminated','move_out_scheduled','checkout_pending')) OR
+              (d.status='extended' AND i.status IN ('active','expiring_soon','overdue','expired','terminated','move_out_scheduled','checkout_pending')) OR
               (d.status='overdue' AND i.status IN ('active','defaulted','terminated','move_out_scheduled')) OR
               (d.status='defaulted' AND i.status IN ('terminated','completed','closed')) OR
-              (d.status='move_out_scheduled' AND i.status IN ('checkout_pending','active')) OR
+              (d.status='move_out_scheduled' AND i.status IN ('checkout_pending','active','completed')) OR
               (d.status='checkout_pending' AND i.status IN ('active','completed','closed')) OR
               (d.status='expired' AND i.status IN ('extended','completed','closed')) OR
               (d.status='terminated' AND i.status IN ('completed','closed')) OR
@@ -2379,7 +2409,7 @@ BEGIN
         CONCAT(CONVERT(char(10),a.end_date,23),'/',CONVERT(char(10),DATEADD(month,1,a.end_date),23)),
         @today,a.end_date,'VND','draft',NULL
     FROM [core].[rental_agreements] a
-    WHERE a.status IN ('active','extended')
+    WHERE a.status IN ('active','expiring_soon','extended')
       AND DATEDIFF(day,@today,a.end_date) BETWEEN 0 AND 7
       AND NOT EXISTS (
           SELECT 1 FROM [core].[invoices] i
@@ -2407,7 +2437,7 @@ BEGIN
            CONCAT('renewal-reminder:',a.id,':',x.days_remaining)
     FROM [core].[rental_agreements] a
     CROSS APPLY (SELECT DATEDIFF(day,@today,a.end_date) days_remaining) x
-    WHERE a.status IN ('active','extended')
+    WHERE a.status IN ('active','expiring_soon','extended')
       AND x.days_remaining IN (7,3,1)
       AND NOT EXISTS (
           SELECT 1 FROM [core].[notifications] n
@@ -2458,7 +2488,7 @@ BEGIN
 
     UPDATE a SET status='overdue',updated_at=SYSUTCDATETIME()
     FROM [core].[rental_agreements] a
-    WHERE a.status IN ('active','extended')
+    WHERE a.status IN ('active','expiring_soon','extended')
       AND EXISTS (SELECT 1 FROM [core].[invoices] i WHERE i.agreement_id=a.id AND i.status='overdue' AND i.paid_amount<i.total_amount);
 
     -- BR-REN-03: suspend access from the first overdue day (N+1).
@@ -2704,38 +2734,6 @@ VALUES
 SET IDENTITY_INSERT [core].[access_points] OFF;
 
 
-/* ===== 04_CompatibilityViews.sql ===== */
-/*
-  The PostgreSQL project renamed these two base tables in migration 070 and
-  retained old names as compatibility views. Here the normalized table names
-  remain the SQL Server base tables; these views expose the required HaTDT
-  contract without breaking all foreign keys and business-rule triggers.
-*/
-USE [SelfStoragePRN222];
-GO
-
-CREATE OR ALTER VIEW [core].[UnitTypeHaTDT]
-AS
-SELECT
-    id AS UnitTypeHaTDTId,
-    code, name, width_m, length_m, height_m, area_m2, volume_m3,
-    climate_controlled, max_weight_kg, description, is_active,
-    created_at, updated_at
-FROM [core].[unit_types];
-GO
-
-CREATE OR ALTER VIEW [core].[StorageUnitHaTDT]
-AS
-SELECT
-    id AS StorageUnitHaTDTId,
-    facility_id,
-    unit_type_id AS UnitTypeHaTDTId,
-    area_id, unit_code, floor_label, zone_label, physical_status,
-    is_listed, notes, created_at, updated_at
-FROM [core].[storage_units];
-GO
-
-
 /* ===== Final installation validation ===== */
 IF DB_NAME() <> N'SelfStoragePRN222'
     THROW 51001, 'Validation failed: wrong current database.', 1;
@@ -2743,8 +2741,8 @@ IF DB_NAME() <> N'SelfStoragePRN222'
 IF SCHEMA_ID(N'core') IS NULL OR SCHEMA_ID(N'api') IS NULL OR SCHEMA_ID(N'auth_private') IS NULL
     THROW 51002, 'Validation failed: one or more required schemas are missing.', 1;
 
-IF (SELECT COUNT(*) FROM sys.tables WHERE schema_id = SCHEMA_ID(N'core')) <> 57
-    THROW 51003, 'Validation failed: expected 57 core tables.', 1;
+IF (SELECT COUNT(*) FROM sys.tables WHERE schema_id = SCHEMA_ID(N'core')) <> 58
+    THROW 51003, 'Validation failed: expected 58 core tables.', 1;
 
 IF (SELECT COUNT(*) FROM sys.sequences WHERE schema_id = SCHEMA_ID(N'core')) <> 5
     THROW 51004, 'Validation failed: expected 5 core sequences.', 1;
@@ -2754,9 +2752,6 @@ IF (SELECT COUNT(*) FROM sys.triggers WHERE parent_class_desc = N'OBJECT_OR_COLU
 
 IF (SELECT COUNT(*) FROM sys.procedures WHERE schema_id = SCHEMA_ID(N'core')) <> 3
     THROW 51006, 'Validation failed: expected 3 core stored procedures.', 1;
-
-IF OBJECT_ID(N'core.UnitTypeHaTDT', N'V') IS NULL OR OBJECT_ID(N'core.StorageUnitHaTDT', N'V') IS NULL
-    THROW 51007, 'Validation failed: required compatibility views are missing.', 1;
 
 PRINT N'SelfStoragePRN222 installation completed successfully and passed validation.';
 GO

@@ -846,11 +846,7 @@ public class AdminManagementServiceTests
     {
         // Arrange
         await using var db = CreateInMemoryDbContext();
-        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext();
-        httpContext.Request.Headers["X-Forwarded-For"] = "203.0.113.195, 70.41.3.18, 150.172.238.178, 198.51.100.1";
-        var httpContextAccessor = new Microsoft.AspNetCore.Http.HttpContextAccessor { HttpContext = httpContext };
-
-        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance, httpContextAccessor);
+        var adminService = new AdminManagementService(db, NullLogger<AdminManagementService>.Instance);
 
         var facility = new Facility
         {
@@ -875,8 +871,5 @@ public class AdminManagementServiceTests
         // Assert
         var log = await db.AuditLogs.FirstOrDefaultAsync(a => a.EntityId == "9" && a.Action == AuditActionConstants.UpdateStatus);
         Assert.NotNull(log);
-        Assert.NotNull(log.IpAddress);
-        Assert.Equal("203.0.113.195", log.IpAddress);
-        Assert.True(log.IpAddress!.Length <= 45);
     }
 }

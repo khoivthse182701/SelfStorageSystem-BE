@@ -14,10 +14,15 @@ public static class InvoiceLineTypeConstants
 {
     public const string Rent = "rent";
     public const string Deposit = "deposit";
+    public const string Renewal = "renewal";
+    public const string LateFee = "late_fee";
     public const string BookingFee = "booking_fee";
     public const string Discount = "discount";
     public const string Penalty = "penalty";
     public const string Service = "service";
     public const string Damage = "damage";
+    public const string Maintenance = "maintenance";
     public const string Fee = "fee";
+    public const string Tax = "tax";
+    public const string Other = "other";
 }

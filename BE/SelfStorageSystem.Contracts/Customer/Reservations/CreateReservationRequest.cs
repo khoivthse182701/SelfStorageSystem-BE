@@ -26,6 +26,11 @@ public class CreateReservationRequest
     /// Discount voucher or promotion code (optional - BR-FIN-04).
     /// </summary>
     public string? PromotionCode { get; set; }
+
+    /// <summary>
+    /// Optional client idempotency key to prevent duplicate holds on retries.
+    /// </summary>
+    public string? IdempotencyKey { get; set; }
 }
 
 public class CancelReservationRequest

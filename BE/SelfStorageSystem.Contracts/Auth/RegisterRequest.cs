@@ -16,6 +16,11 @@ public class RegisterRequest
     [MinLength(6, ErrorMessage = "Password must be at least 6 characters.")]
     public string Password { get; set; } = string.Empty;
 
+    [Required(ErrorMessage = "Phone number is required.")]
     [Phone(ErrorMessage = "Invalid phone number format.")]
-    public string? PhoneNumber { get; set; }
+    public string PhoneNumber { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "Identity number (CCCD) is required.")]
+    [RegularExpression(@"^\d{9,12}$", ErrorMessage = "Identity number (CCCD) must be 9 to 12 digits.")]
+    public string IdentityNumber { get; set; } = string.Empty;
 }

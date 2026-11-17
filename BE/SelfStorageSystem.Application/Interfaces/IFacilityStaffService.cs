@@ -1,9 +1,34 @@
+using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Staff;
 
 namespace SelfStorageSystem.Application.Interfaces;
 
 public interface IFacilityStaffService
 {
+    // Flow 3 Access Events Monitoring
+    Task<PagedResult<StaffAccessEventDto>> GetAccessEventsAsync(
+        long employeeUserId,
+        long? facilityId = null,
+        long? agreementId = null,
+        long? unitId = null,
+        string? result = null,
+        DateTimeOffset? from = null,
+        DateTimeOffset? to = null,
+        int page = 1,
+        int pageSize = 20,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffAccessEventDto> RecordAccessEventAsync(
+        long employeeUserId,
+        CreateStaffAccessEventRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffLockAccessResponseDto> LockAgreementAccessV1Async(
+        long employeeUserId,
+        long agreementId,
+        LockAccessRequest request,
+        CancellationToken cancellationToken = default);
+
     // ==========================================
     // 0. STAFF ASSIGNED FACILITY INFO
     // ==========================================
@@ -44,6 +69,30 @@ public interface IFacilityStaffService
     Task<StaffConfirmQrActionResultDto> ConfirmQrActionAsync(
         long employeeUserId,
         StaffConfirmQrActionRequest request,
+        CancellationToken cancellationToken = default);
+
+    // V1 Flow 2 Counter Check-In & Handover
+    Task<IReadOnlyList<StaffReservationLookupDto>> LookupReservationsV1Async(
+        long employeeUserId,
+        long? facilityId = null,
+        string? query = null,
+        string? status = "confirmed",
+        CancellationToken cancellationToken = default);
+
+    Task<VerifyCheckInQrResponse> VerifyCheckInQrAsync(
+        long employeeUserId,
+        VerifyCheckInQrRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<AssignReservationUnitResponse> AssignReservationUnitV1Async(
+        long employeeUserId,
+        long reservationId,
+        AssignReservationUnitRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<ConfirmCheckInResponse> ConfirmCheckInAsync(
+        long employeeUserId,
+        ConfirmCheckInRequest request,
         CancellationToken cancellationToken = default);
 
     // ==========================================

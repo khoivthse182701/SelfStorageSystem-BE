@@ -12,11 +12,18 @@ public class CreateReservationResponse
     public decimal FirstPaymentAmount { get; set; }
     public decimal MonthlyRate { get; set; }
     public decimal SecurityDeposit { get; set; }
+    public decimal DepositAmount => SecurityDeposit;
+    public decimal BookingFee { get; set; }
     public decimal DiscountAmount { get; set; }
+    public decimal TaxAmount { get; set; }
+    public decimal QuotedTotal { get; set; }
+    public long? UnitId { get; set; }
     public string? UnitCode { get; set; }
     public string FacilityName { get; set; } = string.Empty;
     public string UnitTypeName { get; set; } = string.Empty;
 }
+
+public sealed record CancelReservationResponse(long ReservationId, string Status, DateTimeOffset CancelledAt);
 
 public class ReservationSummaryDto
 {

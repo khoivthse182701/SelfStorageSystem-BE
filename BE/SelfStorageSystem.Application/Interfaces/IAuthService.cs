@@ -10,4 +10,6 @@ public interface IAuthService
     Task<string> ResendOtpAsync(ResendOtpRequest request, CancellationToken cancellationToken = default);
     Task<AuthResponse> GoogleLoginAsync(GoogleLoginRequest request, CancellationToken cancellationToken = default, string? ipAddress = null, string? userAgent = null);
     Task<AuthUserDto> GetCurrentUserAsync(long userId, CancellationToken cancellationToken = default);
+    Task<CustomerProfileDto> GetProfileAsync(long userId, CancellationToken cancellationToken = default);
+    Task<CustomerProfileDto> UpdateProfileAsync(long userId, UpdateCustomerProfileRequest request, CancellationToken cancellationToken = default);
 }

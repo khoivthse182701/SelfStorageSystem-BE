@@ -5,7 +5,10 @@ public static class ReservationStatusConstants
     public const string Pending = "pending";
     public const string AwaitingDeposit = "awaiting_deposit";
     public const string Confirmed = "confirmed";
+    public const string CheckedIn = "checked_in";
     public const string Converted = "converted";
+    public const string Completed = "completed";
+    public const string NoShow = "no_show";
     public const string Cancelled = "cancelled";
     public const string Expired = "expired";
 }

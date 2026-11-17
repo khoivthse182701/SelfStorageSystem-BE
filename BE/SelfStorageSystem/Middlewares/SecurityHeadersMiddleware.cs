@@ -26,7 +26,8 @@ public class SecurityHeadersMiddleware
         context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
 
         // 5. Ensure sensitive Auth responses are never cached by proxies or browsers
-        if (context.Request.Path.StartsWithSegments("/api/auth", StringComparison.OrdinalIgnoreCase))
+        if (context.Request.Path.StartsWithSegments("/api/auth", StringComparison.OrdinalIgnoreCase) ||
+            context.Request.Path.StartsWithSegments("/api/v1/auth", StringComparison.OrdinalIgnoreCase))
         {
             context.Response.Headers.Append("Cache-Control", "no-store, no-cache, must-revalidate");
             context.Response.Headers.Append("Pragma", "no-cache");

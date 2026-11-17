@@ -1,3 +1,4 @@
+using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Customer.Reservations;
 
 namespace SelfStorageSystem.Application.Interfaces;
@@ -21,6 +22,16 @@ public interface ICustomerReservationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves paginated reservations for the current authenticated customer.
+    /// </summary>
+    Task<PagedResult<ReservationSummaryDto>> GetMyReservationsPagedAsync(
+        long customerId,
+        string? status = null,
+        int page = 1,
+        int pageSize = 20,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves detailed reservation information, remaining hold time, and check-in QR code if confirmed.
     /// </summary>
     Task<ReservationDetailDto> GetReservationDetailAsync(
@@ -32,6 +43,12 @@ public interface ICustomerReservationService
     /// Allows customer to cancel a pending reservation and immediately release the unit back to available status (BR-RSV-01).
     /// </summary>
     Task<bool> CancelReservationAsync(
+        long customerId,
+        long reservationId,
+        string? reason = null,
+        CancellationToken cancellationToken = default);
+
+    Task<CancelReservationResponse> CancelReservationWithResultAsync(
         long customerId,
         long reservationId,
         string? reason = null,

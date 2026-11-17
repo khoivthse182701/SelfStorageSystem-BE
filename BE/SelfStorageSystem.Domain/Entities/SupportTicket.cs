@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
+using SelfStorageSystem.Domain.Enums;
 
 namespace SelfStorageSystem.Domain.Entities;
 
@@ -35,6 +38,34 @@ public partial class SupportTicket
 
     public DateTimeOffset UpdatedAt { get; set; }
 
+    [NotMapped, JsonIgnore]
+    public TicketStatus TicketStatus
+    {
+        get => EnumDbMapper.ParseTicketStatus(Status);
+        set => Status = value.ToDbValue();
+    }
+
+    public bool CanTransitionTo(TicketStatus nextStatus) =>
+        EnumDbMapper.TryParseTicketStatus(Status, out var current) &&
+        DomainStateMachine.CanTransition(current, nextStatus);
+
+    public void TransitionStatus(TicketStatus nextStatus, DateTimeOffset? utcNow = null)
+    {
+        if (!string.IsNullOrWhiteSpace(Status) && !CanTransitionTo(nextStatus))
+        {
+            throw new InvalidOperationException($"Invalid ticket status transition from '{Status}' to '{nextStatus.ToDbValue()}'.");
+        }
+
+        var ts = utcNow ?? DateTimeOffset.UtcNow;
+        Status = nextStatus.ToDbValue();
+        if (nextStatus is TicketStatus.Resolved or TicketStatus.Closed)
+        {
+            ResolvedAt ??= ts;
+        }
+
+        UpdatedAt = ts;
+    }
+
     public virtual RentalAgreement? Agreement { get; set; }
 
     public virtual CustomerProfile Customer { get; set; } = null!;
@@ -43,17 +74,11 @@ public partial class SupportTicket
 
     public virtual ICollection<MaintenanceWorkOrder> MaintenanceWorkOrders { get; set; } = new List<MaintenanceWorkOrder>();
 
-    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
-    public virtual RentalAgreement? RentalAgreement { get; set; }
-
     public virtual ServiceRating? ServiceRating { get; set; }
 
     public virtual ICollection<StaffTask> StaffTasks { get; set; } = new List<StaffTask>();
 
     public virtual StorageUnit? StorageUnit { get; set; }
-
-    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
-    public virtual StorageUnit? StorageUnitNavigation { get; set; }
 
     public virtual TicketAssignment? TicketAssignment { get; set; }
 

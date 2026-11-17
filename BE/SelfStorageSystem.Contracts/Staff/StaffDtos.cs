@@ -143,7 +143,9 @@ public record StaffCustomerSummaryDto(
     long CustomerId,
     string FullName,
     string? PhoneNumber,
-    string? Email
+    string? Email,
+    string? IdentityNumberMasked = null,
+    string? IdentityNumber = null
 );
 
 public record StaffAgreementSummaryDto(
@@ -323,7 +325,9 @@ public record StaffReservationLookupDto(
     string Status,
     decimal QuotedTotal,
     decimal DepositSnapshot,
-    DateTimeOffset CreatedAt
+    DateTimeOffset CreatedAt,
+    string? CustomerIdentityNumberMasked = null,
+    List<BackupStorageUnitDto>? AvailableBackupUnits = null
 );
 
 public record AssignUnitToReservationRequest(
@@ -376,14 +380,16 @@ public record StaffMoveOutSummaryDto(
     long? RefundId = null,
     decimal? RefundAmount = null,
     string? RefundMethod = null,
-    string? PayoutStatus = null
+    string? PayoutStatus = null,
+    decimal DepositAmount = 0m
 );
 
 public record InspectMoveOutRequest(
     string OverallCondition = "Good",
     string? Summary = null,
     List<CreateHandoverInspectionItemRequest>? InspectionItems = null,
-    string NextUnitStatus = "available"
+    string NextUnitStatus = "available",
+    List<StaffInspectionDamageItemDto>? DamageItems = null
 );
 
 public record InspectMoveOutResultDto(
@@ -393,7 +399,11 @@ public record InspectMoveOutResultDto(
     decimal TotalDamageCharges,
     string AgreementStatus,
     string UnitStatus,
-    DateTimeOffset InspectedAt
+    DateTimeOffset InspectedAt,
+    long? RefundId = null,
+    decimal RefundAmount = 0m,
+    decimal ExtraPenalty = 0m,
+    long? PenaltyInvoiceId = null
 );
 
 public record StaffSupportTicketDto(
@@ -512,6 +522,7 @@ public record OverdueAgreementDto(
 public class StaffCreateCheckInIncidentTicketRequest
 {
     public long FacilityId { get; set; }
+    public long? ReservationId { get; set; }
     public long? AgreementId { get; set; }
     public long? StorageUnitId { get; set; }
     public string? UnitCode { get; set; }

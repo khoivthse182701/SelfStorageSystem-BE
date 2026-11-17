@@ -7,6 +7,7 @@ using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Auth;
 using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
+using SelfStorageSystem.Domain.Enums;
 using SelfStorageSystem.Domain.Errors;
 using SelfStorageSystem.Domain.Exceptions;
 using SelfStorageSystem.Infrastructure.Persistence;
@@ -95,7 +96,7 @@ public class AuthService : IAuthService
         _dbContext.LoginHistories.Add(BuildLoginHistory(user.Id, normalizedEmail, LoginHistoryResultConstants.Succeeded, ipAddress, userAgent, now));
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        return BuildAuthResponse(user);
+        return await BuildAuthResponseAsync(user, cancellationToken);
     }
 
     public async Task<string> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
@@ -124,6 +125,19 @@ public class AuthService : IAuthService
             .Include(u => u.CustomerProfile)
             .FirstOrDefaultAsync(u => u.Email == normalizedEmail, cancellationToken);
 
+        var normalizedIdentity = request.IdentityNumber?.Trim() ?? string.Empty;
+        var normalizedPhone = request.PhoneNumber?.Trim() ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(normalizedIdentity))
+        {
+            var cccdConflict = await _dbContext.CustomerProfiles
+                .AnyAsync(cp => cp.IdentityNumber == normalizedIdentity && (existingUser == null || cp.UserId != existingUser.Id), cancellationToken);
+            if (cccdConflict)
+            {
+                throw AppException.FromError(AuthErrors.IdentityNumberAlreadyInUse);
+            }
+        }
+
         var now = DateTimeOffset.UtcNow;
         var hashedPassword = BCrypt.Net.BCrypt.HashPassword(request.Password);
 
@@ -141,12 +155,13 @@ public class AuthService : IAuthService
 
             // Update existing unverified account with new registration details
             existingUser.PasswordHash = hashedPassword;
-            existingUser.PhoneNumber = request.PhoneNumber;
+            existingUser.PhoneNumber = normalizedPhone;
             existingUser.UpdatedAt = now;
 
             if (existingUser.CustomerProfile != null)
             {
                 existingUser.CustomerProfile.FullName = request.FullName.Trim();
+                existingUser.CustomerProfile.IdentityNumber = normalizedIdentity;
                 existingUser.CustomerProfile.UpdatedAt = now;
             }
             else
@@ -154,6 +169,7 @@ public class AuthService : IAuthService
                 existingUser.CustomerProfile = new CustomerProfile
                 {
                     FullName = request.FullName.Trim(),
+                    IdentityNumber = normalizedIdentity,
                     CreatedAt = now,
                     UpdatedAt = now
                 };
@@ -169,7 +185,7 @@ public class AuthService : IAuthService
             var newUser = new User
             {
                 Email = normalizedEmail,
-                PhoneNumber = request.PhoneNumber,
+                PhoneNumber = normalizedPhone,
                 PasswordHash = hashedPassword,
                 Status = UserStatusConstants.Disabled,
                 CreatedAt = now,
@@ -179,6 +195,7 @@ public class AuthService : IAuthService
             newUser.CustomerProfile = new CustomerProfile
             {
                 FullName = request.FullName.Trim(),
+                IdentityNumber = normalizedIdentity,
                 CreatedAt = now,
                 UpdatedAt = now
             };
@@ -255,7 +272,7 @@ public class AuthService : IAuthService
 
         _otpService.InvalidateOtp(normalizedEmail);
 
-        return BuildAuthResponse(user);
+        return await BuildAuthResponseAsync(user, cancellationToken);
     }
 
     public async Task<string> ResendOtpAsync(ResendOtpRequest request, CancellationToken cancellationToken = default)
@@ -380,7 +397,7 @@ public class AuthService : IAuthService
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
-        return BuildAuthResponse(user);
+        return await BuildAuthResponseAsync(user, cancellationToken);
     }
 
     private static LoginHistory BuildLoginHistory(long? userId, string? email, string result, string? ipAddress, string? userAgent, DateTimeOffset occurredAt)
@@ -429,46 +446,239 @@ public class AuthService : IAuthService
             throw AppException.FromError(AuthErrors.UserNotFound);
         }
 
-        return MapToUserDto(user);
+        return await MapToUserDtoAsync(user, cancellationToken: cancellationToken);
     }
 
-    private AuthResponse BuildAuthResponse(User user)
+    public async Task<CustomerProfileDto> GetProfileAsync(long userId, CancellationToken cancellationToken = default)
     {
-        var roles = user.UserRoleUsers
-            .Where(ur => ur.Role != null)
-            .Select(ur => ur.Role.Code)
-            .ToList();
+        var user = await _dbContext.Users
+            .Include(u => u.CustomerProfile)
+            .Include(u => u.EmployeeProfile)
+            .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
 
-        if (roles.Count == 0)
+        if (user == null)
         {
-            roles.Add(RoleConstants.Customer);
+            throw AppException.FromError(AuthErrors.UserNotFound);
         }
 
+        return await BuildCustomerProfileDtoAsync(user, cancellationToken);
+    }
+
+    public async Task<CustomerProfileDto> UpdateProfileAsync(
+        long userId,
+        UpdateCustomerProfileRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await _dbContext.Users
+            .Include(u => u.CustomerProfile)
+            .Include(u => u.EmployeeProfile)
+            .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
+
+        if (user == null)
+        {
+            throw AppException.FromError(AuthErrors.UserNotFound);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var currentMonth = now.ToString("yyyy-MM");
+
+        if (user.CustomerProfile == null)
+        {
+            user.CustomerProfile = new CustomerProfile
+            {
+                UserId = user.Id,
+                FullName = user.EmployeeProfile?.FullName ?? user.Email,
+                ProfileEditMonth = currentMonth,
+                ProfileEditCount = 0,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+        }
+
+        var profile = user.CustomerProfile;
+
+        // Enforce locked CCCD rule; allow first-time set for Google accounts with empty CCCD
+        if (!string.IsNullOrWhiteSpace(request.IdentityNumber))
+        {
+            var trimmedCccd = request.IdentityNumber.Trim();
+            if (!string.IsNullOrWhiteSpace(profile.IdentityNumber))
+            {
+                if (!string.Equals(trimmedCccd, profile.IdentityNumber.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    throw AppException.FromError(AuthErrors.IdentityNumberLocked);
+                }
+            }
+            else
+            {
+                var cccdConflict = await _dbContext.CustomerProfiles
+                    .AnyAsync(cp => cp.IdentityNumber == trimmedCccd && cp.UserId != userId, cancellationToken);
+                if (cccdConflict)
+                {
+                    throw AppException.FromError(AuthErrors.IdentityNumberAlreadyInUse);
+                }
+                profile.IdentityNumber = trimmedCccd;
+            }
+        }
+
+        var newFullName = request.FullName.Trim();
+        var newPhone = request.PhoneNumber.Trim();
+        var nameOrPhoneChanged =
+            !string.Equals(profile.FullName, newFullName, StringComparison.Ordinal) ||
+            !string.Equals(user.PhoneNumber ?? string.Empty, newPhone, StringComparison.Ordinal);
+
+        if (profile.ProfileEditMonth != currentMonth)
+        {
+            profile.ProfileEditMonth = currentMonth;
+            profile.ProfileEditCount = 0;
+        }
+
+        if (nameOrPhoneChanged)
+        {
+            if (profile.ProfileEditCount >= 2)
+            {
+                throw AppException.FromError(AuthErrors.MonthlyProfileEditLimitReached);
+            }
+
+            profile.FullName = newFullName;
+            user.PhoneNumber = newPhone;
+            profile.ProfileEditCount += 1;
+        }
+
+        if (request.Address != null)
+        {
+            profile.Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim();
+        }
+
+        profile.UpdatedAt = now;
+        user.UpdatedAt = now;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return await BuildCustomerProfileDtoAsync(user, cancellationToken);
+    }
+
+    private async Task<CustomerProfileDto> BuildCustomerProfileDtoAsync(User user, CancellationToken cancellationToken)
+    {
+        var currentMonth = DateTimeOffset.UtcNow.ToString("yyyy-MM");
+        var profile = user.CustomerProfile;
+        var editsUsed = profile != null && profile.ProfileEditMonth == currentMonth
+            ? profile.ProfileEditCount
+            : 0;
+        var debtItems = await GetNegativeDebtInvoicesAsync(user.Id, cancellationToken);
+        var totalNegativeDebt = debtItems.Sum(d => d.OutstandingAmount);
+
+        return new CustomerProfileDto(
+            UserId: user.Id,
+            Email: user.Email,
+            FullName: profile?.FullName ?? user.EmployeeProfile?.FullName ?? user.Email,
+            PhoneNumber: user.PhoneNumber,
+            IdentityNumber: profile?.IdentityNumber,
+            Address: profile?.Address,
+            IdentityNumberLocked: !string.IsNullOrWhiteSpace(profile?.IdentityNumber),
+            CurrentEditMonth: currentMonth,
+            EditsUsedThisMonth: editsUsed,
+            MaxEditsPerMonth: 2,
+            RemainingEditsThisMonth: Math.Max(0, 2 - editsUsed),
+            HasNegativeDepositDebt: debtItems.Count > 0,
+            TotalNegativeDebtAmount: totalNegativeDebt,
+            NegativeDebtInvoices: debtItems);
+    }
+
+    private async Task<List<NegativeDebtInvoiceItemDto>> GetNegativeDebtInvoicesAsync(long userId, CancellationToken cancellationToken)
+    {
+        var negativeAgreements = await _dbContext.RentalAgreements
+            .AsNoTracking()
+            .Include(a => a.Facility)
+            .Include(a => a.UnitAllocations)
+                .ThenInclude(ua => ua.StorageUnit)
+            .Include(a => a.Invoices)
+            .Where(a => a.CustomerId == userId && a.DepositBalance < 0)
+            .ToListAsync(cancellationToken);
+
+        if (negativeAgreements.Count == 0)
+        {
+            return new List<NegativeDebtInvoiceItemDto>();
+        }
+
+        return negativeAgreements.Select(a =>
+        {
+            var unitCode = a.UnitAllocations
+                .OrderByDescending(u => u.Id)
+                .FirstOrDefault()?.StorageUnit?.UnitCode ?? "N/A";
+            var unpaidDeficitInv = a.Invoices
+                .Where(i => i.Status != InvoiceStatusConstants.Paid && i.Status != InvoiceStatusConstants.Voided)
+                .OrderByDescending(i => i.Id)
+                .FirstOrDefault();
+            var outstanding = unpaidDeficitInv != null
+                ? Math.Max(0m, unpaidDeficitInv.TotalAmount - unpaidDeficitInv.PaidAmount)
+                : Math.Abs(a.DepositBalance);
+
+            return new NegativeDebtInvoiceItemDto(
+                AgreementId: a.Id,
+                AgreementNo: a.AgreementNo,
+                UnitCode: unitCode,
+                FacilityName: a.Facility?.Name ?? "Chi nhánh",
+                NegativeBalance: a.DepositBalance,
+                DeficitInvoiceId: unpaidDeficitInv?.Id,
+                DeficitInvoiceNo: unpaidDeficitInv?.InvoiceNo,
+                OutstandingAmount: outstanding);
+        }).Where(x => x.OutstandingAmount > 0).ToList();
+    }
+
+    private async Task<AuthResponse> BuildAuthResponseAsync(User user, CancellationToken cancellationToken)
+    {
+        var rawRoles = ExtractRawRoles(user);
         var fullName = user.CustomerProfile?.FullName ?? user.EmployeeProfile?.FullName ?? user.Email;
-        var token = _jwtTokenService.GenerateToken(user, roles, fullName);
+        var token = _jwtTokenService.GenerateToken(user, rawRoles, fullName);
 
         return new AuthResponse
         {
             AccessToken = token,
             TokenType = AuthConstants.BearerTokenType,
             ExpiresInMinutes = _jwtSettings.AccessTokenMinutes > 0 ? _jwtSettings.AccessTokenMinutes : AuthConstants.DefaultAccessTokenMinutes,
-            User = MapToUserDto(user, roles, fullName)
+            User = await MapToUserDtoAsync(user, rawRoles, fullName, cancellationToken)
         };
     }
 
-    private static AuthUserDto MapToUserDto(User user, List<string>? roles = null, string? fullName = null)
+    private async Task<AuthUserDto> MapToUserDtoAsync(
+        User user,
+        List<string>? rawRoles = null,
+        string? fullName = null,
+        CancellationToken cancellationToken = default)
     {
-        roles ??= user.UserRoleUsers
-            .Where(ur => ur.Role != null)
-            .Select(ur => ur.Role.Code)
+        rawRoles ??= ExtractRawRoles(user);
+        var canonicalRoles = rawRoles
+            .Select(r => EnumDbMapper.TryParseRoleCode(r, out var parsed) ? parsed.ToString() : r)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        if (roles.Count == 0)
-        {
-            roles.Add(RoleConstants.Customer);
-        }
+        var permissions = CapabilitiesService.ResolvePermissionsForRoles(rawRoles);
+        var now = DateTimeOffset.UtcNow;
+        var assignedFacilityIds = canonicalRoles.Any(r =>
+                r.Equals("Staff", StringComparison.OrdinalIgnoreCase))
+            ? await _dbContext.StaffFacilityAssignments
+                .AsNoTracking()
+                .Where(a => a.EmployeeId == user.Id && a.StartsAt <= now && (a.EndsAt == null || a.EndsAt > now))
+                .Select(a => a.FacilityId)
+                .Distinct()
+                .ToListAsync(cancellationToken)
+            : canonicalRoles.Any(r =>
+                r.Equals("Manager", StringComparison.OrdinalIgnoreCase) ||
+                r.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+                ? await _dbContext.Facilities
+                    .AsNoTracking()
+                    .Select(f => f.Id)
+                    .ToListAsync(cancellationToken)
+                : new List<long>();
 
         fullName ??= user.CustomerProfile?.FullName ?? user.EmployeeProfile?.FullName ?? user.Email;
+
+        var currentMonth = now.ToString("yyyy-MM");
+        var editsUsed = user.CustomerProfile != null && user.CustomerProfile.ProfileEditMonth == currentMonth
+            ? user.CustomerProfile.ProfileEditCount
+            : 0;
+        var debtItems = canonicalRoles.Any(r => r.Equals("Customer", StringComparison.OrdinalIgnoreCase))
+            ? await GetNegativeDebtInvoicesAsync(user.Id, cancellationToken)
+            : new List<NegativeDebtInvoiceItemDto>();
 
         return new AuthUserDto
         {
@@ -476,8 +686,30 @@ public class AuthService : IAuthService
             Email = user.Email,
             FullName = fullName,
             PhoneNumber = user.PhoneNumber,
-            Roles = roles,
+            IdentityNumber = user.CustomerProfile?.IdentityNumber,
+            Address = user.CustomerProfile?.Address,
+            EditsUsedThisMonth = editsUsed,
+            RemainingEditsThisMonth = Math.Max(0, 2 - editsUsed),
+            HasNegativeDepositDebt = debtItems.Count > 0,
+            TotalNegativeDebtAmount = debtItems.Sum(d => d.OutstandingAmount),
+            NegativeDebtInvoices = debtItems,
+            Roles = canonicalRoles,
+            Permissions = permissions,
+            AssignedFacilityIds = assignedFacilityIds,
             Status = user.Status
         };
+    }
+
+    private static List<string> ExtractRawRoles(User user)
+    {
+        var roles = user.UserRoleUsers
+            .Where(ur => ur.Role != null)
+            .Select(ur => ur.Role.Code)
+            .ToList();
+
+        if (roles.Count == 0)
+            roles.Add(RoleConstants.Customer);
+
+        return roles;
     }
 }

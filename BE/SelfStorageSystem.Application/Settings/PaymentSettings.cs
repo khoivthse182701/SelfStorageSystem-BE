@@ -10,16 +10,16 @@ public class PaymentSettings
 
 public class SePayConfig
 {
-    public string ApiKey { get; set; } = "Admin@123";
+    public string ApiKey { get; set; } = string.Empty;
     public string InvoicePrefix { get; set; } = "DH";
 }
 
 public class VietQrConfig
 {
     public string BaseUrl { get; set; } = "https://vietqr.app/img";
-    public string BankCode { get; set; } = "MBBank";
-    public string AccountNo { get; set; } = "0817495759";
-    public string AccountName { get; set; } = "VO THAI HOANG KHOI";
+    public string BankCode { get; set; } = string.Empty;
+    public string AccountNo { get; set; } = string.Empty;
+    public string AccountName { get; set; } = string.Empty;
     public string Template { get; set; } = "qronly";
     public bool ShowInfo { get; set; } = false;
 }

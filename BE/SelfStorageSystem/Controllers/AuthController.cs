@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Contracts.Auth;
@@ -9,16 +10,21 @@ using SelfStorageSystem.Contracts.Common;
 namespace SelfStorageSystem.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/v1/auth")]
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly OtpSettings _otpSettings;
     private readonly ILogger<AuthController> _logger;
 
-    public AuthController(IAuthService authService, ILogger<AuthController> logger)
+    public AuthController(
+        IAuthService authService,
+        ILogger<AuthController> logger,
+        IOptions<OtpSettings>? otpOptions = null)
     {
         _authService = authService;
         _logger = logger;
+        _otpSettings = otpOptions?.Value ?? new OtpSettings();
     }
 
     /// <summary>
@@ -51,13 +57,14 @@ public class AuthController : ControllerBase
     /// Resend OTP verification code via email.
     /// </summary>
     [HttpPost("resend-otp")]
-    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiResponse<ResendOtpResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> ResendOtp([FromBody] ResendOtpRequest request, CancellationToken cancellationToken)
     {
         var message = await _authService.ResendOtpAsync(request, cancellationToken);
-        return Ok(ApiResponse.Ok(message));
+        return Ok(ApiResponse<ResendOtpResponse>.Ok(new ResendOtpResponse(_otpSettings.ResendCooldownSeconds), message));
     }
 
     /// <summary>
@@ -106,16 +113,13 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
-    /// Get capabilities (permissions and assigned facilities) for current authenticated user.
+    /// Get customer profile details including locked CCCD, monthly edit quota, and negative deposit debt alerts.
     /// </summary>
-    [HttpGet("me/capabilities")]
-    [HttpGet("/api/v1/me/capabilities")]
+    [HttpGet("profile")]
+    [HttpGet("/api/v1/profile")]
     [Authorize]
-    [ProducesResponseType(typeof(ApiResponse<UserCapabilitiesDto>), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<IActionResult> GetUserCapabilities(
-        [FromServices] ICapabilitiesService capabilitiesService,
-        CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(ApiResponse<CustomerProfileDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetProfile(CancellationToken cancellationToken)
     {
         var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrEmpty(userIdClaim) || !long.TryParse(userIdClaim, out var userId))
@@ -123,8 +127,29 @@ public class AuthController : ControllerBase
             return Unauthorized(ApiResponse.Fail("Cannot authenticate user identity from token."));
         }
 
-        var capabilities = await capabilitiesService.GetUserCapabilitiesAsync(userId, cancellationToken);
-        return Ok(ApiResponse<UserCapabilitiesDto>.Ok(capabilities, "User capabilities retrieved successfully."));
+        var profile = await _authService.GetProfileAsync(userId, cancellationToken);
+        return Ok(ApiResponse<CustomerProfileDto>.Ok(profile, "Profile retrieved successfully."));
+    }
+
+    /// <summary>
+    /// Update customer profile (FullName and PhoneNumber up to 2 times/month; CCCD is locked).
+    /// </summary>
+    [HttpPut("profile")]
+    [HttpPut("/api/v1/profile")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<CustomerProfileDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> UpdateProfile([FromBody] UpdateCustomerProfileRequest request, CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdClaim) || !long.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot authenticate user identity from token."));
+        }
+
+        var profile = await _authService.UpdateProfileAsync(userId, request, cancellationToken);
+        return Ok(ApiResponse<CustomerProfileDto>.Ok(profile, "Profile updated successfully."));
     }
 
     private string? GetClientIp()

@@ -145,3 +145,26 @@ public class UnpaidInvoiceDto
     public DateOnly DueDate { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
+
+public class PaymentStatusDto
+{
+    public long PaymentId { get; set; }
+    public long InvoiceId { get; set; }
+    public string InvoiceStatus { get; set; } = string.Empty;
+    public long? ReservationId { get; set; }
+    public string? ReservationStatus { get; set; }
+    public string PaymentStatus { get; set; } = string.Empty;
+    public decimal PaidAmount { get; set; }
+    public decimal TotalAmount { get; set; }
+    public bool RequiresReconciliation { get; set; }
+    public string? CheckInQrToken { get; set; }
+}
+
+public class SePayWebhookResultDto
+{
+    public bool Processed { get; set; }
+    public string Action { get; set; } = "unmatched_ignored";
+    public long? InvoiceId { get; set; }
+    public long? ReservationId { get; set; }
+    public long? PaymentId { get; set; }
+}

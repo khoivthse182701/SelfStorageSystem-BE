@@ -22,7 +22,7 @@ public static class StaffErrors
         Error.NotFound("Staff.ReservationNotFound", "Reservation was not found.");
 
     public static readonly Error ReservationNotConfirmed =
-        Error.Validation("Staff.ReservationNotConfirmed", "Reservation must be in confirmed status to perform check-in and unit assignment.");
+        Error.Conflict("Staff.ReservationNotConfirmed", "Reservation must be in confirmed status to perform check-in and unit assignment.");
 
     public static readonly Error UnitNotFound =
         Error.NotFound("Staff.UnitNotFound", "Storage unit was not found.");
@@ -30,8 +30,17 @@ public static class StaffErrors
     public static readonly Error UnitNotAvailable =
         Error.Conflict("Staff.UnitNotAvailable", "Storage unit is not available for assignment.");
 
+    public static readonly Error FacilityMismatch =
+        Error.Validation("Staff.FacilityMismatch", "Selected storage unit does not belong to the reservation facility.");
+
     public static readonly Error UnitTypeMismatch =
         Error.Validation("Staff.UnitTypeMismatch", "Selected storage unit type does not match the reservation unit type.");
+
+    public static readonly Error IdentityVerificationFailed =
+        Error.Validation("Staff.IdentityVerificationFailed", "Customer identity verification must confirm full name match before check-in.");
+
+    public static readonly Error IdentityNumberMismatch =
+        Error.Validation("Staff.IdentityNumberMismatch", "Số CCCD nhân viên nhập không trùng khớp với số CCCD đã đăng ký của khách hàng.");
 
     public static readonly Error HandoverAlreadyExists =
         Error.Conflict("Staff.HandoverAlreadyExists", "Handover record has already been completed for this agreement/reservation.");
@@ -86,4 +95,10 @@ public static class StaffErrors
 
     public static readonly Error RefundAmountInvalid =
         Error.Validation("Staff.RefundAmountInvalid", "Số tiền hoàn cọc phải lớn hơn 0.");
+
+    public static readonly Error AccessPointNotFound =
+        Error.NotFound("Staff.AccessPointNotFound", "Access point was not found at your assigned facility.");
+
+    public static readonly Error InvalidAccessEventResult =
+        Error.Validation("Staff.InvalidAccessEventResult", "Access event result must be granted, denied, or error.");
 }

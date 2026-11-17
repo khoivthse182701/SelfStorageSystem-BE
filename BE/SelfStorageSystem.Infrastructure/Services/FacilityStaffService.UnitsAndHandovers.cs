@@ -23,7 +23,7 @@ public partial class FacilityStaffService : IFacilityStaffService
 
     public async Task<StaffFacilityInfoDto> GetMyFacilityAsync(long employeeUserId, CancellationToken cancellationToken = default)
     {
-        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, null, cancellationToken);
+        var targetFacilityId = await EnsureStrictFacilityAccessAsync(employeeUserId, null, cancellationToken);
         var facility = await _dbContext.Facilities
             .AsNoTracking()
             .Include(f => f.StorageUnits)
@@ -54,7 +54,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         string? sizeCategory = null,
         CancellationToken cancellationToken = default)
     {
-        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, facilityId, cancellationToken);
+        var targetFacilityId = await EnsureStrictFacilityAccessAsync(employeeUserId, facilityId, cancellationToken);
 
         var query = _dbContext.StorageUnits
             .AsNoTracking()
@@ -160,7 +160,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         if (unit == null)
             throw AppException.FromError(StaffErrors.UnitNotFound);
 
-        await ResolveFacilityIdAsync(employeeUserId, unit.FacilityId, cancellationToken);
+        await EnsureStrictFacilityAccessAsync(employeeUserId, unit.FacilityId, cancellationToken);
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var rate = await _dbContext.FacilityRates

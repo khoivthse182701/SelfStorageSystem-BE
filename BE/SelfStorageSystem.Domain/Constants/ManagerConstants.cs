@@ -102,6 +102,7 @@ public static class ApprovalDecisionConstants
 
 public static class RefundStatusConstants
 {
+    public const string Requested = "requested";
     public const string Pending = "pending";
     public const string Approved = "approved";
     public const string Rejected = "rejected";
@@ -109,7 +110,7 @@ public static class RefundStatusConstants
     public const string PendingManagerPayout = "pending_manager_payout";
     public const string PendingCounterPayout = "pending_counter_payout";
 
-    public static readonly string[] All = { Pending, Approved, Rejected, Completed, PendingManagerPayout, PendingCounterPayout };
+    public static readonly string[] All = { Requested, Pending, Approved, Rejected, Completed, PendingManagerPayout, PendingCounterPayout };
 }
 
 public static class RefundPayoutMethodConstants

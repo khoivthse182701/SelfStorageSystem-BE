@@ -35,12 +35,15 @@ public class ManagerReassignUnitResponseDto
     public long FacilityId { get; set; }
 
     public long OldStorageUnitId { get; set; }
+    public long OldUnitId => OldStorageUnitId;
     public string OldUnitCode { get; set; } = string.Empty;
     public string OldUnitStatus { get; set; } = string.Empty;
 
     public long NewStorageUnitId { get; set; }
+    public long NewUnitId => NewStorageUnitId;
     public string NewUnitCode { get; set; } = string.Empty;
     public string NewUnitStatus { get; set; } = string.Empty;
+    public string UnitStatus => NewUnitStatus;
     public string NewUnitTypeName { get; set; } = string.Empty;
 
     public string? NewPinCode { get; set; }
@@ -71,7 +74,9 @@ public class ManagerEmergencyCancelRefundResponseDto
     public long StorageUnitId { get; set; }
     public string UnitCode { get; set; } = string.Empty;
     public decimal TotalRefundAmount { get; set; }
+    public decimal RefundAmount => TotalRefundAmount;
     public long? RefundId { get; set; }
+    public string? RefundStatus { get; set; }
     public string AgreementStatus { get; set; } = string.Empty;
     public string UnitStatus { get; set; } = string.Empty;
     public DateTimeOffset CancelledAt { get; set; }

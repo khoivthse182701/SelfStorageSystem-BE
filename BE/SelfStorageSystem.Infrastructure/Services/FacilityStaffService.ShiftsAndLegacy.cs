@@ -480,7 +480,7 @@ public partial class FacilityStaffService : IFacilityStaffService
 
     public async Task<IReadOnlyList<StaffMoveOutSummaryDto>> GetMoveOutsAsync(long employeeUserId, long? facilityId = null, DateOnly? date = null, CancellationToken cancellationToken = default)
     {
-        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, facilityId, cancellationToken);
+        var targetFacilityId = await EnsureStrictFacilityAccessAsync(employeeUserId, facilityId, cancellationToken);
         return await GetMoveOutsCoreAsync(targetFacilityId, date, cancellationToken);
     }
 
@@ -509,7 +509,7 @@ public partial class FacilityStaffService : IFacilityStaffService
             .GroupBy(r => r.AgreementId!.Value)
             .ToDictionary(g => g.Key, g => g.First());
 
-        return list.Select(m =>
+        var result = list.Select(m =>
         {
             var alloc = m.Agreement.UnitAllocations
                 .OrderByDescending(ua => ua.Status == AllocationStatusConstants.Active ? 1 : 0)
@@ -517,6 +517,8 @@ public partial class FacilityStaffService : IFacilityStaffService
                 .FirstOrDefault();
             var unitCode = alloc?.StorageUnit?.UnitCode ?? "N/A";
             refundByAgreement.TryGetValue(m.AgreementId, out var refItem);
+
+            var deposit = m.Agreement.DepositSnapshot > 0 ? m.Agreement.DepositSnapshot : m.Agreement.DepositBalance;
 
             return new StaffMoveOutSummaryDto(
                 m.Id,
@@ -533,16 +535,86 @@ public partial class FacilityStaffService : IFacilityStaffService
                 refItem?.Id,
                 refItem?.Amount,
                 refItem?.Provider,
-                refItem?.Status
+                refItem?.Status,
+                deposit
             );
         }).ToList();
+
+        // Đồng bộ các biên bản nghiệm thu trả kho (check_out) mà Quản lý trực tiếp phân công (chưa có bản ghi move_out_requests)
+        var existingAgreementIds = list.Select(m => (long?)m.AgreementId).ToHashSet();
+        var inspQuery = _dbContext.Inspections.AsNoTracking()
+            .Include(i => i.Agreement).ThenInclude(a => a!.Customer)
+            .Include(i => i.Agreement).ThenInclude(a => a!.Facility)
+            .Include(i => i.Agreement).ThenInclude(a => a!.UnitAllocations).ThenInclude(ua => ua.StorageUnit)
+            .Include(i => i.StorageUnit)
+            .Where(i => i.AgreementId.HasValue && !existingAgreementIds.Contains(i.AgreementId) &&
+                        (i.InspectionType == InspectionTypeConstants.CheckOut || i.InspectionType == "move_out"));
+
+        if (facilityId.HasValue) inspQuery = inspQuery.Where(i => i.FacilityId == facilityId.Value);
+
+        var standaloneInspections = await inspQuery.OrderByDescending(i => i.CreatedAt).ToListAsync(cancellationToken);
+
+        if (standaloneInspections.Count > 0)
+        {
+            var extraAgreementIds = standaloneInspections.Select(i => i.AgreementId!.Value).Distinct().ToList();
+            var extraRefunds = await _dbContext.Refunds.AsNoTracking()
+                .Where(r => r.AgreementId.HasValue && extraAgreementIds.Contains(r.AgreementId.Value))
+                .OrderByDescending(r => r.Id)
+                .ToListAsync(cancellationToken);
+            var extraRefundByAgreement = extraRefunds
+                .GroupBy(r => r.AgreementId!.Value)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var latestInspPerAgreement = standaloneInspections
+                .GroupBy(i => i.AgreementId!.Value)
+                .Select(g => g.First());
+
+            foreach (var insp in latestInspPerAgreement)
+            {
+                var agr = insp.Agreement;
+                if (agr == null) continue;
+
+                var alloc = agr.UnitAllocations
+                    .OrderByDescending(ua => ua.Status == AllocationStatusConstants.Active ? 1 : 0)
+                    .ThenByDescending(ua => ua.Id)
+                    .FirstOrDefault();
+                var unitCode = insp.StorageUnit?.UnitCode ?? alloc?.StorageUnit?.UnitCode ?? "N/A";
+                extraRefundByAgreement.TryGetValue(agr.Id, out var refItem);
+
+                var deposit = agr.DepositSnapshot > 0 ? agr.DepositSnapshot : agr.DepositBalance;
+                var itemStatus = (insp.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) || insp.Status.Equals("resolved", StringComparison.OrdinalIgnoreCase))
+                    ? "completed"
+                    : MoveOutStatusConstants.InspectionPending;
+
+                var moveOutDate = DateOnly.FromDateTime(agr.EndDate.ToDateTime(TimeOnly.MinValue));
+                if (date.HasValue && moveOutDate != date.Value) continue;
+
+                result.Add(new StaffMoveOutSummaryDto(
+                    insp.Id,
+                    agr.Id,
+                    agr.AgreementNo,
+                    agr.CustomerId,
+                    agr.Customer.FullName,
+                    agr.FacilityId,
+                    unitCode,
+                    moveOutDate,
+                    itemStatus,
+                    insp.Summary ?? "Quản lý phân công nghiệm thu trả kho theo hạn hợp đồng",
+                    insp.CreatedAt,
+                    refItem?.Id,
+                    refItem?.Amount,
+                    refItem?.Provider,
+                    refItem?.Status,
+                    deposit
+                ));
+            }
+        }
+
+        return result.OrderByDescending(r => r.RequestedMoveOutDate).ThenByDescending(r => r.CreatedAt).ToList();
     }
 
-    public async Task<InspectMoveOutResultDto> InspectMoveOutAsync(long employeeUserId, long moveOutId, InspectMoveOutRequest request, CancellationToken cancellationToken = default)
-    {
-        var res = await ConfirmQrActionAsync(employeeUserId, new StaffConfirmQrActionRequest("move_out", MoveOutId: moveOutId), cancellationToken);
-        return new InspectMoveOutResultDto(moveOutId, employeeUserId, res.AgreementId ?? 0, 0m, RentalAgreementStatusConstants.Completed, StorageUnitStatusConstants.Cleaning, DateTimeOffset.UtcNow);
-    }
+    public Task<InspectMoveOutResultDto> InspectMoveOutAsync(long employeeUserId, long moveOutId, InspectMoveOutRequest request, CancellationToken cancellationToken = default)
+        => InspectMoveOutV1InternalAsync(employeeUserId, moveOutId, request, cancellationToken);
 
     [Obsolete("Use GetLogisticsTicketsAsync instead.")]
     public async Task<IReadOnlyList<StaffSupportTicketDto>> GetFacilityTicketsAsync(long? facilityId = null, string? status = null, CancellationToken cancellationToken = default)
@@ -759,7 +831,7 @@ public partial class FacilityStaffService : IFacilityStaffService
 
     public async Task<IReadOnlyList<OverdueAgreementDto>> GetOverdueAgreementsAsync(long employeeUserId, long? facilityId = null, CancellationToken cancellationToken = default)
     {
-        var targetFacilityId = await ResolveFacilityIdAsync(employeeUserId, facilityId, cancellationToken);
+        var targetFacilityId = await EnsureStrictFacilityAccessAsync(employeeUserId, facilityId, cancellationToken);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var query = _dbContext.RentalAgreements
             .AsNoTracking()
@@ -806,19 +878,6 @@ public partial class FacilityStaffService : IFacilityStaffService
 
     public async Task LockAgreementAccessAsync(long employeeUserId, long agreementId, LockAccessRequest request, CancellationToken cancellationToken = default)
     {
-        var agreement = await _dbContext.RentalAgreements.FirstOrDefaultAsync(a => a.Id == agreementId, cancellationToken);
-        if (agreement == null) throw AppException.FromError(StaffErrors.AgreementNotFound);
-
-        await ResolveFacilityIdAsync(employeeUserId, agreement.FacilityId, cancellationToken);
-
-        var creds = await _dbContext.AccessCredentials.Where(c => c.AgreementId == agreementId).ToListAsync(cancellationToken);
-        foreach (var c in creds) c.Status = CredentialStatusConstants.Suspended;
-
-        if (agreement.Status == RentalAgreementStatusConstants.Active)
-        {
-            agreement.Status = RentalAgreementStatusConstants.Overdue;
-        }
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        await LockAgreementAccessV1Async(employeeUserId, agreementId, request, cancellationToken);
     }
 }

@@ -197,6 +197,13 @@ public interface IFacilityManagerService
         bool isSystemAdmin,
         CancellationToken cancellationToken = default);
 
+    Task<ManagerLiquidateAgreementResultDto> LiquidateAgreementAsync(
+        long agreementId,
+        ManagerLiquidateAgreementRequest request,
+        long currentUserId,
+        bool isSystemAdmin,
+        CancellationToken cancellationToken = default);
+
     // ==========================================
     // 5. Dashboard Cơ Sở
     // ==========================================

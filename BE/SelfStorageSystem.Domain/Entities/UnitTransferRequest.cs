@@ -17,6 +17,10 @@ public partial class UnitTransferRequest
 
     public long? ToUnitId { get; set; }
 
+    public string TransferType { get; set; } = "upgrade";
+
+    public long? TargetInvoiceId { get; set; }
+
     public DateOnly RequestedEffectiveDate { get; set; }
 
     public DateOnly MoveOutDate { get; set; }
@@ -56,6 +60,8 @@ public partial class UnitTransferRequest
     public virtual StorageUnit FromUnit { get; set; } = null!;
 
     public virtual User RequestedByNavigation { get; set; } = null!;
+
+    public virtual Facility? RequestedFacility { get; set; }
 
     public virtual UnitType RequestedUnitType { get; set; } = null!;
 

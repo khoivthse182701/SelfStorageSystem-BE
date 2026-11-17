@@ -7,12 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\SelfStorageSystem.Domain\SelfStorageSystem.Domain.csproj" />
-    <ProjectReference Include="..\SelfStorageSystem.Contracts\SelfStorageSystem.Contracts.csproj" />
+    <PackageReference Include="FluentValidation" Version="12.2.0" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="12.2.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\SelfStorageSystem.Domain\SelfStorageSystem.Domain.csproj" />
+    <ProjectReference Include="..\SelfStorageSystem.Contracts\SelfStorageSystem.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

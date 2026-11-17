@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
+using SelfStorageSystem.Domain.Enums;
 
 namespace SelfStorageSystem.Domain.Entities;
 
@@ -37,9 +40,41 @@ public partial class RentalAgreement
 
     public DateOnly? ActualEndDate { get; set; }
 
+    public DateTimeOffset? NegativeDebtNotifiedAt { get; set; }
+
+    public DateTimeOffset? OverdueBankReminderSentAt { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
+
+    [NotMapped, JsonIgnore]
+    public ContractStatus ContractStatus
+    {
+        get => EnumDbMapper.ParseContractStatus(Status);
+        set => Status = value.ToDbValue();
+    }
+
+    public bool CanTransitionTo(ContractStatus nextStatus) =>
+        EnumDbMapper.TryParseContractStatus(Status, out var current) &&
+        DomainStateMachine.CanTransition(current, nextStatus);
+
+    public void TransitionStatus(ContractStatus nextStatus, DateTimeOffset? utcNow = null)
+    {
+        if (!string.IsNullOrWhiteSpace(Status) && !CanTransitionTo(nextStatus))
+        {
+            throw new InvalidOperationException($"Invalid contract status transition from '{Status}' to '{nextStatus.ToDbValue()}'.");
+        }
+
+        Status = nextStatus.ToDbValue();
+        UpdatedAt = utcNow ?? DateTimeOffset.UtcNow;
+    }
+
+    public bool IsExpiringSoon(DateOnly facilityToday, int thresholdDays = 7) =>
+        EnumDbMapper.TryParseContractStatus(Status, out var parsed) &&
+        parsed is ContractStatus.Active or ContractStatus.Extended or ContractStatus.ExpiringSoon &&
+        EndDate >= facilityToday &&
+        EndDate.DayNumber - facilityToday.DayNumber <= thresholdDays;
 
     public virtual ICollection<AccessCredential> AccessCredentials { get; set; } = new List<AccessCredential>();
 
@@ -71,12 +106,9 @@ public partial class RentalAgreement
 
     public virtual ICollection<SupportTicket> SupportTicketAgreements { get; set; } = new List<SupportTicket>();
 
-    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
-    public virtual ICollection<SupportTicket> SupportTicketRentalAgreements { get; set; } = new List<SupportTicket>();
-
     public virtual ICollection<UnitAllocation> UnitAllocations { get; set; } = new List<UnitAllocation>();
 
     public virtual ICollection<StoredItem> StoredItems { get; set; } = new List<StoredItem>();
 
-    [System.ComponentModel.DataAnnotations.Schema.NotMapped] public virtual UnitTransferRequest? UnitTransferRequest { get; set; }
+    public virtual ICollection<UnitTransferRequest> UnitTransferRequests { get; set; } = new List<UnitTransferRequest>();
 }

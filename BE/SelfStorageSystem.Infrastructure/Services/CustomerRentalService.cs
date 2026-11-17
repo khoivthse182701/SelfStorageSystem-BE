@@ -43,7 +43,7 @@ namespace SelfStorageSystem.Infrastructure.Services;
 
 
 
-public class CustomerRentalService : ICustomerRentalService
+public partial class CustomerRentalService : ICustomerRentalService
 
 {
 
@@ -68,6 +68,12 @@ public class CustomerRentalService : ICustomerRentalService
 
     private readonly ILogger<CustomerRentalService> _logger;
 
+    private readonly IQrTokenService? _qrTokenService;
+
+    private readonly IPricingEngine? _pricingEngine;
+
+    private readonly IRealtimeNotifier? _realtimeNotifier;
+
 
 
     public CustomerRentalService(
@@ -82,7 +88,13 @@ public class CustomerRentalService : ICustomerRentalService
 
         IOptions<RentalSettings>? rentalOptions = null,
 
-        IOptions<PaymentSettings>? paymentOptions = null)
+        IOptions<PaymentSettings>? paymentOptions = null,
+
+        IQrTokenService? qrTokenService = null,
+
+        IPricingEngine? pricingEngine = null,
+
+        IRealtimeNotifier? realtimeNotifier = null)
 
     {
 
@@ -98,37 +110,32 @@ public class CustomerRentalService : ICustomerRentalService
 
         _logger = logger;
 
+        _qrTokenService = qrTokenService;
+
+        _pricingEngine = pricingEngine;
+
+        _realtimeNotifier = realtimeNotifier;
+
     }
 
 
 
     public async Task<IReadOnlyList<RentalSummaryDto>> GetMyRentalsAsync(long customerId, CancellationToken cancellationToken = default)
+        => await GetMyRentalsV1Async(customerId, null, cancellationToken);
 
+    private async Task<IReadOnlyList<RentalSummaryDto>> QueryMyRentalsAsync(long customerId, string? statusFilter, CancellationToken cancellationToken)
     {
-
         var now = DateTimeOffset.UtcNow;
 
-        var today = DateOnly.FromDateTime(now.DateTime);
-
-
-
+        var allowedStatuses = ParseRentalStatusFilter(statusFilter);
         var agreements = await _dbContext.RentalAgreements
-
             .AsNoTracking()
-
             .Where(r => r.CustomerId == customerId &&
-
-                        (r.Status == RentalAgreementStatusConstants.Active ||
-                          r.Status == RentalAgreementStatusConstants.ExpiringSoon ||
-                          r.Status == RentalAgreementStatusConstants.Draft ||
-                          r.Status == RentalAgreementStatusConstants.MoveOutScheduled ||
-                          r.Status == RentalAgreementStatusConstants.Overdue ||
-                          r.Status == "checkout_pending" ||
-                          r.Status == RentalAgreementStatusConstants.Terminated))
+                        (allowedStatuses == null || allowedStatuses.Contains(r.Status)))
 
             .Include(r => r.Facility)
 
-            .Include(r => r.UnitAllocations.Where(a => a.Status == AllocationStatusConstants.Active))
+            .Include(r => r.UnitAllocations)
 
                 .ThenInclude(a => a.StorageUnit)
 
@@ -167,7 +174,7 @@ public class CustomerRentalService : ICustomerRentalService
             var reservation = r.ReservationId > 0 && reservationsMap.TryGetValue(r.ReservationId, out var resVal) ? resVal : null;
 
             var alloc = r.UnitAllocations.FirstOrDefault(a => a.Status == AllocationStatusConstants.Active)
-
+                     ?? r.UnitAllocations.OrderByDescending(a => a.Id).FirstOrDefault()
                      ?? reservation?.UnitAllocation;
 
             var unit = alloc?.StorageUnit;
@@ -176,11 +183,15 @@ public class CustomerRentalService : ICustomerRentalService
 
 
 
-            var hasOverdueDebt = r.Invoices.Any(i => IsOverdueRentalDebt(i, today.AddDays(-1)));
+            var facilityTz = TimeZoneHelper.ResolveTimeZone(r.Facility?.Timezone, _rentalSettings.DefaultTimezone);
+            var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, facilityTz).DateTime);
 
+            var hasOverdueDebt = r.Invoices.Any(i => IsOverdueRentalDebt(i, localToday.AddDays(-1)))
+                                 || string.Equals(r.Status, RentalAgreementStatusConstants.Overdue, StringComparison.OrdinalIgnoreCase);
 
-
-            var daysUntilExpiry = Math.Max(0, r.EndDate.DayNumber - today.DayNumber);
+            var daysUntilExpiry = Math.Max(0, r.EndDate.DayNumber - localToday.DayNumber);
+            var isExpiringSoon = string.Equals(r.Status, RentalAgreementStatusConstants.ExpiringSoon, StringComparison.OrdinalIgnoreCase)
+                                 || (daysUntilExpiry <= 7 && (r.Status == RentalAgreementStatusConstants.Active || r.Status == "extended"));
 
 
 
@@ -239,8 +250,8 @@ public class CustomerRentalService : ICustomerRentalService
                 CheckedInAt = r.CheckedInAt,
 
                 HasOverdueDebt = hasOverdueDebt,
-
                 DaysUntilExpiry = daysUntilExpiry,
+                IsExpiringSoon = isExpiringSoon,
                 ImageUrl = !string.IsNullOrWhiteSpace(unit?.Notes) && System.Text.RegularExpressions.Regex.Match(unit.Notes, @"\[IMG:([^\]]+)\]").Success
                     ? System.Text.RegularExpressions.Regex.Match(unit.Notes, @"\[IMG:([^\]]+)\]").Groups[1].Value.Trim()
                     : null
@@ -301,8 +312,8 @@ public class CustomerRentalService : ICustomerRentalService
 
 
         var now = DateTimeOffset.UtcNow;
-
-        var today = DateOnly.FromDateTime(now.DateTime);
+        var tzCred = TimeZoneHelper.ResolveTimeZone(agreement.Facility?.Timezone, _rentalSettings.DefaultTimezone);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, tzCred).DateTime);
 
 
 
@@ -353,7 +364,9 @@ public class CustomerRentalService : ICustomerRentalService
 
         // BR-REN-03: access is suspended from 00:00 on the day after an unpaid invoice is due.
 
-        var isOverdue = agreement.Invoices.Any(i => IsOverdueRentalDebt(i, today));
+        var isOverdue = agreement.Invoices.Any(i => IsOverdueRentalDebt(i, today))
+                        || string.Equals(agreement.Status, RentalAgreementStatusConstants.Overdue, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(agreement.Status, "defaulted", StringComparison.OrdinalIgnoreCase);
 
 
 
@@ -392,29 +405,22 @@ public class CustomerRentalService : ICustomerRentalService
 
 
             return new AccessCredentialDto
-
             {
-
+                CredentialId = pinCred?.Id ?? 0,
+                CredentialType = pinCred?.CredentialType ?? CredentialTypeConstants.Pin,
+                DisplayHint = null,
                 AgreementId = agreement.Id,
-
                 AgreementNo = agreement.AgreementNo,
-
                 UnitCode = unitCode,
-
                 FacilityName = facilityName,
-
                 Status = CredentialStatusConstants.Suspended,
-
+                IssuedAt = pinCred?.IssuedAt ?? agreement.CreatedAt,
+                ExpiresAt = pinCred?.ExpiresAt,
                 KeypadPin = null,
-
                 GateQrToken = null,
-
                 QrExpiresInSeconds = 0,
-
                 QrExpiresAt = null,
-
                 SuspendedReason = RentalSuspensionReasons.OverdueDebtExceeded
-
             };
 
         }
@@ -469,42 +475,49 @@ public class CustomerRentalService : ICustomerRentalService
 
 
 
-        // Generate Time-based JWT Gate QR Token with configurable TTL
-
+        // Generate Gate QR Token (canonical HMAC v1 token when IQrTokenService is available)
         var qrExpiresAt = now.AddSeconds(_rentalSettings.QrTtlSeconds);
+        var gateQrToken = _qrTokenService != null
+            ? _qrTokenService.IssueToken(
+                "gate",
+                agreement.ReservationId > 0 ? agreement.ReservationId : null,
+                agreement.Id,
+                customerId,
+                agreement.FacilityId,
+                TimeSpan.FromSeconds(_rentalSettings.QrTtlSeconds))
+            : GenerateGateAccessJwt(agreement, activeAlloc?.StorageUnitId ?? 0, qrExpiresAt);
 
-        var gateQrToken = GenerateGateAccessJwt(agreement, activeAlloc?.StorageUnitId ?? 0, qrExpiresAt);
-
-
+        var decryptedPin = PinProtectionHelper.Decrypt(pinCred.DisplayHint);
+        if (string.IsNullOrEmpty(decryptedPin))
+        {
+            decryptedPin = GenerateSecureNumericPin();
+            pinCred.SecretDigest = BCrypt.Net.BCrypt.HashPassword(decryptedPin);
+            pinCred.DisplayHint = PinProtectionHelper.Encrypt(decryptedPin);
+            pinCred.Status = CredentialStatusConstants.Active;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
 
         _logger.LogInformation(RentalLogMessages.AccessCredentialsRetrieved, customerId, agreementId, CredentialStatusConstants.Active);
 
-
-
         return new AccessCredentialDto
-
         {
-
+            CredentialId = pinCred.Id,
+            CredentialType = pinCred.CredentialType,
+            DisplayHint = !string.IsNullOrEmpty(decryptedPin) && decryptedPin.Length >= 2
+                ? $"PIN ****{decryptedPin[^2..]}"
+                : null,
             AgreementId = agreement.Id,
-
             AgreementNo = agreement.AgreementNo,
-
             UnitCode = unitCode,
-
             FacilityName = facilityName,
-
             Status = CredentialStatusConstants.Active,
-
-            KeypadPin = PinProtectionHelper.Decrypt(pinCred.DisplayHint),
-
+            IssuedAt = pinCred.IssuedAt,
+            ExpiresAt = pinCred.ExpiresAt,
+            KeypadPin = decryptedPin,
             GateQrToken = gateQrToken,
-
             QrExpiresInSeconds = _rentalSettings.QrTtlSeconds,
-
             QrExpiresAt = qrExpiresAt,
-
             SuspendedReason = null
-
         };
 
     }
@@ -558,48 +571,41 @@ public class CustomerRentalService : ICustomerRentalService
         // 4. Verify agreement ownership
 
         var agreement = await _dbContext.RentalAgreements
-
             .Include(a => a.AccessCredentials)
-
             .Include(a => a.Invoices)
-
             .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
 
-
-
         if (agreement is null)
-
         {
-
             throw AppException.FromError(RentalErrors.AgreementNotFound);
-
         }
 
+        var facilityTzStr = await _dbContext.Facilities
+            .AsNoTracking()
+            .Where(f => f.Id == agreement.FacilityId)
+            .Select(f => f.Timezone)
+            .FirstOrDefaultAsync(cancellationToken);
 
-
-        // 5. BR-REN-03: If access is suspended due to debt, reject PIN change
-
+        // 5. BR-REN-03: If access is suspended due to debt/overdue/suspended credential, reject PIN change
         var now = DateTimeOffset.UtcNow;
+        var tzCred = TimeZoneHelper.ResolveTimeZone(facilityTzStr, _rentalSettings.DefaultTimezone);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, tzCred).DateTime);
 
-        var today = DateOnly.FromDateTime(now.DateTime);
+        var pinCred = agreement.AccessCredentials.FirstOrDefault(c => c.CredentialType == CredentialTypeConstants.Pin && c.AuthorizedMemberId == null)
+                      ?? agreement.AccessCredentials.FirstOrDefault(c => c.CredentialType == CredentialTypeConstants.Pin);
 
-        var isOverdue = agreement.Invoices.Any(i => IsOverdueRentalDebt(i, today));
-
-
+        var isOverdue = agreement.Invoices.Any(i => IsOverdueRentalDebt(i, today))
+                        || string.Equals(agreement.Status, RentalAgreementStatusConstants.Overdue, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(agreement.Status, "defaulted", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(agreement.Status, RentalAgreementStatusConstants.Terminated, StringComparison.OrdinalIgnoreCase)
+                        || pinCred?.Status == CredentialStatusConstants.Suspended;
 
         if (isOverdue)
-
         {
-
             throw AppException.FromError(RentalErrors.AccessSuspendedDueToOverdue);
-
         }
 
-
-
         // 6. Verify current PIN if credential exists and current PIN is provided
-
-        var pinCred = agreement.AccessCredentials.FirstOrDefault(c => c.CredentialType == CredentialTypeConstants.Pin);
 
 
 
@@ -633,68 +639,39 @@ public class CustomerRentalService : ICustomerRentalService
 
 
 
-        // 7. Update PIN securely and set status to Pending for hardware/IoT lock synchronization
-
+        // 7. Update PIN securely and activate immediately
         if (pinCred is null)
-
         {
-
             pinCred = new AccessCredential
-
             {
-
                 AgreementId = agreement.Id,
-
                 CredentialType = CredentialTypeConstants.Pin,
-
                 SecretDigest = BCrypt.Net.BCrypt.HashPassword(request.NewPin),
-
                 DisplayHint = PinProtectionHelper.Encrypt(request.NewPin),
-
-                Status = CredentialStatusConstants.Pending,
-
+                Status = CredentialStatusConstants.Active,
                 IssuedAt = now,
-
                 CreatedAt = now
-
             };
-
             _dbContext.AccessCredentials.Add(pinCred);
-
         }
-
         else
-
         {
-
             pinCred.SecretDigest = BCrypt.Net.BCrypt.HashPassword(request.NewPin);
-
             pinCred.DisplayHint = PinProtectionHelper.Encrypt(request.NewPin);
-
-            pinCred.Status = CredentialStatusConstants.Pending;
-
+            pinCred.Status = CredentialStatusConstants.Active;
         }
-
-
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation(RentalLogMessages.PinChanged, customerId, agreementId);
 
-
-
         return new ChangePinResponseDto
-
         {
-
             Success = true,
-
-            SyncStatus = PinSyncStatusConstants.Pending,
-
-            Message = RentalPinMessages.PinSyncPending,
-
-            EstimatedSyncSeconds = _rentalSettings.EstimatedPinSyncSeconds
-
+            SyncStatus = PinSyncStatusConstants.Synced,
+            Message = RentalPinMessages.PinSyncCompleted,
+            EstimatedSyncSeconds = 0,
+            ChangedAt = now
         };
 
     }
@@ -774,8 +751,8 @@ public class CustomerRentalService : ICustomerRentalService
 
 
         var now = DateTimeOffset.UtcNow;
-
-        var today = DateOnly.FromDateTime(now.DateTime);
+        var tzCred = TimeZoneHelper.ResolveTimeZone(agreement.Facility?.Timezone, _rentalSettings.DefaultTimezone);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, tzCred).DateTime);
 
 
 
@@ -826,7 +803,9 @@ public class CustomerRentalService : ICustomerRentalService
 
         // 6. BR-REN-03: Real-time debt check
 
-        var isOverdue = agreement.Invoices.Any(i => IsOverdueRentalDebt(i, today));
+        var isOverdue = agreement.Invoices.Any(i => IsOverdueRentalDebt(i, today))
+                        || string.Equals(agreement.Status, RentalAgreementStatusConstants.Overdue, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(agreement.Status, "defaulted", StringComparison.OrdinalIgnoreCase);
 
 
 
@@ -875,62 +854,53 @@ public class CustomerRentalService : ICustomerRentalService
 
 
 
+        var accessPoint = await ResolveAccessPointForUnlockAsync(agreement.FacilityId, request.AccessPointId, cancellationToken);
+
         if (!isPinValid)
-
         {
-
             var newCount = failedAttempts + 1;
-
             _cache.Set(lockoutKey, newCount, TimeSpan.FromMinutes(_rentalSettings.PinLockoutDurationMinutes));
-
+            if (accessPoint != null)
+            {
+                await RecordUnlockAccessEventAsync(pinCred.Id, accessPoint.Id, "denied", "Invalid PIN", now, cancellationToken);
+            }
             _logger.LogWarning(RentalLogMessages.FailedUnlockVerification,
-
                 agreementId, newCount, _rentalSettings.MaxFailedPinAttempts);
-
             throw AppException.FromError(RentalErrors.IncorrectPin);
-
         }
 
-
-
         // Reset lockout count on success
-
         _cache.Remove(lockoutKey);
 
-
-
         var activeAlloc = agreement.UnitAllocations.FirstOrDefault(a => a.Status == AllocationStatusConstants.Active);
-
         var unitCode = activeAlloc?.StorageUnit?.UnitCode ?? string.Empty;
-
         var facilityName = agreement.Facility?.Name ?? string.Empty;
 
-
+        AccessEvent? accessEvent = null;
+        if (accessPoint != null)
+        {
+            accessEvent = await RecordUnlockAccessEventAsync(
+                pinCred.Id,
+                accessPoint.Id,
+                "granted",
+                $"Unit {unitCode} unlocked by customer",
+                now,
+                cancellationToken);
+        }
 
         _logger.LogInformation(RentalLogMessages.UnitUnlockedSuccess,
-
             customerId, unitCode, agreementId);
 
-
-
         return new UnlockStorageUnitResponseDto
-
         {
-
             Success = true,
-
             AgreementId = agreement.Id,
-
             UnitCode = unitCode,
-
             FacilityName = facilityName,
-
             UnlockedAt = now,
-
+            AccessEventId = accessEvent?.Id,
             RelockAfterSeconds = RentalUnlockMessages.DefaultRelockAfterSeconds,
-
             Message = string.Format(RentalUnlockMessages.UnitUnlockedFormat, unitCode, facilityName, RentalUnlockMessages.DefaultRelockAfterSeconds)
-
         };
 
     }
@@ -1216,18 +1186,18 @@ public class CustomerRentalService : ICustomerRentalService
     {
 
         var agreement = await _dbContext.RentalAgreements
-
             .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
 
-
-
         if (agreement == null)
-
             throw AppException.FromError(RentalErrors.AgreementNotFound);
 
-
-
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var moveFacilityTz = await _dbContext.Facilities
+            .AsNoTracking()
+            .Where(f => f.Id == agreement.FacilityId)
+            .Select(f => f.Timezone)
+            .FirstOrDefaultAsync(cancellationToken);
+        var tzMove = TimeZoneHelper.ResolveTimeZone(moveFacilityTz, _rentalSettings.DefaultTimezone);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, tzMove).DateTime);
 
         if (request.RequestedMoveOutDate < today)
 
@@ -1267,15 +1237,20 @@ public class CustomerRentalService : ICustomerRentalService
 
         {
 
+            var nowMoveOut = DateTimeOffset.UtcNow;
+            var bankName = request.BankName?.Trim();
+            var bankAccountNo = request.ResolvedBankAccountNo;
+            var bankAccountHolder = request.BankAccountHolder?.Trim();
+
             string? moveOutReason = request.Reason?.Trim();
-            if (!string.IsNullOrWhiteSpace(request.BankName) || !string.IsNullOrWhiteSpace(request.BankAccountNumber))
+            if (!string.IsNullOrWhiteSpace(bankName) || !string.IsNullOrWhiteSpace(bankAccountNo))
             {
                 var note = request.Reason?.Trim();
                 var bankData = new
                 {
-                    bank = request.BankName?.Trim(),
-                    acc = request.BankAccountNumber?.Trim(),
-                    holder = request.BankAccountHolder?.Trim(),
+                    bank = bankName,
+                    acc = bankAccountNo,
+                    holder = bankAccountHolder,
                     note = note
                 };
                 var json = JsonSerializer.Serialize(bankData, BankJsonOptions);
@@ -1290,9 +1265,9 @@ public class CustomerRentalService : ICustomerRentalService
                     {
                         var truncatedData = new
                         {
-                            bank = request.BankName?.Trim(),
-                            acc = request.BankAccountNumber?.Trim(),
-                            holder = request.BankAccountHolder?.Trim(),
+                            bank = bankName,
+                            acc = bankAccountNo,
+                            holder = bankAccountHolder,
                             note = note.Substring(0, Math.Min(note.Length, availableForNote - 5))
                         };
                         var truncatedJson = JsonSerializer.Serialize(truncatedData, BankJsonOptions);
@@ -1304,7 +1279,7 @@ public class CustomerRentalService : ICustomerRentalService
 
                     if (moveOutReason == null || moveOutReason.Length > 250 || !moveOutReason.StartsWith("{"))
                     {
-                        var compact = $"BANK:{request.BankName?.Trim()}|ACC:{request.BankAccountNumber?.Trim()}|NAME:{request.BankAccountHolder?.Trim()}";
+                        var compact = $"BANK:{bankName}|ACC:{bankAccountNo}|NAME:{bankAccountHolder}";
                         moveOutReason = compact.Length <= 250 ? compact : compact.Substring(0, 250);
                     }
                 }
@@ -1320,57 +1295,54 @@ public class CustomerRentalService : ICustomerRentalService
                 RequestedBy = customerId,
                 RequestedMoveOutDate = request.RequestedMoveOutDate,
                 Reason = moveOutReason,
-
+                BankName = bankName,
+                BankAccountNo = bankAccountNo,
+                BankAccountHolder = bankAccountHolder,
+                BankSubmittedAt = (!string.IsNullOrWhiteSpace(bankName) || !string.IsNullOrWhiteSpace(bankAccountNo)) ? nowMoveOut : null,
                 Status = MoveOutStatusConstants.Requested,
-
-                CreatedAt = DateTimeOffset.UtcNow,
-
-                UpdatedAt = DateTimeOffset.UtcNow
-
+                CreatedAt = nowMoveOut,
+                UpdatedAt = nowMoveOut
             };
-
-
 
             _dbContext.MoveOutRequests.Add(moveOut);
 
             var existingPendingRefund = await _dbContext.Refunds
-                .Where(r => r.AgreementId == agreementId && r.Status == RefundStatusConstants.Pending)
+                .Where(r => r.AgreementId == agreementId && (r.Status == RefundStatusConstants.Pending || r.Status == RefundStatusConstants.Requested))
                 .OrderByDescending(r => r.CreatedAt)
                 .FirstOrDefaultAsync(cancellationToken);
             if (existingPendingRefund != null && moveOutReason != null && moveOutReason.StartsWith("{"))
             {
                 existingPendingRefund.Reason = moveOutReason;
-                existingPendingRefund.UpdatedAt = DateTimeOffset.UtcNow;
+                existingPendingRefund.UpdatedAt = nowMoveOut;
             }
 
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-
-
             if (transaction != null)
-
             {
-
                 await transaction.CommitAsync(cancellationToken);
-
             }
 
-
+            var moveOutQrToken = _qrTokenService?.IssueToken(
+                "move_out",
+                agreement.ReservationId > 0 ? agreement.ReservationId : null,
+                agreement.Id,
+                customerId,
+                agreement.FacilityId,
+                TimeSpan.FromDays(14));
 
             return new MoveOutResponseDto(
-
                 Id: moveOut.Id,
-
                 AgreementId: moveOut.AgreementId,
-
                 RequestedMoveOutDate: moveOut.RequestedMoveOutDate,
-
                 Status: moveOut.Status,
-
                 Reason: moveOut.Reason,
-
-                CreatedAt: moveOut.CreatedAt
-
+                CreatedAt: moveOut.CreatedAt,
+                MoveOutRequestId: moveOut.Id,
+                MoveOutQrToken: moveOutQrToken,
+                BankName: moveOut.BankName,
+                BankAccountNo: moveOut.BankAccountNo,
+                BankAccountHolder: moveOut.BankAccountHolder
             );
 
         }
@@ -1409,186 +1381,18 @@ public class CustomerRentalService : ICustomerRentalService
 
 
 
-    public async Task<RefundPreviewDto> GetRefundPreviewAsync(
-
+    public Task<RefundPreviewDto> GetRefundPreviewAsync(
         long customerId,
-
         long agreementId,
-
         CancellationToken cancellationToken = default)
+        => GetRefundPreviewAsync(customerId, agreementId, null, cancellationToken);
 
-    {
-
-        var agreement = await _dbContext.RentalAgreements
-
-            .AsNoTracking()
-
-            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
-
-
-
-        if (agreement == null)
-
-            throw AppException.FromError(RentalErrors.AgreementNotFound);
-
-
-
-        var deposit = agreement.DepositBalance;
-
-        var estimatedCleaning = 0m;
-
-        var estimatedRepair = 0m;
-
-        var estimatedOverdue = 0m;
-
-
-
-        // Check if there are overdue invoices
-
-        var unpaidInvoices = await _dbContext.Invoices
-            .AsNoTracking()
-            .Where(i => i.AgreementId == agreementId &&
-                        (i.Status == InvoiceStatusConstants.Overdue ||
-                         i.Status == InvoiceStatusConstants.Open ||
-                         i.Status == InvoiceStatusConstants.PartiallyPaid))
-            .ToListAsync(cancellationToken);
-
-
-
-        if (unpaidInvoices.Any())
-
-        {
-
-            estimatedOverdue = unpaidInvoices.Sum(i => i.TotalAmount - i.PaidAmount);
-
-        }
-
-
-
-        var estimatedNetRefund = Math.Max(0m, deposit - (estimatedCleaning + estimatedRepair + estimatedOverdue));
-
-
-
-        var refundNote = unpaidInvoices.Any()
-            ? $"{_rentalSettings.DefaultRefundPreviewNote} Khoản khấu trừ công nợ bao gồm tất cả các hóa đơn mở và quá hạn chưa thanh toán của hợp đồng."
-            : _rentalSettings.DefaultRefundPreviewNote;
-
-        return new RefundPreviewDto(
-
-            AgreementId: agreement.Id,
-
-            AgreementNo: agreement.AgreementNo,
-
-            DepositBalance: deposit,
-
-            EstimatedCleaningFee: estimatedCleaning,
-
-            EstimatedRepairFee: estimatedRepair,
-
-            EstimatedOverdueCharges: estimatedOverdue,
-
-            EstimatedNetRefund: estimatedNetRefund,
-
-            Note: refundNote
-
-        );
-
-    }
-
-
-
-    public async Task<RenewAgreementResponseDto> RenewAgreementAsync(
-
+    public Task<RenewAgreementResponseDto> RenewAgreementAsync(
         long customerId,
-
         long agreementId,
-
         RenewAgreementRequest request,
-
         CancellationToken cancellationToken = default)
-
-    {
-
-        if (request.RenewalMonths < _rentalSettings.MinRenewalMonths || request.RenewalMonths > _rentalSettings.MaxRenewalMonths)
-
-            throw AppException.FromError(RentalErrors.InvalidRenewalMonths);
-
-
-
-        var agreement = await _dbContext.RentalAgreements
-            .Include(a => a.UnitAllocations)
-                .ThenInclude(ua => ua.StorageUnit)
-            .FirstOrDefaultAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
-
-        if (agreement == null)
-            throw AppException.FromError(RentalErrors.AgreementNotFound);
-
-        var activePending = await _dbContext.RentalRenewals
-            .Where(r => r.AgreementId == agreementId && r.Status == RenewalStatusConstants.PendingPayment)
-            .OrderByDescending(r => r.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (activePending != null)
-        {
-            // Auto-cancel previous unpaid renewal request so customer is never stuck
-            activePending.Status = RenewalStatusConstants.Cancelled;
-            await _dbContext.SaveChangesAsync(cancellationToken);
-        }
-
-        var activeAlloc = agreement.UnitAllocations.FirstOrDefault(a => a.Status == AllocationStatusConstants.Active)
-                          ?? agreement.UnitAllocations.FirstOrDefault();
-        var unitTypeId = activeAlloc?.StorageUnit?.UnitTypeId ?? 0;
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-
-        decimal currentRate = agreement.MonthlyRateSnapshot;
-        if (unitTypeId > 0)
-        {
-            var activeRate = await _dbContext.FacilityRates
-                .Where(fr => fr.FacilityId == agreement.FacilityId &&
-                             fr.UnitTypeId == unitTypeId &&
-                             fr.ValidFrom <= today &&
-                             (fr.ValidTo == null || fr.ValidTo >= today))
-                .OrderByDescending(fr => fr.ValidFrom)
-                .ThenByDescending(fr => fr.Id)
-                .Select(fr => fr.MonthlyRate)
-                .FirstOrDefaultAsync(cancellationToken);
-
-            if (activeRate > 0)
-            {
-                currentRate = activeRate;
-            }
-        }
-
-        var newEndDate = agreement.EndDate.AddMonths(request.RenewalMonths);
-        var totalAmount = currentRate * request.RenewalMonths;
-
-        var renewal = new RentalRenewal
-        {
-            AgreementId = agreement.Id,
-            RequestedBy = customerId,
-            OldEndDate = agreement.EndDate,
-            RequestedEndDate = newEndDate,
-            OldMonthlyRate = agreement.MonthlyRateSnapshot,
-            NewMonthlyRate = currentRate,
-            Status = RenewalStatusConstants.PendingPayment,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-
-        _dbContext.RentalRenewals.Add(renewal);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        return new RenewAgreementResponseDto(
-            RenewalId: renewal.Id,
-            AgreementId: agreement.Id,
-            OldEndDate: renewal.OldEndDate,
-            NewEndDate: renewal.RequestedEndDate,
-            MonthlyRate: currentRate,
-            TotalRenewalAmount: totalAmount,
-            Status: renewal.Status,
-            CreatedAt: renewal.CreatedAt
-        );
-
-    }
+        => RenewAgreementV1InternalAsync(customerId, agreementId, request, cancellationToken);
 
 
 
@@ -1652,136 +1456,20 @@ public class CustomerRentalService : ICustomerRentalService
 
 
 
-    public async Task<AuthorizedMemberDto> AddAuthorizedMemberAsync(
-
+    public Task<AuthorizedMemberDto> AddAuthorizedMemberAsync(
         long customerId,
-
         long agreementId,
-
         CreateAuthorizedMemberRequest request,
-
         CancellationToken cancellationToken = default)
-
-    {
-
-        var agreementExists = await _dbContext.RentalAgreements
-
-            .AnyAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
-
-
-
-        if (!agreementExists)
-
-            throw AppException.FromError(RentalErrors.AgreementNotFound);
-
-
-
-        if (string.IsNullOrWhiteSpace(request.FullName))
-
-            throw AppException.FromError(RentalErrors.EmptyMemberName);
-
-
-
-        var now = DateTimeOffset.UtcNow;
-
-        var member = new AuthorizedAccessMember
-
-        {
-
-            AgreementId = agreementId,
-
-            FullName = request.FullName.Trim(),
-
-            IdentityFingerprint = request.IdentityFingerprint?.Trim(),
-
-            RelationshipToCustomer = request.RelationshipToCustomer?.Trim(),
-
-            ValidFrom = now,
-
-            ValidTo = request.ValidTo,
-
-            Status = AuthorizedMemberStatusConstants.Active,
-
-            CreatedBy = customerId,
-
-            CreatedAt = now
-
-        };
-
-
-
-        _dbContext.AuthorizedAccessMembers.Add(member);
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-
-
-        return new AuthorizedMemberDto(
-
-            Id: member.Id,
-
-            AgreementId: member.AgreementId,
-
-            FullName: member.FullName,
-
-            IdentityFingerprint: member.IdentityFingerprint,
-
-            RelationshipToCustomer: member.RelationshipToCustomer,
-
-            ValidFrom: member.ValidFrom,
-
-            ValidTo: member.ValidTo,
-
-            Status: member.Status,
-
-            CreatedAt: member.CreatedAt
-
-        );
-
-    }
-
-
+        => AddAuthorizedMemberV1InternalAsync(customerId, agreementId, request, cancellationToken);
 
     public async Task RevokeAuthorizedMemberAsync(
-
         long customerId,
-
         long agreementId,
-
         long memberId,
-
         CancellationToken cancellationToken = default)
-
     {
-
-        var agreementExists = await _dbContext.RentalAgreements
-
-            .AnyAsync(a => a.Id == agreementId && a.CustomerId == customerId, cancellationToken);
-
-
-
-        if (!agreementExists)
-
-            throw AppException.FromError(RentalErrors.AgreementNotFound);
-
-
-
-        var member = await _dbContext.AuthorizedAccessMembers
-
-            .FirstOrDefaultAsync(m => m.Id == memberId && m.AgreementId == agreementId, cancellationToken);
-
-
-
-        if (member == null || member.Status != AuthorizedMemberStatusConstants.Active)
-
-            throw AppException.FromError(RentalErrors.MemberNotFound);
-
-
-
-        member.Status = AuthorizedMemberStatusConstants.Revoked;
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
+        await RevokeAuthorizedMemberV1Async(customerId, agreementId, memberId, cancellationToken);
     }
 
 
@@ -2205,7 +1893,7 @@ public class CustomerRentalService : ICustomerRentalService
             if (_dbContext.Database.IsSqlServer())
             {
                 targetUnit = await _dbContext.StorageUnits
-                    .FromSqlInterpolated($"SELECT TOP 1 * FROM [core].[storage_units] WITH (UPDLOCK, ROWLOCK, READPAST) WHERE facility_id = {request.RequestedFacilityId} AND unit_type_id = {request.RequestedUnitTypeId} AND physical_status = {StorageUnitStatusConstants.Available}")
+                    .FromSqlInterpolated($"SELECT TOP 1 * FROM [core].[storage_units] WITH (UPDLOCK, ROWLOCK, READPAST) WHERE facility_id = {request.RequestedFacilityId} AND unit_type_id = {request.RequestedUnitTypeId} AND is_listed = 1 AND physical_status = {StorageUnitStatusConstants.Available}")
                     .FirstOrDefaultAsync(cancellationToken);
             }
             else
@@ -2233,6 +1921,7 @@ public class CustomerRentalService : ICustomerRentalService
             var isCrossFacility = request.RequestedFacilityId != agreement.FacilityId;
             var cleaningFee = isCrossFacility ? _rentalSettings.CrossFacilityCleaningFee : 0m;
             var total = decimal.Round(diffRent, 0, MidpointRounding.AwayFromZero) + diffDeposit + cleaningFee;
+            var isDowngrade = targetMonthlyRate < agreement.MonthlyRateSnapshot && total <= 0m;
 
             var now = DateTimeOffset.UtcNow;
 
@@ -2243,6 +1932,7 @@ public class CustomerRentalService : ICustomerRentalService
                 RequestedFacilityId = request.RequestedFacilityId,
                 FromUnitId = activeAllocation.StorageUnitId,
                 ToUnitId = targetUnit.Id,
+                TransferType = isDowngrade ? "downgrade" : (total > 0 ? "upgrade" : "same_tier"),
                 RequestedEffectiveDate = request.MoveOutDate,
                 MoveOutDate = request.MoveOutDate,
                 MoveInDate = request.MoveInDate,
@@ -2251,41 +1941,56 @@ public class CustomerRentalService : ICustomerRentalService
                 CleaningFee = cleaningFee,
                 TotalPaidAmount = total,
                 Reason = request.Reason.Trim(),
-                Status = total > 0 ? TransferRequestStatusConstants.PendingPayment : TransferRequestStatusConstants.Paid,
+                Status = total > 0 ? TransferRequestStatusConstants.PendingPayment : TransferRequestStatusConstants.Completed,
+                CompletedAt = total > 0 ? null : now,
                 RequestedBy = customerId,
                 CreatedAt = now
             };
 
-            // The destination is held immediately.
-            targetUnit.PhysicalStatus = StorageUnitStatusConstants.Reserved;
-            targetUnit.UpdatedAt = now;
             _dbContext.UnitTransferRequests.Add(transfer);
-
-            if (total <= 0 && targetMonthlyRate < agreement.MonthlyRateSnapshot)
-            {
-                var promoCode = $"{TransferConstants.DowngradePromoPrefix}{transfer.AgreementId}-{Guid.NewGuid().ToString()[..4].ToUpper()}";
-                var promo = new Promotion
-                {
-                    Code = promoCode,
-                    Name = $"Ưu đãi chuyển kho tiết kiệm #{agreement.AgreementNo}",
-                    Description = "Tặng voucher giảm giá 10% cho khách hàng khi chuyển đổi sang kho tiết kiệm hơn.",
-                    DiscountType = PromotionDiscountTypeConstants.Percentage,
-                    DiscountValue = _rentalSettings.DowngradeVoucherDiscountPercent,
-                    MaxDiscountAmount = _rentalSettings.DowngradeVoucherMaxAmount,
-                    UsageLimit = 1,
-                    PerCustomerLimit = 1,
-                    ValidFrom = now,
-                    ValidTo = now.AddDays(_rentalSettings.DowngradeVoucherValidityDays),
-                    IsActive = true,
-                    CreatedAt = now
-                };
-                _dbContext.Promotions.Add(promo);
-            }
-
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            if (total > 0)
+            if (total <= 0)
             {
+                // Downgrade / 0 VND switch: execute unit transfer immediately without Manager approval
+                var oldUnit = await _dbContext.StorageUnits
+                    .FirstOrDefaultAsync(u => u.Id == activeAllocation.StorageUnitId, cancellationToken);
+                if (oldUnit != null)
+                {
+                    oldUnit.PhysicalStatus = StorageUnitStatusConstants.Available;
+                    oldUnit.UpdatedAt = now;
+                }
+
+                activeAllocation.Status = AllocationStatusConstants.Released;
+                activeAllocation.EndedAt = now;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+
+                targetUnit.PhysicalStatus = StorageUnitStatusConstants.Occupied;
+                targetUnit.UpdatedAt = now;
+
+                _dbContext.UnitAllocations.Add(new UnitAllocation
+                {
+                    AgreementId = agreement.Id,
+                    StorageUnitId = targetUnit.Id,
+                    AllocationKind = AllocationKindConstants.Rental,
+                    AllocationStartDate = today,
+                    AllocationEndDate = agreement.EndDate,
+                    Status = AllocationStatusConstants.Active,
+                    CreatedAt = now
+                });
+
+                agreement.FacilityId = targetUnit.FacilityId;
+                agreement.MonthlyRateSnapshot = targetMonthlyRate;
+                agreement.UpdatedAt = now;
+
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            else
+            {
+                // Upgrade: hold target unit until SePay webhook confirms payment
+                targetUnit.PhysicalStatus = StorageUnitStatusConstants.Reserved;
+                targetUnit.UpdatedAt = now;
+
                 var invoice = new Invoice
                 {
                     InvoiceNo = $"{TransferConstants.InvoicePrefix}{now:yyyyMMdd}-{transfer.Id:D6}",
@@ -2303,6 +2008,8 @@ public class CustomerRentalService : ICustomerRentalService
                 };
                 _dbContext.Invoices.Add(invoice);
                 await _dbContext.SaveChangesAsync(cancellationToken);
+
+                transfer.TargetInvoiceId = invoice.Id;
 
                 _dbContext.InvoiceLines.Add(new InvoiceLine { InvoiceId = invoice.Id, LineType = InvoiceLineTypeConstants.Rent, Description = $"Transfer price difference #{transfer.Id}", Quantity = 1, UnitPrice = transfer.DiffRentAmount, LineAmount = transfer.DiffRentAmount, Metadata = "{}" });
                 _dbContext.InvoiceLines.Add(new InvoiceLine { InvoiceId = invoice.Id, LineType = InvoiceLineTypeConstants.Deposit, Description = $"Transfer deposit difference #{transfer.Id}", Quantity = 1, UnitPrice = transfer.DiffDepositAmount, LineAmount = transfer.DiffDepositAmount, Metadata = "{}" });
@@ -2608,6 +2315,9 @@ public class CustomerRentalService : ICustomerRentalService
 
         if (invoice.Status == InvoiceStatusConstants.Paid)
             throw AppException.FromError(RentalErrors.CannotCancelPaidInvoice);
+
+        if (invoice.InvoiceNo != null && (invoice.InvoiceNo.StartsWith("INV-PEN", StringComparison.OrdinalIgnoreCase) || invoice.TicketChargeProposalId.HasValue))
+            throw AppException.FromError(RentalErrors.CannotCancelPenaltyInvoice);
 
         var now = DateTimeOffset.UtcNow;
 

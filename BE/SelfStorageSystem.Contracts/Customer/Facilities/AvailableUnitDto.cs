@@ -10,4 +10,7 @@ public class AvailableUnitDto
     public string? FloorLabel { get; set; }
     public string? ZoneLabel { get; set; }
     public decimal MonthlyRate { get; set; }
+    public UnitMapPositionDto? MapPosition { get; set; }
 }
+
+public sealed record UnitMapPositionDto(decimal X, decimal Y, decimal Width, decimal Height);

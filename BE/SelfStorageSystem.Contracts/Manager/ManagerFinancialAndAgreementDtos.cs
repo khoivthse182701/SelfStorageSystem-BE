@@ -229,6 +229,14 @@ public class ManagerAddDelinquencyActionRequest
 
     public string? Note { get; set; }
 
+    public string? Notes
+    {
+        get => Note;
+        set { if (!string.IsNullOrWhiteSpace(value)) Note = value; }
+    }
+
+    public decimal? LateFeeAmount { get; set; }
+
     public string? UpdateCaseStatus { get; set; }
 }
 

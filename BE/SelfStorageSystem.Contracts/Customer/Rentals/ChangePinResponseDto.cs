@@ -6,4 +6,5 @@ public class ChangePinResponseDto
     public string SyncStatus { get; set; } = null!;
     public string Message { get; set; } = null!;
     public int EstimatedSyncSeconds { get; set; }
+    public DateTimeOffset ChangedAt { get; set; }
 }

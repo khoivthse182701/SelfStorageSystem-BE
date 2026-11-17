@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace SelfStorageSystem.Contracts.Customer.Rentals;
 
 public record RequestMoveOutRequest(
@@ -5,8 +7,13 @@ public record RequestMoveOutRequest(
     string? Reason = null,
     string? BankName = null,
     string? BankAccountNumber = null,
-    string? BankAccountHolder = null
-);
+    string? BankAccountHolder = null,
+    string? BankAccountNo = null
+)
+{
+    [JsonIgnore]
+    public string? ResolvedBankAccountNo => !string.IsNullOrWhiteSpace(BankAccountNo) ? BankAccountNo.Trim() : BankAccountNumber?.Trim();
+}
 
 public record MoveOutResponseDto(
     long Id,
@@ -14,8 +21,16 @@ public record MoveOutResponseDto(
     DateOnly RequestedMoveOutDate,
     string Status,
     string? Reason,
-    DateTimeOffset CreatedAt
-);
+    DateTimeOffset CreatedAt,
+    long? MoveOutRequestId = null,
+    string? MoveOutQrToken = null,
+    string? BankName = null,
+    string? BankAccountNo = null,
+    string? BankAccountHolder = null
+)
+{
+    public long ResolvedMoveOutRequestId => MoveOutRequestId ?? Id;
+}
 
 public record RefundPreviewDto(
     long AgreementId,
@@ -25,12 +40,22 @@ public record RefundPreviewDto(
     decimal EstimatedRepairFee,
     decimal EstimatedOverdueCharges,
     decimal EstimatedNetRefund,
-    string Note
+    string Note,
+    decimal OriginalDeposit = 0m,
+    decimal UnpaidDebt = 0m,
+    decimal EstimatedUnusedRentRefund = 0m,
+    decimal EarlyTerminationFee = 0m
 );
 
 public record RenewAgreementRequest(
-    int RenewalMonths
-);
+    int RenewalMonths = 0,
+    int? DurationMonths = null,
+    string? PromotionCode = null
+)
+{
+    [JsonIgnore]
+    public int ResolvedMonths => DurationMonths ?? RenewalMonths;
+}
 
 public record RenewAgreementResponseDto(
     long RenewalId,
@@ -40,14 +65,21 @@ public record RenewAgreementResponseDto(
     decimal MonthlyRate,
     decimal TotalRenewalAmount,
     string Status,
-    DateTimeOffset CreatedAt
+    DateTimeOffset CreatedAt,
+    long? InvoiceId = null,
+    string? InvoiceNo = null,
+    DateOnly? RequestedEndDate = null,
+    decimal OverdueLateFeeAmount = 0m,
+    decimal TotalDueAmount = 0m,
+    bool CheckoutRequired = true
 );
 
 public record CreateAuthorizedMemberRequest(
     string FullName,
-    string? IdentityFingerprint,
-    string? RelationshipToCustomer,
-    DateTimeOffset? ValidTo = null
+    string? IdentityFingerprint = null,
+    string? RelationshipToCustomer = null,
+    DateTimeOffset? ValidTo = null,
+    bool IssuePin = false
 );
 
 public record AuthorizedMemberDto(
@@ -59,7 +91,8 @@ public record AuthorizedMemberDto(
     DateTimeOffset ValidFrom,
     DateTimeOffset? ValidTo,
     string Status,
-    DateTimeOffset CreatedAt
+    DateTimeOffset CreatedAt,
+    string? IssuedMemberPin = null
 );
 
 public record CreateTransferRequest(

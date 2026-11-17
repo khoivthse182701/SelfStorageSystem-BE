@@ -1,11 +1,9 @@
-using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.IdentityModel.Tokens;
 using SelfStorageSystem.Application.Interfaces;
 using SelfStorageSystem.Application.Settings;
+using SelfStorageSystem.Infrastructure.Common;
 using SelfStorageSystem.Infrastructure.Persistence;
 using SelfStorageSystem.Infrastructure.Services;
 
@@ -25,6 +23,7 @@ public static class DependencyInjection
         {
             options.UseSqlServer(connectionString, sqlOptions =>
             {
+                sqlOptions.MigrationsAssembly(typeof(SelfStorageDbContext).Assembly.FullName);
                 sqlOptions.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
             });
         });
@@ -47,12 +46,15 @@ public static class DependencyInjection
         var pinProtectionKey = configuration["PIN_PROTECTION_KEY"] ?? configuration["SecuritySettings:PinProtectionKey"];
         PinProtectionHelper.Initialize(pinProtectionKey);
 
-        services.AddHttpContextAccessor();
         services.AddScoped<IJwtTokenService, JwtTokenService>();
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IOtpService, OtpService>();
         services.AddScoped<IGoogleAuthService, GoogleAuthService>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddSingleton<IQrTokenService, QrTokenService>();
+        services.AddScoped<IPricingEngine, PricingEngine>();
+        services.AddScoped<IReservationHoldExpiryService, ReservationHoldExpiryService>();
+        services.AddScoped<IStorageLifecycleService, StorageLifecycleService>();
         services.AddScoped<ICustomerReservationService, CustomerReservationService>();
         services.AddScoped<ICustomerPaymentService, CustomerPaymentService>();
         services.AddScoped<ICustomerCatalogService, CustomerCatalogService>();
@@ -71,53 +73,27 @@ public static class DependencyInjection
         services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.TransferExpiryWorker>();
         services.AddHostedService<SelfStorageSystem.Infrastructure.BackgroundJobs.StorageLifecycleBackgroundService>();
 
-        // 5. JWT Authentication
-        var jwtSettings = configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() 
-            ?? throw new InvalidOperationException("Configuration 'JwtSettings' is not defined in appsettings.json.");
-
-        if (string.IsNullOrWhiteSpace(jwtSettings.Secret) || jwtSettings.Secret.Length < 32)
-        {
-            throw new InvalidOperationException("JwtSettings:Secret must be configured and at least 32 characters long.");
-        }
-        var secret = jwtSettings.Secret;
-
-        services.AddAuthentication(options =>
-        {
-            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-        })
-        .AddJwtBearer(options =>
-        {
-            options.RequireHttpsMetadata = false;
-            options.SaveToken = true;
-            options.TokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret)),
-                ValidateIssuer = !string.IsNullOrWhiteSpace(jwtSettings.Issuer),
-                ValidIssuer = jwtSettings.Issuer,
-                ValidateAudience = !string.IsNullOrWhiteSpace(jwtSettings.Audience),
-                ValidAudience = jwtSettings.Audience,
-                ValidateLifetime = true,
-                ClockSkew = TimeSpan.Zero
-            };
-            options.Events = new JwtBearerEvents
-            {
-                OnMessageReceived = context =>
-                {
-                    var accessToken = context.Request.Query["access_token"];
-                    var path = context.HttpContext.Request.Path;
-                    if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
-                    {
-                        context.Token = accessToken;
-                    }
-                    return Task.CompletedTask;
-                }
-            };
-        });
-
-        services.AddAuthorization();
-
         return services;
+    }
+}
+
+public static class DatabaseSeederExtensions
+{
+    public static async Task SeedDatabaseAsync(
+        this IServiceProvider serviceProvider,
+        bool applyMigrations = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+
+        await using var scope = serviceProvider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<SelfStorageDbContext>();
+
+        if (applyMigrations && db.Database.IsRelational())
+        {
+            await db.Database.MigrateAsync(cancellationToken);
+        }
+
+        await DbSeeder.SeedAsync(db, cancellationToken);
     }
 }

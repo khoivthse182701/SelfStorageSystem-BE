@@ -25,6 +25,7 @@ public class RentalSummaryDto
     public DateTimeOffset? CheckedInAt { get; set; }
     public bool HasOverdueDebt { get; set; }
     public int DaysUntilExpiry { get; set; }
+    public bool IsExpiringSoon { get; set; }
     public string? ImageUrl { get; set; }
     public string? Image => ImageUrl;
 }

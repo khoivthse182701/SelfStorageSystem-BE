@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
+using SelfStorageSystem.Domain.Enums;
 
 namespace SelfStorageSystem.Domain.Entities;
 
@@ -44,6 +47,38 @@ public partial class Reservation
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
+
+    [NotMapped, JsonIgnore]
+    public ReservationStatus ReservationStatus
+    {
+        get => EnumDbMapper.ParseReservationStatus(Status);
+        set => Status = value.ToDbValue();
+    }
+
+    public bool CanTransitionTo(ReservationStatus nextStatus) =>
+        EnumDbMapper.TryParseReservationStatus(Status, out var current) &&
+        DomainStateMachine.CanTransition(current, nextStatus);
+
+    public void TransitionStatus(ReservationStatus nextStatus, DateTimeOffset? utcNow = null)
+    {
+        if (!string.IsNullOrWhiteSpace(Status) && !CanTransitionTo(nextStatus))
+        {
+            throw new InvalidOperationException($"Invalid reservation status transition from '{Status}' to '{nextStatus.ToDbValue()}'.");
+        }
+
+        var ts = utcNow ?? DateTimeOffset.UtcNow;
+        Status = nextStatus.ToDbValue();
+        if (nextStatus == ReservationStatus.Confirmed)
+        {
+            ConfirmedAt ??= ts;
+        }
+        else if (nextStatus == ReservationStatus.Cancelled)
+        {
+            CancelledAt ??= ts;
+        }
+
+        UpdatedAt = ts;
+    }
 
     public virtual ICollection<Appointment> Appointments { get; set; } = new List<Appointment>();
 

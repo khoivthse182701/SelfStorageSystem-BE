@@ -62,4 +62,6 @@ public partial class Facility
     public virtual ICollection<StorageUnit> StorageUnits { get; set; } = new List<StorageUnit>();
 
     public virtual ICollection<SupportTicket> SupportTickets { get; set; } = new List<SupportTicket>();
+
+    public virtual ICollection<UnitTransferRequest> UnitTransferRequests { get; set; } = new List<UnitTransferRequest>();
 }

@@ -8,6 +8,7 @@ using SelfStorageSystem.Application.Settings;
 using SelfStorageSystem.Domain.Entities;
 
 using SelfStorageSystem.Domain.Constants;
+using SelfStorageSystem.Domain.Enums;
 
 namespace SelfStorageSystem.Infrastructure.Services;
 
@@ -38,9 +39,17 @@ public class JwtTokenService : IJwtTokenService
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 
+        var emittedRoles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var role in roles)
         {
-            claims.Add(new Claim(ClaimTypes.Role, role));
+            if (EnumDbMapper.TryParseRoleCode(role, out var canonicalRole) && emittedRoles.Add(canonicalRole.ToString()))
+            {
+                claims.Add(new Claim(ClaimTypes.Role, canonicalRole.ToString()));
+            }
+            if (emittedRoles.Add(role))
+            {
+                claims.Add(new Claim(ClaimTypes.Role, role));
+            }
         }
 
         var expires = DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenMinutes > 0 ? _jwtSettings.AccessTokenMinutes : AuthConstants.DefaultAccessTokenMinutes);

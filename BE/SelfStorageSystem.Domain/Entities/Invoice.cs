@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
+using SelfStorageSystem.Domain.Enums;
 
 namespace SelfStorageSystem.Domain.Entities;
 
@@ -44,6 +47,38 @@ public partial class Invoice
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
+
+    [NotMapped, JsonIgnore]
+    public InvoiceStatus InvoiceStatus
+    {
+        get => EnumDbMapper.ParseInvoiceStatus(Status);
+        set => Status = value.ToDbValue();
+    }
+
+    public bool CanTransitionTo(InvoiceStatus nextStatus) =>
+        EnumDbMapper.TryParseInvoiceStatus(Status, out var current) &&
+        DomainStateMachine.CanTransition(current, nextStatus);
+
+    public void TransitionStatus(InvoiceStatus nextStatus, DateTimeOffset? utcNow = null)
+    {
+        if (!string.IsNullOrWhiteSpace(Status) && !CanTransitionTo(nextStatus))
+        {
+            throw new InvalidOperationException($"Invalid invoice status transition from '{Status}' to '{nextStatus.ToDbValue()}'.");
+        }
+
+        var ts = utcNow ?? DateTimeOffset.UtcNow;
+        Status = nextStatus.ToDbValue();
+        if (nextStatus == InvoiceStatus.Open)
+        {
+            OpenedAt ??= ts;
+        }
+        else if (nextStatus == InvoiceStatus.Voided)
+        {
+            VoidedAt ??= ts;
+        }
+
+        UpdatedAt = ts;
+    }
 
     public virtual RentalAgreement? Agreement { get; set; }
 

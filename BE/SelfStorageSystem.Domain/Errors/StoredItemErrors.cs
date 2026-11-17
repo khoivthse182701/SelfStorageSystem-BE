@@ -29,7 +29,7 @@ public static class StoredItemErrors
         "Item name is required and cannot be empty.");
 
     public static readonly Error ProhibitedItem = Error.Validation(
-        "StoredItem.ProhibitedItem",
+        "StoredItem.ProhibitedItemDetected",
         "Hazardous, flammable, explosive, or illegal items are strictly prohibited from storage.");
 
     public static readonly Error AgreementNotActive = Error.Validation(

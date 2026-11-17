@@ -19,6 +19,10 @@ public partial class CustomerProfile
 
     public string? EmergencyContactPhone { get; set; }
 
+    public string? ProfileEditMonth { get; set; }
+
+    public int ProfileEditCount { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }

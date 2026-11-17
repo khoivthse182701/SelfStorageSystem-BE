@@ -7,9 +7,11 @@ public class FacilitySummaryDto
     public string Name { get; set; } = string.Empty;
     public string Address { get; set; } = string.Empty;
     public string City { get; set; } = string.Empty;
+    public string Timezone { get; set; } = "Asia/Ho_Chi_Minh";
     public decimal? Latitude { get; set; }
     public decimal? Longitude { get; set; }
     public TimeOnly? OpeningTime { get; set; }
     public TimeOnly? ClosingTime { get; set; }
     public int AvailableUnitCount { get; set; }
+    public decimal? MinMonthlyRate { get; set; }
 }

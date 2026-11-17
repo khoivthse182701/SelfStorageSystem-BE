@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using SelfStorageSystem.Application.Interfaces;
+using SelfStorageSystem.Contracts.Common;
 using SelfStorageSystem.Contracts.Customer.Facilities;
 using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
 using SelfStorageSystem.Domain.Errors;
 using SelfStorageSystem.Domain.Exceptions;
+using SelfStorageSystem.Infrastructure.Common;
 using SelfStorageSystem.Infrastructure.Persistence;
 
 namespace SelfStorageSystem.Infrastructure.Services;
@@ -18,10 +20,64 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
         var facilities = await db.Facilities
             .AsNoTracking()
             .Where(f => f.Status == FacilityStatusConstants.Active)
+            .OrderBy(f => f.Name)
             .ToListAsync(ct);
 
-        var facilityIds = facilities.Select(f => f.Id).ToList();
+        return await BuildFacilitySummariesAsync(facilities, now, ct);
+    }
 
+    public async Task<PagedResult<FacilitySummaryDto>> GetFacilitiesPagedAsync(
+        string? city = null,
+        string? search = null,
+        int page = 1,
+        int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var now = DateTimeOffset.UtcNow;
+
+        var query = db.Facilities
+            .AsNoTracking()
+            .Where(f => f.Status == FacilityStatusConstants.Active);
+
+        if (!string.IsNullOrWhiteSpace(city))
+        {
+            var normalizedCity = city.Trim().ToLowerInvariant();
+            query = query.Where(f => f.City.ToLower().Contains(normalizedCity));
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToLowerInvariant();
+            query = query.Where(f =>
+                f.Name.ToLower().Contains(term) ||
+                f.AddressLine.ToLower().Contains(term) ||
+                f.Code.ToLower().Contains(term) ||
+                f.City.ToLower().Contains(term));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var facilities = await query
+            .OrderBy(f => f.Name)
+            .ThenBy(f => f.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        var items = await BuildFacilitySummariesAsync(facilities, now, cancellationToken);
+        return new PagedResult<FacilitySummaryDto>(items, totalCount, page, pageSize);
+    }
+
+    private async Task<IReadOnlyList<FacilitySummaryDto>> BuildFacilitySummariesAsync(
+        List<Facility> facilities,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        if (facilities.Count == 0)
+            return Array.Empty<FacilitySummaryDto>();
+
+        var facilityIds = facilities.Select(f => f.Id).ToList();
         var unitRows = await ListedUnits()
             .Where(u => facilityIds.Contains(u.FacilityId))
             .Select(u => new
@@ -46,6 +102,24 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             })
             .ToListAsync(ct);
 
+        var facilityTodayById = facilities.ToDictionary(f => f.Id, f => GetBusinessDate(f.Timezone, now));
+        var minToday = facilityTodayById.Values.Min();
+        var maxToday = facilityTodayById.Values.Max();
+        var activeRates = await db.FacilityRates
+            .AsNoTracking()
+            .Where(r => facilityIds.Contains(r.FacilityId) && r.ValidFrom <= maxToday && (r.ValidTo == null || r.ValidTo > minToday))
+            .Select(r => new { r.FacilityId, r.ValidFrom, r.ValidTo, r.MonthlyRate })
+            .ToListAsync(ct);
+
+        var rates = activeRates
+            .Where(r =>
+            {
+                var facilityToday = facilityTodayById[r.FacilityId];
+                return r.ValidFrom <= facilityToday && (r.ValidTo == null || r.ValidTo > facilityToday);
+            })
+            .GroupBy(r => r.FacilityId)
+            .ToDictionary(g => g.Key, g => (decimal?)g.Min(r => r.MonthlyRate));
+
         return facilities.Select(f => new FacilitySummaryDto
         {
             Id = f.Id,
@@ -53,10 +127,12 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             Name = f.Name,
             Address = f.AddressLine,
             City = f.City,
+            Timezone = string.IsNullOrWhiteSpace(f.Timezone) ? TimezoneConstants.DefaultVietnam : f.Timezone,
             Latitude = f.Latitude,
             Longitude = f.Longitude,
             OpeningTime = f.OpeningTime,
             ClosingTime = f.ClosingTime,
+            MinMonthlyRate = rates.GetValueOrDefault(f.Id),
             AvailableUnitCount = unitRows.Count(u => u.FacilityId == f.Id && !u.IsBlocked &&
                 (u.PhysicalStatus == StorageUnitStatusConstants.Available ||
                  (u.PhysicalStatus == StorageUnitStatusConstants.Reserved && u.HasExpiredPendingHold)))
@@ -106,6 +182,7 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
         var types = units.GroupBy(x => x.UnitTypeId).Select(g =>
         {
             var t = g.First().UnitType;
+            var activeRate = rates.FirstOrDefault(r => r.UnitTypeId == t.Id);
             var availableCount = g.Count(x => !x.IsBlocked &&
                 (x.PhysicalStatus == StorageUnitStatusConstants.Available ||
                  (x.PhysicalStatus == StorageUnitStatusConstants.Reserved && x.HasExpiredPendingHold)));
@@ -120,7 +197,9 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 HeightM = t.HeightM,
                 AreaM2 = t.AreaM2,
                 VolumeM3 = t.VolumeM3,
-                MonthlyRate = rates.FirstOrDefault(r => r.UnitTypeId == t.Id)?.MonthlyRate,
+                MonthlyRate = activeRate?.MonthlyRate,
+                DepositAmount = activeRate?.DepositAmount,
+                BookingFee = activeRate?.BookingFee,
                 AvailableUnitCount = availableCount
             };
         }).ToList();
@@ -216,7 +295,8 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 u.AreaId,
                 u.UnitCode,
                 u.FloorLabel,
-                u.ZoneLabel
+                u.ZoneLabel,
+                u.UnitMapPosition
             })
             .ToListAsync(ct);
 
@@ -229,7 +309,88 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
             UnitCode = u.UnitCode,
             FloorLabel = u.FloorLabel,
             ZoneLabel = u.ZoneLabel,
-            MonthlyRate = rates.FirstOrDefault(r => r.FacilityId == u.FacilityId && r.UnitTypeId == u.UnitTypeId)?.MonthlyRate ?? 0m
+            MonthlyRate = rates.FirstOrDefault(r => r.FacilityId == u.FacilityId && r.UnitTypeId == u.UnitTypeId)?.MonthlyRate ?? 0m,
+            MapPosition = u.UnitMapPosition is { } pos
+                ? new UnitMapPositionDto(pos.X, pos.Y, pos.Width, pos.Height)
+                : null
+        }).ToList();
+    }
+
+    public async Task<IReadOnlyList<AvailableUnitDto>> GetAvailableUnitsAsync(
+        long facilityId,
+        long? unitTypeId,
+        long? areaId,
+        DateOnly? startDate,
+        int durationMonths = 1,
+        CancellationToken cancellationToken = default)
+    {
+        if (durationMonths is < 1 or > 12)
+            throw AppException.FromError(ReservationErrors.InvalidDuration(1, 12));
+
+        var facility = await db.Facilities
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == facilityId && f.Status == FacilityStatusConstants.Active, cancellationToken)
+            ?? throw AppException.FromError(CatalogErrors.FacilityNotFound);
+
+        var now = DateTimeOffset.UtcNow;
+        var today = GetBusinessDate(facility.Timezone, now);
+
+        if (startDate.HasValue && startDate.Value < today)
+            throw AppException.FromError(ReservationErrors.StartDateInPast);
+
+        var targetStart = startDate ?? today;
+        var targetEnd = targetStart.AddMonths(durationMonths);
+
+        var rates = await ActiveRates(facilityId, targetStart).ToListAsync(cancellationToken);
+
+        var units = await ListedUnits()
+            .Where(u =>
+                u.FacilityId == facilityId &&
+                (!unitTypeId.HasValue || u.UnitTypeId == unitTypeId.Value) &&
+                (!areaId.HasValue || u.AreaId == areaId.Value) &&
+                (u.PhysicalStatus == StorageUnitStatusConstants.Available ||
+                 (u.PhysicalStatus == StorageUnitStatusConstants.Reserved &&
+                  u.UnitAllocations.Any(a => a.Status == AllocationStatusConstants.Active))) &&
+                !u.UnitAllocations.Any(a =>
+                    a.Status == AllocationStatusConstants.Active &&
+                    a.AllocationStartDate < targetEnd &&
+                    a.AllocationEndDate > targetStart &&
+                    (a.AgreementId != null ||
+                     (a.Reservation != null && (
+                         a.Reservation.Status == ReservationStatusConstants.Confirmed ||
+                         a.Reservation.Status == ReservationStatusConstants.Converted ||
+                         ((a.Reservation.Status == ReservationStatusConstants.Pending ||
+                           a.Reservation.Status == ReservationStatusConstants.AwaitingDeposit) &&
+                          a.Reservation.HoldUntil > now))))))
+            .OrderBy(u => u.FloorLabel)
+            .ThenBy(u => u.ZoneLabel)
+            .ThenBy(u => u.UnitCode)
+            .Select(u => new
+            {
+                u.Id,
+                u.FacilityId,
+                u.UnitTypeId,
+                u.AreaId,
+                u.UnitCode,
+                u.FloorLabel,
+                u.ZoneLabel,
+                u.UnitMapPosition
+            })
+            .ToListAsync(cancellationToken);
+
+        return units.Select(u => new AvailableUnitDto
+        {
+            Id = u.Id,
+            FacilityId = u.FacilityId,
+            UnitTypeId = u.UnitTypeId,
+            FacilityAreaId = u.AreaId,
+            UnitCode = u.UnitCode,
+            FloorLabel = u.FloorLabel,
+            ZoneLabel = u.ZoneLabel,
+            MonthlyRate = rates.FirstOrDefault(r => r.UnitTypeId == u.UnitTypeId)?.MonthlyRate ?? 0m,
+            MapPosition = u.UnitMapPosition is { } pos
+                ? new UnitMapPositionDto(pos.X, pos.Y, pos.Width, pos.Height)
+                : null
         }).ToList();
     }
 
@@ -372,20 +533,8 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
 
     private static DateOnly GetBusinessDate(string? timezone, DateTimeOffset utcNow)
     {
-        if (string.IsNullOrWhiteSpace(timezone))
-        {
-            timezone = TimezoneConstants.DefaultVietnam;
-        }
-
-        try
-        {
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
-            return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(utcNow, tz).DateTime);
-        }
-        catch
-        {
-            return DateOnly.FromDateTime(utcNow.ToOffset(TimeSpan.FromHours(TimezoneConstants.VietnamUtcOffsetHours)).DateTime);
-        }
+        var tz = TimeZoneHelper.ResolveTimeZone(timezone);
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(utcNow, tz).DateTime);
     }
 
     private IQueryable<StorageUnit> ListedUnits()

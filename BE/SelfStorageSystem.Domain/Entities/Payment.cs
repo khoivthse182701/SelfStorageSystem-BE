@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
+using SelfStorageSystem.Domain.Enums;
 
 namespace SelfStorageSystem.Domain.Entities;
 
@@ -34,6 +37,34 @@ public partial class Payment
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
+
+    [NotMapped, JsonIgnore]
+    public PaymentStatus PaymentStatus
+    {
+        get => EnumDbMapper.ParsePaymentStatus(Status);
+        set => Status = value.ToDbValue();
+    }
+
+    public bool CanTransitionTo(PaymentStatus nextStatus) =>
+        EnumDbMapper.TryParsePaymentStatus(Status, out var current) &&
+        DomainStateMachine.CanTransition(current, nextStatus);
+
+    public void TransitionStatus(PaymentStatus nextStatus, DateTimeOffset? utcNow = null)
+    {
+        if (!string.IsNullOrWhiteSpace(Status) && !CanTransitionTo(nextStatus))
+        {
+            throw new InvalidOperationException($"Invalid payment status transition from '{Status}' to '{nextStatus.ToDbValue()}'.");
+        }
+
+        var ts = utcNow ?? DateTimeOffset.UtcNow;
+        Status = nextStatus.ToDbValue();
+        if (nextStatus == PaymentStatus.Succeeded)
+        {
+            PaidAt ??= ts;
+        }
+
+        UpdatedAt = ts;
+    }
 
     public virtual CustomerProfile Customer { get; set; } = null!;
 

@@ -88,49 +88,51 @@ public sealed class CapabilitiesService(SelfStorageDbContext db) : ICapabilities
             roles.Add(RoleConstants.Customer);
         }
 
-        var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var role in roles)
-        {
-            switch (role)
-            {
-                case RoleConstants.SystemAdministrator:
-                    foreach (var p in AdminPermissions) permissions.Add(p);
-                    break;
-                case RoleConstants.FacilityManager:
-                    foreach (var p in ManagerPermissions) permissions.Add(p);
-                    break;
-                case RoleConstants.FacilityStaff:
-                    foreach (var p in StaffPermissions) permissions.Add(p);
-                    break;
-                case RoleConstants.Customer:
-                    foreach (var p in CustomerPermissions) permissions.Add(p);
-                    break;
-            }
-        }
+        var permissions = ResolvePermissionsForRoles(roles);
 
         var now = DateTimeOffset.UtcNow;
         var assignedFacilities = await db.StaffFacilityAssignments
             .AsNoTracking()
-            .Where(a => a.EmployeeId == userId && (a.EndsAt == null || a.EndsAt > now))
+            .Where(a => a.EmployeeId == userId
+                && a.StartsAt <= now
+                && (a.EndsAt == null || a.EndsAt > now))
             .Select(a => a.FacilityId)
             .Distinct()
             .ToListAsync(cancellationToken);
-
-        if (assignedFacilities.Count == 0 && roles.Any(r => r.Contains("manager", StringComparison.OrdinalIgnoreCase) || r.Contains("admin", StringComparison.OrdinalIgnoreCase)))
-        {
-            assignedFacilities = await db.Facilities
-                .AsNoTracking()
-                .Where(f => f.Status == FacilityStatusConstants.Active)
-                .Select(f => f.Id)
-                .ToListAsync(cancellationToken);
-        }
 
         return new UserCapabilitiesDto(
             UserId: user.Id,
             Email: user.Email,
             Roles: roles,
-            Permissions: permissions.ToList(),
+            Permissions: permissions,
             AssignedFacilityIds: assignedFacilities.Count > 0 ? assignedFacilities : null
         );
+    }
+
+    public static List<string> ResolvePermissionsForRoles(IEnumerable<string> roles)
+    {
+        var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var role in roles)
+        {
+            switch (role.Trim().ToLowerInvariant())
+            {
+                case RoleConstants.SystemAdministrator:
+                    foreach (var p in AdminPermissions) permissions.Add(p);
+                    break;
+                case RoleConstants.FacilityManager:
+                case "manager":
+                    foreach (var p in ManagerPermissions) permissions.Add(p);
+                    break;
+                case RoleConstants.FacilityStaff:
+                case "staff":
+                    foreach (var p in StaffPermissions) permissions.Add(p);
+                    break;
+                case RoleConstants.Customer:
+                case "customer":
+                    foreach (var p in CustomerPermissions) permissions.Add(p);
+                    break;
+            }
+        }
+        return permissions.ToList();
     }
 }

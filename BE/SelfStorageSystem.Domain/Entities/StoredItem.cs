@@ -10,7 +10,7 @@ public partial class StoredItem
 
     public string ItemName { get; set; } = null!;
 
-    public string Category { get; set; } = null!;
+    public string? Category { get; set; }
 
     public string? Description { get; set; }
 

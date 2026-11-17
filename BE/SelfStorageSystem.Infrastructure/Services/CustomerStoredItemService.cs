@@ -115,7 +115,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
         if (!string.IsNullOrWhiteSpace(category))
         {
             var normalizedFilter = NormalizeCategory(category);
-            query = query.Where(i => i.Category.ToLower() == normalizedFilter);
+            query = query.Where(i => i.Category != null && i.Category.ToLower() == normalizedFilter);
         }
 
         var items = await query
@@ -126,7 +126,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
             Id: i.Id,
             AgreementId: i.AgreementId,
             ItemName: i.ItemName,
-            Category: i.Category,
+            Category: i.Category ?? StoredItemCategoryConstants.Other,
             Description: i.Description,
             Quantity: i.Quantity,
             EstimatedValue: i.EstimatedValue,
@@ -209,7 +209,7 @@ public class CustomerStoredItemService : ICustomerStoredItemService
             Id: item.Id,
             AgreementId: item.AgreementId,
             ItemName: item.ItemName,
-            Category: item.Category,
+            Category: item.Category ?? StoredItemCategoryConstants.Other,
             Description: item.Description,
             Quantity: item.Quantity,
             EstimatedValue: item.EstimatedValue,

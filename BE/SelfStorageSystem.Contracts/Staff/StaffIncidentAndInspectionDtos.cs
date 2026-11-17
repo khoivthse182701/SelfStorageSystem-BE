@@ -84,6 +84,7 @@ public class StaffInspectionDamageItemDto
     public decimal Cost { get; set; } = 0m;
     public decimal ChargeAmount { get; set; } = 0m;
     public string? Notes { get; set; }
+    public string? PhotoUrl { get; set; }
 }
 
 public class StaffSubmitInspectionReportRequest
@@ -221,8 +222,13 @@ public class StaffRefundQueueItemDto
 public class StaffCounterCashPayoutRequest
 {
     public string? ProofImageUrl { get; set; }
-
+    public string? ReceiptReference { get; set; }
     public string? Note { get; set; }
+    public string? Notes
+    {
+        get => Note;
+        set { if (!string.IsNullOrWhiteSpace(value)) Note = value; }
+    }
 }
 
 public class StaffCounterCashPayoutResultDto
@@ -233,6 +239,7 @@ public class StaffCounterCashPayoutResultDto
     public string Status { get; set; } = string.Empty;
     public string PayoutMethod { get; set; } = "cash";
     public string? ProofImageUrl { get; set; }
+    public string? ReceiptReference { get; set; }
     public long ProcessedByUserId { get; set; }
     public DateTimeOffset ProcessedAt { get; set; }
     public string Message { get; set; } = string.Empty;

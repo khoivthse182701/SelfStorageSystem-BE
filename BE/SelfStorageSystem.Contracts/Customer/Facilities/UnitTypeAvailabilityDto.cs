@@ -11,5 +11,7 @@ public class UnitTypeAvailabilityDto
     public decimal? AreaM2 { get; set; }
     public decimal? VolumeM3 { get; set; }
     public decimal? MonthlyRate { get; set; }
+    public decimal? DepositAmount { get; set; }
+    public decimal? BookingFee { get; set; }
     public int AvailableUnitCount { get; set; }
 }
