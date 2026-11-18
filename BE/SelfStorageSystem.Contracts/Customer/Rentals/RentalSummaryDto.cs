@@ -28,4 +28,9 @@ public class RentalSummaryDto
     public bool IsExpiringSoon { get; set; }
     public string? ImageUrl { get; set; }
     public string? Image => ImageUrl;
+
+    public long? PenaltyInvoiceId { get; set; }
+    public string? PenaltyInvoiceNo { get; set; }
+    public decimal PenaltyAmount { get; set; }
+    public string? LatestInspectionSummary { get; set; }
 }

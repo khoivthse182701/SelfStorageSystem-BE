@@ -1043,7 +1043,7 @@ public partial class FacilityManagerService : IFacilityManagerService
 
             .Where(a => a.FacilityId == facilityId &&
 
-                        (a.Status == RentalAgreementStatusConstants.Active || a.Status == RentalAgreementStatusConstants.ExpiringSoon || a.Status == RentalAgreementStatusConstants.Overdue) &&
+                        (a.Status == RentalAgreementStatusConstants.Active || a.Status == RentalAgreementStatusConstants.ExpiringSoon || a.Status == RentalAgreementStatusConstants.Overdue || a.Status == RentalAgreementStatusConstants.CheckoutPending || a.Status == "defaulted") &&
 
                         !existingAgreementIds.Contains(a.Id))
 

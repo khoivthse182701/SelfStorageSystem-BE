@@ -142,6 +142,9 @@ public partial class CustomerRentalService : ICustomerRentalService
                     .ThenInclude(u => u.UnitType)
 
             .Include(r => r.Invoices)
+                .ThenInclude(i => i.InvoiceLines)
+            .Include(r => r.Inspections)
+                .ThenInclude(i => i.InspectionItems)
 
             .OrderByDescending(r => r.StartDate)
 
@@ -203,58 +206,52 @@ public partial class CustomerRentalService : ICustomerRentalService
 
 
 
+            var penaltyInvoice = r.Invoices?
+                .Where(i => (i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Overdue) &&
+                            (i.InvoiceNo.StartsWith("INV-PEN-", StringComparison.OrdinalIgnoreCase) ||
+                             i.InvoiceLines.Any(l => string.Equals(l.LineType, "damage", StringComparison.OrdinalIgnoreCase) ||
+                                                     string.Equals(l.LineType, "penalty", StringComparison.OrdinalIgnoreCase))))
+                .OrderByDescending(i => i.Id)
+                .FirstOrDefault();
+
+            var penaltyAmount = penaltyInvoice != null ? Math.Max(0m, penaltyInvoice.TotalAmount - penaltyInvoice.PaidAmount) : 0m;
+            var latestInspection = r.Inspections?
+                .OrderByDescending(i => i.CreatedAt)
+                .FirstOrDefault();
+
             return new RentalSummaryDto
-
             {
-
                 AgreementId = r.Id,
-
                 AgreementNo = r.AgreementNo,
-
                 FacilityId = r.FacilityId,
-
                 FacilityName = r.Facility?.Name ?? string.Empty,
-
                 FacilityAddress = r.Facility?.AddressLine ?? string.Empty,
-
                 FacilityCity = r.Facility?.City ?? string.Empty,
-
                 StorageUnitId = unit?.Id ?? 0,
-
                 UnitCode = unit?.UnitCode ?? string.Empty,
-
                 FloorLabel = unit?.FloorLabel,
-
                 ZoneLabel = unit?.ZoneLabel,
-
                 UnitTypeName = unitType?.Name ?? string.Empty,
-
                 Dimensions = dimensions,
-
                 AreaM2 = unitType?.AreaM2,
-
                 VolumeM3 = unitType?.VolumeM3,
-
                 StartDate = r.StartDate,
-
                 EndDate = r.EndDate,
-
                 ActualEndDate = r.ActualEndDate,
-
                 MonthlyRate = r.MonthlyRateSnapshot,
-
                 DepositBalance = r.DepositBalance,
-
                 Status = r.Status,
-
                 CheckedInAt = r.CheckedInAt,
-
                 HasOverdueDebt = hasOverdueDebt,
                 DaysUntilExpiry = daysUntilExpiry,
                 IsExpiringSoon = isExpiringSoon,
                 ImageUrl = !string.IsNullOrWhiteSpace(unit?.Notes) && System.Text.RegularExpressions.Regex.Match(unit.Notes, @"\[IMG:([^\]]+)\]").Success
                     ? System.Text.RegularExpressions.Regex.Match(unit.Notes, @"\[IMG:([^\]]+)\]").Groups[1].Value.Trim()
-                    : null
+                    : null,
+                PenaltyInvoiceId = penaltyInvoice?.Id,
+                PenaltyInvoiceNo = penaltyInvoice?.InvoiceNo,
+                PenaltyAmount = penaltyAmount,
+                LatestInspectionSummary = latestInspection?.Summary
             };
 
         }).ToList();

@@ -1002,6 +1002,32 @@ public class CustomerPaymentService : ICustomerPaymentService
             agreement.NegativeDebtNotifiedAt = null;
             agreement.UpdatedAt = now;
         }
+
+        if (agreement.Status == RentalAgreementStatusConstants.CheckoutPending)
+        {
+            var hasAnyUnpaid = agreement.Invoices.Any(i =>
+                (i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Overdue || i.Status == InvoiceStatusConstants.PartiallyPaid)
+                && (i.TotalAmount - i.PaidAmount) > 0);
+
+            var hasPendingRefunds = await _dbContext.Refunds
+                .AnyAsync(r => r.AgreementId == agreementId && (r.Status == RefundStatusConstants.Pending || r.Status == RefundStatusConstants.PendingManagerPayout || r.Status == RefundStatusConstants.PendingCounterPayout), ct);
+
+            if (!hasAnyUnpaid && !hasPendingRefunds)
+            {
+                agreement.Status = RentalAgreementStatusConstants.Completed;
+                agreement.ActualEndDate ??= localToday;
+                agreement.UpdatedAt = now;
+
+                var moveOut = await _dbContext.MoveOutRequests
+                    .FirstOrDefaultAsync(m => m.AgreementId == agreementId && m.Status != MoveOutStatusConstants.Completed && m.Status != MoveOutStatusConstants.Cancelled, ct);
+                if (moveOut != null)
+                {
+                    moveOut.Status = MoveOutStatusConstants.Completed;
+                    moveOut.FinalizedAt = now;
+                    moveOut.UpdatedAt = now;
+                }
+            }
+        }
     }
 
     private async Task ExecutePaidUnitTransferAsync(

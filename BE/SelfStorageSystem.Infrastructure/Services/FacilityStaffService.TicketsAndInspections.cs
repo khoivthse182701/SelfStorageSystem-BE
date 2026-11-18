@@ -1085,6 +1085,7 @@ public partial class FacilityStaffService : IFacilityStaffService
             refundAmount = 0m;
             extraPenalty = damage - deposit;
             agreement.DepositBalance = Math.Min(0m, agreement.DepositBalance) - extraPenalty;
+            agreement.NegativeDebtNotifiedAt = now;
 
             var penaltyInvoice = new Invoice
             {
@@ -1127,6 +1128,36 @@ public partial class FacilityStaffService : IFacilityStaffService
             // Do not insert into core.refunds because CK__refunds__amount requires amount > 0.
             refundRecordId = null;
             settlementSummary = $"Thiệt hại {damage:N0} đ vượt quá cọc {deposit:N0} đ. Thu hồi 100% cọc và tạo hóa đơn phạt thu thêm {extraPenalty:N0} đ (#{penaltyInvoice.InvoiceNo}).";
+
+            var customerUserId = agreement.Customer?.UserId ?? agreement.CustomerId;
+            if (customerUserId > 0)
+            {
+                _dbContext.Notifications.Add(new Notification
+                {
+                    UserId = customerUserId,
+                    Channel = "in_app",
+                    TemplateCode = "NEGATIVE_DEPOSIT_DEBT_ALERT",
+                    Subject = $"[CẢNH BÁO CÔNG NỢ] Chi phí hư hại vượt tiền cọc HĐ #{agreement.AgreementNo}",
+                    DeduplicationKey = $"penalty-invoice-{agreement.Id}-{penaltyInvoice.Id}",
+                    Payload = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        agreementId = agreement.Id,
+                        agreementNo = agreement.AgreementNo,
+                        unitCode = unit?.UnitCode ?? string.Empty,
+                        damageCost = damage,
+                        originalDeposit = deposit,
+                        extraPenalty = extraPenalty,
+                        invoiceId = penaltyInvoice.Id,
+                        invoiceNo = penaltyInvoice.InvoiceNo,
+                        dueDate = penaltyInvoice.DueDate.ToString("yyyy-MM-dd")
+                    }),
+                    Status = "sent",
+                    ScheduledAt = now,
+                    SentAt = now,
+                    Attempts = 1,
+                    CreatedAt = now
+                });
+            }
         }
 
         if (unit != null)
@@ -1152,15 +1183,22 @@ public partial class FacilityStaffService : IFacilityStaffService
 
         if (agreement.Status == RentalAgreementStatusConstants.MoveOutScheduled)
         {
-            agreement.Status = "checkout_pending";
+            agreement.Status = (extraPenalty > 0 || refundAmount > 0)
+                ? RentalAgreementStatusConstants.CheckoutPending
+                : RentalAgreementStatusConstants.Completed;
         }
-        else if (agreement.Status == "checkout_pending" || agreement.Status == RentalAgreementStatusConstants.Terminated)
+        else if (agreement.Status == RentalAgreementStatusConstants.CheckoutPending || agreement.Status == RentalAgreementStatusConstants.Terminated)
         {
-            // Keep checkout_pending or terminated
+            if (extraPenalty == 0 && refundAmount == 0 && agreement.Status != RentalAgreementStatusConstants.Terminated)
+            {
+                agreement.Status = RentalAgreementStatusConstants.Completed;
+            }
         }
         else
         {
-            agreement.Status = RentalAgreementStatusConstants.Terminated;
+            agreement.Status = (extraPenalty > 0 || refundAmount > 0)
+                ? RentalAgreementStatusConstants.CheckoutPending
+                : RentalAgreementStatusConstants.Completed;
         }
         agreement.UpdatedAt = now;
 
@@ -1172,8 +1210,13 @@ public partial class FacilityStaffService : IFacilityStaffService
 
         if (moveOut != null)
         {
-            moveOut.Status = MoveOutStatusConstants.Completed;
-            moveOut.FinalizedAt = now;
+            moveOut.DamageDeductionAmount = damage;
+            moveOut.NetRefundAmount = refundAmount;
+            if (extraPenalty == 0 && refundAmount == 0)
+            {
+                moveOut.Status = MoveOutStatusConstants.Completed;
+                moveOut.FinalizedAt = now;
+            }
             moveOut.UpdatedAt = now;
         }
 

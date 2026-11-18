@@ -494,6 +494,10 @@ public partial class FacilityStaffService : IFacilityStaffService
             .Include(m => m.Agreement)
                 .ThenInclude(a => a.UnitAllocations)
                     .ThenInclude(ua => ua.StorageUnit)
+            .Include(m => m.Agreement)
+                .ThenInclude(a => a.Reservation)
+                    .ThenInclude(r => r.UnitAllocation)
+                        .ThenInclude(ua => ua!.StorageUnit)
             .AsQueryable();
 
         if (facilityId.HasValue) q = q.Where(m => m.Agreement.FacilityId == facilityId.Value);
@@ -515,7 +519,9 @@ public partial class FacilityStaffService : IFacilityStaffService
                 .OrderByDescending(ua => ua.Status == AllocationStatusConstants.Active ? 1 : 0)
                 .ThenByDescending(ua => ua.Id)
                 .FirstOrDefault();
-            var unitCode = alloc?.StorageUnit?.UnitCode ?? "N/A";
+            var unitCode = alloc?.StorageUnit?.UnitCode
+                ?? m.Agreement.Reservation?.UnitAllocation?.StorageUnit?.UnitCode
+                ?? "N/A";
             refundByAgreement.TryGetValue(m.AgreementId, out var refItem);
 
             var deposit = m.Agreement.DepositSnapshot > 0 ? m.Agreement.DepositSnapshot : m.Agreement.DepositBalance;
