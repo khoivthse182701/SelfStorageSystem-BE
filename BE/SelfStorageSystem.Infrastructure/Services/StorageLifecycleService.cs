@@ -119,6 +119,85 @@ public sealed class StorageLifecycleService : IStorageLifecycleService
             var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, tz).DateTime);
             var daysToEnd = ag.EndDate.DayNumber - localToday.DayNumber;
 
+            // Multi-month agreements (>= 45 days): generate monthly installment invoices (T-7 before each monthly anniversary)
+            if (ag.MonthlyRateSnapshot > 0 && ag.MoveOutRequest == null && (ag.EndDate.DayNumber - ag.StartDate.DayNumber) >= 45)
+            {
+                var paidUpfrontMultipleMonths = ag.Invoices.Any(i =>
+                    i.Status == InvoiceStatusConstants.Paid
+                    && i.ReservationId != null
+                    && i.SubtotalAmount >= ag.MonthlyRateSnapshot * 2m + ag.DepositSnapshot);
+
+                if (!paidUpfrontMultipleMonths)
+                {
+                    for (var k = 1; k <= 24; k++)
+                    {
+                        var cycleDueDate = ag.StartDate.AddMonths(k);
+                        if (cycleDueDate > ag.EndDate.AddDays(-15)) break;
+                        if (cycleDueDate.DayNumber - localToday.DayNumber > 7) break;
+
+                        var monthPeriod = $"AUTO-MTH-{cycleDueDate:yyyyMMdd}";
+                        var hasMonthInvoice = ag.Invoices.Any(i =>
+                            i.Status != InvoiceStatusConstants.Voided
+                            && string.Equals(i.BillingPeriod, monthPeriod, StringComparison.OrdinalIgnoreCase));
+
+                        if (!hasMonthInvoice)
+                        {
+                            var monthlyInv = new Invoice
+                            {
+                                InvoiceNo = $"INV-MTH-{ag.Id}-{cycleDueDate:yyMMdd}",
+                                AgreementId = ag.Id,
+                                CustomerId = ag.CustomerId,
+                                BillingPeriod = monthPeriod,
+                                IssueDate = localToday,
+                                DueDate = cycleDueDate,
+                                Currency = PaymentConstants.CurrencyVnd,
+                                SubtotalAmount = ag.MonthlyRateSnapshot,
+                                DiscountAmount = 0m,
+                                TaxAmount = 0m,
+                                TotalAmount = ag.MonthlyRateSnapshot,
+                                PaidAmount = 0m,
+                                Status = InvoiceStatusConstants.Draft,
+                                CreatedAt = now,
+                                UpdatedAt = now
+                            };
+                            _db.Invoices.Add(monthlyInv);
+                            await _db.SaveChangesAsync(cancellationToken);
+
+                            _db.InvoiceLines.Add(new InvoiceLine
+                            {
+                                InvoiceId = monthlyInv.Id,
+                                LineType = InvoiceLineTypeConstants.Rent,
+                                Description = $"Tiền thuê kho định kỳ tháng thứ {k + 1} - Hợp đồng #{ag.AgreementNo}",
+                                Quantity = 1,
+                                UnitPrice = ag.MonthlyRateSnapshot,
+                                LineAmount = ag.MonthlyRateSnapshot,
+                                Metadata = "{}"
+                            });
+                            await _db.SaveChangesAsync(cancellationToken);
+
+                            monthlyInv.Status = InvoiceStatusConstants.Open;
+                            monthlyInv.UpdatedAt = DateTimeOffset.UtcNow;
+                            await _db.SaveChangesAsync(cancellationToken);
+                            ag.Invoices.Add(monthlyInv);
+
+                            var mKey = $"monthly-bill-{ag.Id}-{cycleDueDate:yyyyMMdd}";
+                            if (!await _db.Notifications.AnyAsync(n => n.DeduplicationKey == mKey, cancellationToken))
+                            {
+                                await AddNotificationSafeAsync(
+                                    ag.CustomerId,
+                                    "MONTHLY_BILLING_T7",
+                                    $"Hóa đơn tiền thuê tháng mới - #{ag.AgreementNo}",
+                                    $"Hóa đơn tiền thuê kỳ tiếp theo ({ag.MonthlyRateSnapshot:N0} đ) cho hợp đồng #{ag.AgreementNo} đã được phát hành, hạn thanh toán {cycleDueDate:dd/MM/yyyy}.",
+                                    mKey,
+                                    new { agreementId = ag.Id, agreementNo = ag.AgreementNo, dueDate = cycleDueDate },
+                                    now,
+                                    cancellationToken);
+                            }
+                        }
+                    }
+                }
+            }
+
             // T-7 .. T-0 (inclusive): generate reminder + auto renewal invoice if customer has not requested move-out
             if (daysToEnd >= 0 && daysToEnd <= 7 && ag.MoveOutRequest == null)
             {

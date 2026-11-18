@@ -853,8 +853,19 @@ public class CustomerPaymentService : ICustomerPaymentService
             {
                 if (ovd.Status == InvoiceStatusConstants.Overdue || ovd.DueDate <= DateOnly.FromDateTime(now.UtcDateTime))
                 {
-                    ovd.PaidAmount = ovd.TotalAmount;
-                    ovd.Status = InvoiceStatusConstants.Paid;
+                    var isAutoRenewalInvoice = !string.IsNullOrWhiteSpace(ovd.BillingPeriod)
+                        && (ovd.BillingPeriod.StartsWith("AUTO-RNW-", StringComparison.OrdinalIgnoreCase)
+                            || ovd.BillingPeriod.StartsWith("AUTO-OVD-", StringComparison.OrdinalIgnoreCase));
+
+                    if (isAutoRenewalInvoice && ovd.PaidAmount <= 0m)
+                    {
+                        ovd.Status = InvoiceStatusConstants.Voided;
+                    }
+                    else
+                    {
+                        ovd.PaidAmount = ovd.TotalAmount;
+                        ovd.Status = InvoiceStatusConstants.Paid;
+                    }
                     ovd.UpdatedAt = now;
                 }
             }
@@ -877,6 +888,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         foreach (var dc in openCases)
         {
             dc.Status = DelinquencyCaseStatusConstants.Cured;
+            dc.OutstandingSnapshot = 0m;
             dc.ResolvedAt = now;
             _dbContext.DelinquencyActions.Add(new DelinquencyAction
             {
@@ -909,7 +921,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         }
     }
 
-    private async Task TryCureOverdueAgreementOnInvoiceSettledAsync(long agreementId, DateTimeOffset now, CancellationToken ct)
+    private async Task TryCureOverdueAgreementOnInvoiceSettledAsync(long agreementId, DateTimeOffset now, CancellationToken ct, Invoice? settledInvoice = null)
     {
         var agreement = await _dbContext.RentalAgreements
             .Include(a => a.Facility)
@@ -917,6 +929,25 @@ public class CustomerPaymentService : ICustomerPaymentService
             .FirstOrDefaultAsync(a => a.Id == agreementId, ct);
 
         if (agreement == null) return;
+
+        var isAutoRenewalPaid = settledInvoice != null
+            && !string.IsNullOrWhiteSpace(settledInvoice.BillingPeriod)
+            && (settledInvoice.BillingPeriod.StartsWith("AUTO-RNW-", StringComparison.OrdinalIgnoreCase)
+                || settledInvoice.BillingPeriod.StartsWith("AUTO-OVD-", StringComparison.OrdinalIgnoreCase));
+
+        if (isAutoRenewalPaid)
+        {
+            agreement.EndDate = agreement.EndDate.AddMonths(1);
+            agreement.UpdatedAt = now;
+
+            var activeAllocations = await _dbContext.UnitAllocations
+                .Where(ua => ua.AgreementId == agreementId && ua.Status == AllocationStatusConstants.Active)
+                .ToListAsync(ct);
+            foreach (var alloc in activeAllocations)
+            {
+                alloc.AllocationEndDate = agreement.EndDate;
+            }
+        }
 
         var tz = TimeZoneHelper.ResolveTimeZone(agreement.Facility?.Timezone, _rentalSettings.DefaultTimezone);
         var localToday = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, tz).DateTime);
@@ -936,6 +967,7 @@ public class CustomerPaymentService : ICustomerPaymentService
         foreach (var dc in openCases)
         {
             dc.Status = DelinquencyCaseStatusConstants.Cured;
+            dc.OutstandingSnapshot = 0m;
             dc.ResolvedAt = now;
             _dbContext.DelinquencyActions.Add(new DelinquencyAction
             {
@@ -957,7 +989,8 @@ public class CustomerPaymentService : ICustomerPaymentService
             cred.RevokedAt = null;
         }
 
-        if (agreement.Status == RentalAgreementStatusConstants.Overdue && agreement.EndDate >= localToday)
+        if (agreement.Status is RentalAgreementStatusConstants.Overdue or RentalAgreementStatusConstants.ExpiringSoon or "extended" or "expired"
+            && agreement.EndDate >= localToday)
         {
             agreement.Status = RentalAgreementStatusConstants.Active;
             agreement.UpdatedAt = now;
@@ -1211,7 +1244,7 @@ public class CustomerPaymentService : ICustomerPaymentService
                 }
                 else if (invoice.Status == InvoiceStatusConstants.Paid && invoice.AgreementId.HasValue)
                 {
-                    await TryCureOverdueAgreementOnInvoiceSettledAsync(invoice.AgreementId.Value, now, cancellationToken);
+                    await TryCureOverdueAgreementOnInvoiceSettledAsync(invoice.AgreementId.Value, now, cancellationToken, invoice);
                 }
             }
 

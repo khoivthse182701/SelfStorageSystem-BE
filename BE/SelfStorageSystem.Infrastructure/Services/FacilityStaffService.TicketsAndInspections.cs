@@ -828,7 +828,8 @@ public partial class FacilityStaffService : IFacilityStaffService
             throw AppException.FromError(StaffErrors.AgreementNotFound);
 
         var now = DateTimeOffset.UtcNow;
-        var deposit = agreement.DepositSnapshot;
+        var isTerminated = string.Equals(agreement.Status, RentalAgreementStatusConstants.Terminated, StringComparison.OrdinalIgnoreCase);
+        var deposit = isTerminated ? 0m : Math.Max(0m, agreement.DepositBalance);
         var damage = Math.Max(0m, request.DamageCost);
 
         decimal refundAmount = 0m;
@@ -1014,30 +1015,40 @@ public partial class FacilityStaffService : IFacilityStaffService
             resolvedPaymentId = depPayment.Id;
         }
 
-        // TH1: Không hư hại (DamageCost == 0) -> Hoàn 100% cọc
+        // TH1: Không hư hại (DamageCost == 0) -> Hoàn 100% cọc còn lại (nếu hợp đồng chưa bị thanh lý)
         if (damage == 0m)
         {
             refundAmount = deposit;
             extraPenalty = 0m;
 
-            var refund = new Refund
+            if (refundAmount > 0m)
             {
-                PaymentId = resolvedPaymentId,
-                AgreementId = agreement.Id,
-                Amount = refundAmount,
-                Currency = "VND",
-                Reason = $"Hoàn trả 100% tiền cọc cho hợp đồng #{agreement.AgreementNo}. Nghiệm thu hiện trạng tốt, không hư hại.",
-                Provider = "pending_choice",
-                IdempotencyKey = $"REFUND-AGR-{agreement.Id}-{now.ToUnixTimeSeconds()}",
-                Status = "pending",
-                RequestedBy = employeeUserId,
-                CreatedAt = now,
-                UpdatedAt = now
-            };
-            _dbContext.Refunds.Add(refund);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-            refundRecordId = refund.Id;
-            settlementSummary = $"Không có hư hại. Kích hoạt quy trình hoàn trả 100% tiền cọc ({refundAmount:N0} đ).";
+                var refund = new Refund
+                {
+                    PaymentId = resolvedPaymentId,
+                    AgreementId = agreement.Id,
+                    Amount = refundAmount,
+                    Currency = "VND",
+                    Reason = $"Hoàn trả 100% tiền cọc cho hợp đồng #{agreement.AgreementNo}. Nghiệm thu hiện trạng tốt, không hư hại.",
+                    Provider = "pending_choice",
+                    IdempotencyKey = $"REFUND-AGR-{agreement.Id}-{now.ToUnixTimeSeconds()}",
+                    Status = "pending",
+                    RequestedBy = employeeUserId,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                _dbContext.Refunds.Add(refund);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                refundRecordId = refund.Id;
+                settlementSummary = $"Không có hư hại. Kích hoạt quy trình hoàn trả 100% tiền cọc ({refundAmount:N0} đ).";
+            }
+            else
+            {
+                refundRecordId = null;
+                settlementSummary = isTerminated
+                    ? "Hợp đồng đã bị thanh lý (đã mất/cấn trừ cọc). Nghiệm thu hiện trạng kho tốt, không hoàn cọc."
+                    : "Không có hư hại. Số dư cọc còn lại 0 đ nên không phát sinh hoàn trả.";
+            }
         }
         // TH2: 0 < DamageCost <= deposit -> Khấu trừ cọc
         else if (damage <= deposit)
@@ -1073,7 +1084,7 @@ public partial class FacilityStaffService : IFacilityStaffService
         {
             refundAmount = 0m;
             extraPenalty = damage - deposit;
-            agreement.DepositBalance = 0m;
+            agreement.DepositBalance = Math.Min(0m, agreement.DepositBalance) - extraPenalty;
 
             var penaltyInvoice = new Invoice
             {

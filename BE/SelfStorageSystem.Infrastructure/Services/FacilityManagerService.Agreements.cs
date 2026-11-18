@@ -1081,9 +1081,24 @@ public partial class FacilityManagerService : IFacilityManagerService
 
                 var earliestDueDate = unpaid.OrderBy(i => i.DueDate).Select(i => (DateOnly?)i.DueDate).FirstOrDefault() ?? agr.EndDate;
 
-                var graceEnd = new DateTimeOffset(earliestDueDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddDays(7);
+                var policy = await _dbContext.PolicyVersions
+                    .AsNoTracking()
+                    .Where(p => p.PolicyType == "overdue")
+                    .OrderByDescending(p => p.ValidFrom)
+                    .FirstOrDefaultAsync(cancellationToken);
+                int policyGraceDays = 0;
+                if (!string.IsNullOrWhiteSpace(policy?.Content))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(policy.Content);
+                        if (doc.RootElement.TryGetProperty("grace_days", out var g) && g.TryGetInt32(out var gv))
+                            policyGraceDays = Math.Max(0, gv);
+                    }
+                    catch (JsonException) { }
+                }
 
-
+                var graceEnd = new DateTimeOffset(earliestDueDate.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddDays(policyGraceDays);
 
                 var targetInvoiceId = unpaid.OrderBy(i => i.DueDate).Select(i => i.Id).FirstOrDefault();
                 if (targetInvoiceId == 0)
@@ -1092,7 +1107,7 @@ public partial class FacilityManagerService : IFacilityManagerService
                 }
                 if (targetInvoiceId > 0)
                 {
-                    var openedAt = graceEnd < nowSync ? graceEnd.AddDays(-7) : nowSync;
+                    var openedAt = graceEnd < nowSync ? graceEnd.AddDays(-policyGraceDays) : nowSync;
                     var caseStatus = nowSync <= graceEnd ? DelinquencyCaseStatusConstants.Grace : DelinquencyCaseStatusConstants.Delinquent;
                     _dbContext.DelinquencyCases.Add(new DelinquencyCase
                     {
@@ -1152,42 +1167,26 @@ public partial class FacilityManagerService : IFacilityManagerService
         var now = DateTimeOffset.UtcNow;
 
         var result = cases.Select(d =>
-
         {
-
             var overdueDays = (int)(now - d.GraceEndsAt).TotalDays;
-
             var activeAlloc = d.Agreement.UnitAllocations.FirstOrDefault(u => u.Status == AllocationStatusConstants.Active)
-
                 ?? d.Agreement.UnitAllocations.OrderByDescending(u => u.Id).FirstOrDefault();
-
-
+            var isResolved = string.Equals(d.Status, DelinquencyCaseStatusConstants.Cured, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(d.Status, DelinquencyCaseStatusConstants.Waived, StringComparison.OrdinalIgnoreCase);
 
             return new ManagerDelinquencyCaseDto
-
             {
-
                 Id = d.Id,
-
                 AgreementId = d.AgreementId,
-
                 AgreementNo = d.Agreement.AgreementNo,
-
                 UnitCode = activeAlloc?.StorageUnit?.UnitCode ?? string.Empty,
-
                 CustomerId = d.Agreement.CustomerId,
-
                 CustomerName = d.Agreement.Customer.FullName,
-
                 CustomerPhone = d.Agreement.Customer.User.PhoneNumber,
-
                 Status = d.Status,
-
-                OutstandingSnapshot = d.OutstandingSnapshot,
-
-                CurrentDebt = d.OutstandingSnapshot,
-
-                OverdueDays = Math.Max(0, overdueDays),
+                OutstandingSnapshot = isResolved ? 0m : d.OutstandingSnapshot,
+                CurrentDebt = isResolved ? 0m : d.OutstandingSnapshot,
+                OverdueDays = isResolved ? 0 : Math.Max(0, overdueDays),
 
                 OpenedAt = d.OpenedAt,
 

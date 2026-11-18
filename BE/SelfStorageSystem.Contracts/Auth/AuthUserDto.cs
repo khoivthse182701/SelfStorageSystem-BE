@@ -13,6 +13,9 @@ public class AuthUserDto
     public bool HasNegativeDepositDebt { get; set; }
     public decimal TotalNegativeDebtAmount { get; set; }
     public List<NegativeDebtInvoiceItemDto> NegativeDebtInvoices { get; set; } = new();
+    public bool HasOverdueRentDebt { get; set; }
+    public decimal TotalOverdueRentAmount { get; set; }
+    public int OverdueAgreementCount { get; set; }
     public List<string> Roles { get; set; } = new();
     public List<string> Permissions { get; set; } = new();
     public List<long> AssignedFacilityIds { get; set; } = new();
