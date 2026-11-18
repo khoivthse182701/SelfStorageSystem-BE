@@ -90,6 +90,7 @@ public partial class FacilityManagerService
             foreach (var dc in agreement.DelinquencyCases.Where(c => c.ResolvedAt == null))
             {
                 dc.Status = remainingDebt == 0m ? DelinquencyCaseStatusConstants.Cured : DelinquencyCaseStatusConstants.Waived;
+                dc.OutstandingSnapshot = 0m;
                 dc.ResolvedAt = now;
                 _dbContext.DelinquencyActions.Add(new DelinquencyAction
                 {
@@ -142,6 +143,28 @@ public partial class FacilityManagerService
             agreement.Status = RentalAgreementStatusConstants.Terminated;
             agreement.ActualEndDate ??= localToday;
             agreement.UpdatedAt = now;
+
+            // Ensure a MoveOutRequest in InspectionPending status exists so Manager can immediately assign Staff to inspect the unit
+            var existingMoveOut = await _dbContext.MoveOutRequests
+                .FirstOrDefaultAsync(m => m.AgreementId == agreement.Id, cancellationToken);
+            if (existingMoveOut == null)
+            {
+                _dbContext.MoveOutRequests.Add(new MoveOutRequest
+                {
+                    AgreementId = agreement.Id,
+                    RequestedBy = agreement.CustomerId,
+                    RequestedMoveOutDate = localToday,
+                    Status = MoveOutStatusConstants.InspectionPending,
+                    Reason = $"Chờ nghiệm thu kho sau thanh lý hợp đồng #{agreement.AgreementNo}: {request.Reason.Trim()}",
+                    CreatedAt = now,
+                    UpdatedAt = now
+                });
+            }
+            else if (existingMoveOut.Status != MoveOutStatusConstants.Completed)
+            {
+                existingMoveOut.Status = MoveOutStatusConstants.InspectionPending;
+                existingMoveOut.UpdatedAt = now;
+            }
 
             _dbContext.AuditLogs.Add(new AuditLog
             {

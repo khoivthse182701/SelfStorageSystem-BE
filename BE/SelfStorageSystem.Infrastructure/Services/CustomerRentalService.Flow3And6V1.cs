@@ -690,7 +690,23 @@ public partial class CustomerRentalService
                                                  && !i.BillingPeriod.StartsWith(PaymentConstants.RenewalInvoicePrefix, StringComparison.OrdinalIgnoreCase))))
             .ToList();
 
-        var overdueDebtTotal = overdueInvoices.Sum(i => Math.Max(0m, i.TotalAmount - i.PaidAmount));
+        var overdueDebtTotal = overdueInvoices.Sum(i =>
+        {
+            var isAutoRenewalInvoice = !string.IsNullOrWhiteSpace(i.BillingPeriod)
+                && (i.BillingPeriod.StartsWith("AUTO-RNW-", StringComparison.OrdinalIgnoreCase)
+                    || i.BillingPeriod.StartsWith("AUTO-OVD-", StringComparison.OrdinalIgnoreCase));
+
+            if (isAutoRenewalInvoice && i.PaidAmount <= 0m)
+            {
+                // INV-AUTO / INV-OVD already includes 1 month of Rent; renewal baseRent covers the upcoming months,
+                // so only carry over non-rent charges (e.g., late_fee) to prevent double billing.
+                return i.InvoiceLines
+                    .Where(l => !string.Equals(l.LineType, InvoiceLineTypeConstants.Rent, StringComparison.OrdinalIgnoreCase))
+                    .Sum(l => Math.Max(0m, l.LineAmount ?? 0m));
+            }
+
+            return Math.Max(0m, i.TotalAmount - i.PaidAmount);
+        });
         var overdueLateFeesOnly = overdueInvoices
             .SelectMany(i => i.InvoiceLines)
             .Where(l => string.Equals(l.LineType, InvoiceLineTypeConstants.LateFee, StringComparison.OrdinalIgnoreCase))

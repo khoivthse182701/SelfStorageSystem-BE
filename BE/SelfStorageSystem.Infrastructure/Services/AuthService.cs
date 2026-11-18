@@ -629,6 +629,40 @@ public class AuthService : IAuthService
         }).Where(x => x.OutstandingAmount > 0).ToList();
     }
 
+    private async Task<(bool HasOverdue, decimal TotalAmount, int AgreementCount)> GetOverdueRentSummaryAsync(
+        long userId,
+        CancellationToken cancellationToken)
+    {
+        var utcToday = DateOnly.FromDateTime(DateTime.UtcNow);
+        var overdueAgreements = await _dbContext.RentalAgreements
+            .AsNoTracking()
+            .Include(a => a.Invoices)
+            .Where(a => a.CustomerId == userId
+                        && (a.Status == RentalAgreementStatusConstants.Overdue
+                            || a.Status == "defaulted"
+                            || a.Invoices.Any(i =>
+                                (i.Status == InvoiceStatusConstants.Overdue
+                                 || ((i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.PartiallyPaid) && i.DueDate < utcToday))
+                                && i.TotalAmount > i.PaidAmount)))
+            .ToListAsync(cancellationToken);
+
+        if (overdueAgreements.Count == 0)
+            return (false, 0m, 0);
+
+        decimal totalAmount = 0m;
+        foreach (var ag in overdueAgreements)
+        {
+            var invDebt = ag.Invoices
+                .Where(i => i.Status is InvoiceStatusConstants.Overdue or InvoiceStatusConstants.Open or InvoiceStatusConstants.PartiallyPaid
+                            && (i.Status == InvoiceStatusConstants.Overdue || i.DueDate < utcToday)
+                            && i.TotalAmount > i.PaidAmount)
+                .Sum(i => Math.Max(0m, i.TotalAmount - i.PaidAmount));
+            totalAmount += invDebt > 0 ? invDebt : ag.MonthlyRateSnapshot;
+        }
+
+        return (true, totalAmount, overdueAgreements.Count);
+    }
+
     private async Task<AuthResponse> BuildAuthResponseAsync(User user, CancellationToken cancellationToken)
     {
         var rawRoles = ExtractRawRoles(user);
@@ -685,6 +719,10 @@ public class AuthService : IAuthService
             ? await GetNegativeDebtInvoicesAsync(user.Id, cancellationToken)
             : new List<NegativeDebtInvoiceItemDto>();
 
+        var overdueSummary = canonicalRoles.Any(r => r.Equals("Customer", StringComparison.OrdinalIgnoreCase))
+            ? await GetOverdueRentSummaryAsync(user.Id, cancellationToken)
+            : (HasOverdue: false, TotalAmount: 0m, AgreementCount: 0);
+
         return new AuthUserDto
         {
             Id = user.Id,
@@ -698,6 +736,9 @@ public class AuthService : IAuthService
             HasNegativeDepositDebt = debtItems.Count > 0,
             TotalNegativeDebtAmount = debtItems.Sum(d => d.OutstandingAmount),
             NegativeDebtInvoices = debtItems,
+            HasOverdueRentDebt = overdueSummary.HasOverdue,
+            TotalOverdueRentAmount = overdueSummary.TotalAmount,
+            OverdueAgreementCount = overdueSummary.AgreementCount,
             Roles = canonicalRoles,
             Permissions = permissions,
             AssignedFacilityIds = assignedFacilityIds,
