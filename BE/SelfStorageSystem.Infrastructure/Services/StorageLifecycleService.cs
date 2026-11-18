@@ -148,7 +148,7 @@ public sealed class StorageLifecycleService : IStorageLifecycleService
                                 AgreementId = ag.Id,
                                 CustomerId = ag.CustomerId,
                                 BillingPeriod = monthPeriod,
-                                IssueDate = localToday,
+                                IssueDate = cycleDueDate < localToday ? cycleDueDate : localToday,
                                 DueDate = cycleDueDate,
                                 Currency = PaymentConstants.CurrencyVnd,
                                 SubtotalAmount = ag.MonthlyRateSnapshot,
