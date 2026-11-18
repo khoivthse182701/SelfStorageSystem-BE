@@ -541,6 +541,11 @@ public class AuthService : IAuthService
 
             profile.FullName = newFullName;
             user.PhoneNumber = newPhone;
+            if (user.EmployeeProfile != null)
+            {
+                user.EmployeeProfile.FullName = newFullName;
+                user.EmployeeProfile.UpdatedAt = now;
+            }
             profile.ProfileEditCount += 1;
         }
 

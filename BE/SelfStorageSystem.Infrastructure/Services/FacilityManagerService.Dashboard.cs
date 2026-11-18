@@ -245,7 +245,17 @@ public partial class FacilityManagerService : IFacilityManagerService
             throw AppException.FromError(ManagerErrors.FacilityNotFound);
         }
 
-        // Manager and Admin have global operational access across all facilities.
+        if (!isSystemAdmin)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var isAssigned = await _dbContext.StaffFacilityAssignments
+                .AnyAsync(sfa => sfa.EmployeeId == currentUserId && sfa.FacilityId == facilityId && (sfa.EndsAt == null || sfa.EndsAt > now), cancellationToken);
+
+            if (!isAssigned)
+            {
+                throw AppException.FromError(ManagerErrors.NotAssignedToFacility);
+            }
+        }
     }
 
     private async Task<long> GetManagerEmployeeIdAsync(
@@ -288,19 +298,38 @@ public partial class FacilityManagerService : IFacilityManagerService
         bool isSystemAdmin,
         CancellationToken cancellationToken = default)
     {
-        // Manager and Admin have global access to all facilities
-        return await _dbContext.Facilities
+        if (isSystemAdmin)
+        {
+            return await _dbContext.Facilities
+                .AsNoTracking()
+                .OrderBy(f => f.Name)
+                .Select(f => new ManagerFacilityScopeDto
+                {
+                    Id = f.Id,
+                    Code = f.Code,
+                    Name = f.Name,
+                    AddressLine = f.AddressLine,
+                    City = f.City,
+                    Status = f.Status,
+                    AssignmentRole = RoleConstants.Admin
+                })
+                .ToListAsync(cancellationToken);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        return await _dbContext.StaffFacilityAssignments
             .AsNoTracking()
-            .OrderBy(f => f.Name)
-            .Select(f => new ManagerFacilityScopeDto
+            .Where(sfa => sfa.EmployeeId == currentUserId && (sfa.EndsAt == null || sfa.EndsAt > now))
+            .OrderBy(sfa => sfa.Facility.Name)
+            .Select(sfa => new ManagerFacilityScopeDto
             {
-                Id = f.Id,
-                Code = f.Code,
-                Name = f.Name,
-                AddressLine = f.AddressLine,
-                City = f.City,
-                Status = f.Status,
-                AssignmentRole = isSystemAdmin ? RoleConstants.Admin : RoleConstants.Manager
+                Id = sfa.Facility.Id,
+                Code = sfa.Facility.Code,
+                Name = sfa.Facility.Name,
+                AddressLine = sfa.Facility.AddressLine,
+                City = sfa.Facility.City,
+                Status = sfa.Facility.Status,
+                AssignmentRole = sfa.AssignmentRole
             })
             .ToListAsync(cancellationToken);
     }
