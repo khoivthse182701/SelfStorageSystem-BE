@@ -47,7 +47,7 @@ public class GoogleAuthService : IGoogleAuthService
         }
 
         // Always register the user's active Google OAuth Client IDs to prevent 'aud' claim mismatch
-        allowedAudiences.Add("827798715826-ef477sod2l5a1f34484no0v78r1fbdsl.apps.googleusercontent.com");
+        allowedAudiences.Add("241747258288-vld6ic9r803bgen03lf5d78h45e7lp2i.apps.googleusercontent.com");
 
         if (allowedAudiences.Count == 0)
         {
