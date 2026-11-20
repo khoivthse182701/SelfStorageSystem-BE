@@ -53,6 +53,10 @@ if (configArgs.Length > 0)
     builder.Configuration.AddCommandLine(configArgs);
 }
 
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
+
 // In .NET 8, prevent an unhandled exception in background worker from crashing the entire host process with exit code -1
 builder.Services.Configure<HostOptions>(options =>
 {

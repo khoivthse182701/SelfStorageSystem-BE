@@ -34,6 +34,21 @@ public static class AuthErrors
     public static readonly Error MonthlyProfileEditLimitReached =
         Error.Conflict("Profile.MonthlyEditLimitReached", "Bạn đã sử dụng hết tối đa 2 lần chỉnh sửa Họ tên / Số điện thoại trong tháng này.");
 
+    public static readonly Error CurrentPasswordIncorrect =
+        Error.Validation("Auth.CurrentPasswordIncorrect", "Mật khẩu hiện tại không chính xác.");
+
+    public static readonly Error PasswordTooShort =
+        Error.Validation("Auth.PasswordTooShort", "Mật khẩu mới phải có ít nhất 6 ký tự.");
+
+    public static readonly Error NewPasswordMismatch =
+        Error.Validation("Auth.NewPasswordMismatch", "Mật khẩu xác nhận không khớp với mật khẩu mới.");
+
+    public static readonly Error NewPasswordSameAsOld =
+        Error.Validation("Auth.NewPasswordSameAsOld", "Mật khẩu mới không được trùng với mật khẩu hiện tại.");
+
+    public static readonly Error StaffIdentityLocked =
+        Error.Forbidden("Profile.StaffIdentityLocked", "Họ tên và Số CCCD của nhân sự do Admin/HR quản lý và không thể tự chỉnh sửa.");
+
     // ── OTP ────────────────────────────────────────────────────────────────
     public static readonly Error OtpInvalid =
         Error.Validation("Auth.OtpInvalid", "Incorrect or expired OTP code.");

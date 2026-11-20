@@ -152,6 +152,27 @@ public class AuthController : ControllerBase
         return Ok(ApiResponse<CustomerProfileDto>.Ok(profile, "Profile updated successfully."));
     }
 
+    /// <summary>
+    /// Change password for authenticated user.
+    /// </summary>
+    [HttpPost("change-password")]
+    [HttpPost("/api/v1/change-password")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<string>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request, CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdClaim) || !long.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized(ApiResponse.Fail("Cannot authenticate user identity from token."));
+        }
+
+        await _authService.ChangePasswordAsync(userId, request, cancellationToken);
+        return Ok(ApiResponse<string>.Ok("Mật khẩu đã được thay đổi thành công.", "Password changed successfully."));
+    }
+
     private string? GetClientIp()
     {
         var forwarded = Request.Headers["X-Forwarded-For"].FirstOrDefault();

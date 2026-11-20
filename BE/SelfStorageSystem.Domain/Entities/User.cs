@@ -78,4 +78,7 @@ public partial class User
     public virtual ICollection<UserRole> UserRoleGrantedByNavigations { get; set; } = new List<UserRole>();
 
     public virtual ICollection<UserRole> UserRoleUsers { get; set; } = new List<UserRole>();
+
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public virtual ICollection<UserRole> UserRoles { get => UserRoleUsers; set => UserRoleUsers = value; }
 }

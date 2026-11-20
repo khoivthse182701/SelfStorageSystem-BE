@@ -574,14 +574,14 @@ public async Task<AdminUserDetailDto> CreateInternalUserAsync(
 
         if (!hasEmployeeRole && user.EmployeeProfile != null)
         {
-            // Close active staff assignments if demoted
-            var activeAssignments = await _dbContext.StaffFacilityAssignments
-                .Where(sfa => sfa.EmployeeId == user.EmployeeProfile.UserId && (sfa.EndsAt == null || sfa.EndsAt > now))
+            // Remove staff assignments if demoted to customer / non-employee
+            var assignments = await _dbContext.StaffFacilityAssignments
+                .Where(sfa => sfa.EmployeeId == user.EmployeeProfile.UserId)
                 .ToListAsync(cancellationToken);
 
-            foreach (var a in activeAssignments)
+            if (assignments.Count > 0)
             {
-                a.EndsAt = now;
+                _dbContext.StaffFacilityAssignments.RemoveRange(assignments);
             }
         }
         else if (hasEmployeeRole && user.EmployeeProfile != null)

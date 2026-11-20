@@ -15,6 +15,15 @@ public class ManagerStorageUnitDto
     public decimal HeightM { get; set; }
     public decimal? AreaM2 { get; set; }
     public decimal? VolumeM3 { get; set; }
+    public decimal? CustomWidthM { get; set; }
+    public decimal? CustomLengthM { get; set; }
+    public decimal? CustomHeightM { get; set; }
+    public decimal? CustomAreaM2 { get; set; }
+    public string? StorageCategory { get; set; }
+    public string? CategoryName { get; set; }
+    public decimal? CustomMonthlyRate { get; set; }
+    public decimal? BasePricePerSqm { get; set; }
+    public decimal? CategorySurcharge { get; set; }
     public long? AreaId { get; set; }
     public string? AreaName { get; set; }
     public string? FloorLabel { get; set; }
@@ -32,7 +41,6 @@ public class ManagerCreateStorageUnitRequest
     [Required]
     public string UnitCode { get; set; } = string.Empty;
 
-    [Required]
     public long UnitTypeId { get; set; }
 
     public long? AreaId { get; set; }
@@ -48,6 +56,17 @@ public class ManagerCreateStorageUnitRequest
     public string? Notes { get; set; }
 
     public string? ImageUrl { get; set; }
+
+    public decimal? LengthM { get; set; }
+    public decimal? WidthM { get; set; }
+    public decimal? HeightM { get; set; }
+    public decimal? CustomLengthM { get; set; }
+    public decimal? CustomWidthM { get; set; }
+    public decimal? CustomHeightM { get; set; }
+    public decimal? CustomAreaM2 { get; set; }
+    public string? CategoryName { get; set; }
+    public string? StorageCategory { get; set; }
+    public decimal? CustomMonthlyRate { get; set; }
 }
 
 public class ManagerUpdateStorageUnitRequest
@@ -69,6 +88,17 @@ public class ManagerUpdateStorageUnitRequest
     public string? Notes { get; set; }
 
     public string? ImageUrl { get; set; }
+
+    public decimal? LengthM { get; set; }
+    public decimal? WidthM { get; set; }
+    public decimal? HeightM { get; set; }
+    public decimal? CustomLengthM { get; set; }
+    public decimal? CustomWidthM { get; set; }
+    public decimal? CustomHeightM { get; set; }
+    public decimal? CustomAreaM2 { get; set; }
+    public string? CategoryName { get; set; }
+    public string? StorageCategory { get; set; }
+    public decimal? CustomMonthlyRate { get; set; }
 }
 
 public class ManagerAreaLayoutDto

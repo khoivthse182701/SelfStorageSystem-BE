@@ -135,4 +135,7 @@ public static class ManagerErrors
 
     public static readonly Error AlreadyLiquidated =
         Error.Conflict("Manager.AlreadyLiquidated", "This rental agreement has already been liquidated or terminated.");
+
+    public static readonly Error CannotManageManagerAccount =
+        Error.Forbidden("Manager.CannotManageManagerAccount", "Quản lý cơ sở không thể quản lý tài khoản Quản lý khác hoặc tự hạ quyền bản thân. Vui lòng cập nhật thông tin tại trang Hồ sơ cá nhân.");
 }

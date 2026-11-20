@@ -55,4 +55,36 @@ public static class StorageCategoryClassifier
 
         return rawName.Trim();
     }
+
+    public static bool IsUnitTypeMatchingCategory(string? unitTypeCode, string? unitTypeName, string canonicalCategory)
+    {
+        var lowerCat = canonicalCategory.ToLowerInvariant();
+        var code = (unitTypeCode ?? "").ToUpperInvariant();
+        var name = (unitTypeName ?? "").ToLowerInvariant();
+
+        if (lowerCat.Contains("hóa chất") || lowerCat.Contains("chemical"))
+            return true;
+        if (lowerCat.Contains("lạnh") || lowerCat.Contains("seafood") || lowerCat.Contains("thủy hải sản"))
+            return code.Contains("SEAFOOD") || name.Contains("seafood") || name.Contains("cold");
+        if (lowerCat.Contains("mát") || lowerCat.Contains("điều hòa") || lowerCat.Contains("climate"))
+            return code.Contains("CLIMATE") || name.Contains("climate");
+        if (lowerCat.Contains("sưởi") || lowerCat.Contains("warm"))
+            return code.Contains("WARM") || name.Contains("warm") || name.Contains("heat");
+        if (lowerCat.Contains("khô") || lowerCat.Contains("dry") || lowerCat.Contains("locker"))
+            return code.Contains("DRY") || name.Contains("dry") || code.Contains("LOCKER") || name.Contains("locker");
+
+        return true;
+    }
+
+    public static long FindBestMatchingUnitTypeId(IEnumerable<SelfStorageSystem.Domain.Entities.UnitType> unitTypes, string rawCategory, decimal areaM2)
+    {
+        var list = unitTypes.Where(t => t.IsActive).ToList();
+        if (list.Count == 0) return 1;
+
+        var canonical = ClassifyCanonicalGroup(rawCategory);
+        var matching = list.Where(t => IsUnitTypeMatchingCategory(t.Code, t.Name, canonical)).ToList();
+        var pool = matching.Count > 0 ? matching : list;
+
+        return pool.OrderBy(t => Math.Abs((t.AreaM2 ?? (t.LengthM * t.WidthM)) - areaM2)).First().Id;
+    }
 }
