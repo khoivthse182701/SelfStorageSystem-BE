@@ -526,7 +526,10 @@ public class CustomerPaymentService : ICustomerPaymentService
             Method = p.Method,
             Provider = p.Provider,
             ProviderTransactionId = p.ProviderTransactionId,
-            Status = p.Status,
+            Status = (p.Status == PaymentConstants.StatusPending &&
+                      string.Equals(p.TargetInvoice?.Status, InvoiceStatusConstants.Voided, StringComparison.OrdinalIgnoreCase))
+                ? PaymentConstants.StatusCancelled
+                : p.Status,
             PaidAt = p.PaidAt,
             CreatedAt = p.CreatedAt,
             FailureReason = p.FailureReason,
