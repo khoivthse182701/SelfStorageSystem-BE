@@ -157,7 +157,8 @@ public class CustomerPaymentService : ICustomerPaymentService
                 throw AppException.FromError(PaymentErrors.AlreadyConfirmed);
 
             invoice = reservation.Invoices.FirstOrDefault(i =>
-                i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft || i.Status == InvoiceStatusConstants.PartiallyPaid);
+                i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft ||
+                i.Status == InvoiceStatusConstants.PartiallyPaid || i.Status == InvoiceStatusConstants.Overdue);
         }
         else
         {
