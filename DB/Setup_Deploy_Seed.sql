@@ -72,7 +72,13 @@ BEGIN TRY
     DELETE FROM [core].[unit_status_history];
 
     PRINT N'>>> 3. Chuẩn hóa 2 cơ sở: Thủ Đức & Cầu Giấy...';
-    -- Cơ sở 1: Thủ Đức
+    DECLARE @FacTD BIGINT = (SELECT TOP 1 id FROM [core].[facilities] WHERE [code] = 'HCM-TD' OR [name] LIKE N'%Thủ Đức%');
+    IF @FacTD IS NULL SET @FacTD = 1;
+
+    DECLARE @FacCG BIGINT = (SELECT TOP 1 id FROM [core].[facilities] WHERE [code] = 'HN-CG' OR [city] = N'Hà Nội' OR [name] LIKE N'%Cầu Giấy%');
+    IF @FacCG IS NULL SET @FacCG = 2;
+
+    -- Cơ sở Thủ Đức
     UPDATE [core].[facilities]
     SET [code] = 'HCM-TD',
         [name] = N'Kho Thủ Đức - G1 Storage Hồ Chí Minh',
@@ -82,9 +88,9 @@ BEGIN TRY
         [city] = N'Hồ Chí Minh',
         [status] = 'active',
         [updated_at] = SYSUTCDATETIME()
-    WHERE [id] = 1;
+    WHERE [id] = @FacTD;
 
-    -- Cơ sở 6: Cầu Giấy (Kích hoạt active)
+    -- Cơ sở Cầu Giấy (Kích hoạt active)
     UPDATE [core].[facilities]
     SET [code] = 'HN-CG',
         [name] = N'Kho Cầu Giấy - Hà Nội Capital Storage',
@@ -94,13 +100,13 @@ BEGIN TRY
         [city] = N'Hà Nội',
         [status] = 'active',
         [updated_at] = SYSUTCDATETIME()
-    WHERE [id] = 6;
+    WHERE [id] = @FacCG;
 
     -- Vô hiệu hóa tất cả các cơ sở khác (để hệ thống chỉ hiển thị đúng 2 cơ sở)
     UPDATE [core].[facilities]
     SET [status] = 'inactive',
         [updated_at] = SYSUTCDATETIME()
-    WHERE [id] NOT IN (1, 6);
+    WHERE [id] NOT IN (@FacTD, @FacCG);
 
     PRINT N'>>> 4. Chuẩn hóa 5 loại kho & biểu giá (1.000đ - 2.000đ, 100đ/m2)...';
     -- Cập nhật price_ranges từ 1.000đ đến 2.000đ
@@ -108,15 +114,7 @@ BEGIN TRY
     SET [min_monthly_rate] = 1000.00,
         [max_monthly_rate] = 2000.00;
 
-    -- Biểu giá cơ sở (facility_rates) từ 1.000đ - 2.000đ cho cả cơ sở 1 và 6
-    -- S-DRY (1): 1.000đ
-    -- M-DRY (2): 1.200đ
-    -- M-SEAFOOD (3): 1.600đ
-    -- L-WARM (4): 1.800đ
-    -- XL-CLIMATE (5): 2.000đ
-    -- MINI-DRY (6): 1.000đ
-    -- S-SEAFOOD (7): 1.300đ
-    -- M-WARM (8): 1.400đ
+    -- Biểu giá cơ sở (facility_rates) từ 1.000đ - 2.000đ cho cả 2 cơ sở
     UPDATE [core].[facility_rates]
     SET [monthly_rate] = CASE [unit_type_id]
             WHEN 1 THEN 1000.00
@@ -140,19 +138,85 @@ BEGIN TRY
             WHEN 8 THEN 1400.00
             ELSE 1500.00
         END
-    WHERE [facility_id] IN (1, 6);
+    WHERE [facility_id] IN (@FacTD, @FacCG);
 
     PRINT N'>>> 5. Chuẩn hóa đúng 20 ô kho mỗi cơ sở (A-101..A-110, B-101..B-110) với giá 100đ/m2...';
     -- Ẩn tất cả các ô kho ở các cơ sở không kích hoạt
     UPDATE [core].[storage_units]
     SET [is_listed] = 0,
         [updated_at] = SYSUTCDATETIME()
-    WHERE [facility_id] NOT IN (1, 6);
+    WHERE [facility_id] NOT IN (@FacTD, @FacCG);
+
+    -- Dọn dẹp các ô kho cũ ngoài danh mục A-101..A-110, B-101..B-110
+    DELETE FROM [core].[unit_map_positions] 
+    WHERE [unit_id] IN (
+        SELECT id FROM [core].[storage_units] 
+        WHERE [facility_id] IN (@FacTD, @FacCG) AND [unit_code] NOT LIKE 'A-%' AND [unit_code] NOT LIKE 'B-%'
+    );
+    DELETE FROM [core].[storage_units] 
+    WHERE [facility_id] IN (@FacTD, @FacCG) AND [unit_code] NOT LIKE 'A-%' AND [unit_code] NOT LIKE 'B-%';
+
+    -- Đảm bảo mỗi cơ sở đều có đủ Zone A và Zone B (chống NULL area_id)
+    DECLARE @FacilityZones TABLE (
+        [facility_id] BIGINT,
+        [zone_label] NVARCHAR(10),
+        [area_id] BIGINT
+    );
+
+    DECLARE @CurFac BIGINT;
+    DECLARE fac_cur CURSOR LOCAL FAST_FORWARD FOR SELECT @FacTD UNION SELECT @FacCG;
+    OPEN fac_cur;
+    FETCH NEXT FROM fac_cur INTO @CurFac;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        DECLARE @FloorId BIGINT = (
+            SELECT TOP 1 id FROM [core].[facility_areas] 
+            WHERE facility_id = @CurFac AND (code LIKE '%F1%' OR name LIKE '%Floor 1%')
+            ORDER BY id ASC
+        );
+        IF @FloorId IS NULL
+        BEGIN
+            INSERT INTO [core].[facility_areas] ([facility_id], [code], [name], [area_type], [display_order], [map_metadata], [is_active])
+            VALUES (@CurFac, 'F1', N'Floor 1', 'floor', 1, N'{}', 1);
+            SET @FloorId = SCOPE_IDENTITY();
+        END;
+
+        DECLARE @ZaId BIGINT = (
+            SELECT TOP 1 id FROM [core].[facility_areas] 
+            WHERE facility_id = @CurFac AND (code LIKE '%ZA%' OR name LIKE '%Zone A%')
+            ORDER BY id ASC
+        );
+        IF @ZaId IS NULL
+        BEGIN
+            INSERT INTO [core].[facility_areas] ([facility_id], [parent_area_id], [code], [name], [area_type], [display_order], [map_metadata], [is_active])
+            VALUES (@CurFac, @FloorId, 'F1-ZA', N'Floor 1 - Zone A', 'zone', 1, N'{}', 1);
+            SET @ZaId = SCOPE_IDENTITY();
+        END;
+
+        DECLARE @ZbId BIGINT = (
+            SELECT TOP 1 id FROM [core].[facility_areas] 
+            WHERE facility_id = @CurFac AND (code LIKE '%ZB%' OR name LIKE '%Zone B%')
+            ORDER BY id ASC
+        );
+        IF @ZbId IS NULL
+        BEGIN
+            INSERT INTO [core].[facility_areas] ([facility_id], [parent_area_id], [code], [name], [area_type], [display_order], [map_metadata], [is_active])
+            VALUES (@CurFac, @FloorId, 'F1-ZB', N'Floor 1 - Zone B', 'zone', 2, N'{}', 1);
+            SET @ZbId = SCOPE_IDENTITY();
+        END;
+
+        INSERT INTO @FacilityZones ([facility_id], [zone_label], [area_id])
+        VALUES (@CurFac, 'A', @ZaId), (@CurFac, 'B', @ZbId);
+
+        FETCH NEXT FROM fac_cur INTO @CurFac;
+    END;
+    CLOSE fac_cur;
+    DEALLOCATE fac_cur;
 
     -- Bảng tạm chứa thông tin 20 mẫu thiết kế ô kho chuẩn cho cả 2 cơ sở
     DECLARE @UnitTemplate TABLE (
         [unit_code] NVARCHAR(50),
-        [zone_code] NVARCHAR(20),
         [zone_label] NVARCHAR(10),
         [unit_type_id] BIGINT,
         [type_code] NVARCHAR(50),
@@ -173,38 +237,35 @@ BEGIN TRY
     INSERT INTO @UnitTemplate
     VALUES
     -- ZONE A (A-101 -> A-110)
-    (N'A-101', N'F1-ZA', N'A', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 5.00, 5.00, 22.00, 16.00),
-    (N'A-102', N'F1-ZA', N'A', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 32.00, 5.00, 22.00, 16.00),
-    (N'A-103', N'F1-ZA', N'A', 6, N'MINI-DRY', N'Kho hàng khô', 1.00, 1.00, 1.20, 1.00, 100.00, 100.00, 1000.00, 59.00, 5.00, 22.00, 16.00),
-    (N'A-104', N'F1-ZA', N'A', 6, N'MINI-DRY', N'Kho hàng khô', 1.00, 1.00, 1.20, 1.00, 100.00, 100.00, 1000.00, 86.00, 5.00, 22.00, 16.00),
-    (N'A-105', N'F1-ZA', N'A', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 113.00, 5.00, 22.00, 16.00),
-    (N'A-106', N'F1-ZA', N'A', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 5.00, 35.00, 22.00, 16.00),
-    (N'A-107', N'F1-ZA', N'A', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 32.00, 35.00, 22.00, 16.00),
-    (N'A-108', N'F1-ZA', N'A', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 59.00, 35.00, 22.00, 16.00),
-    (N'A-109', N'F1-ZA', N'A', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 86.00, 35.00, 22.00, 16.00),
-    (N'A-110', N'F1-ZA', N'A', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 113.00, 35.00, 22.00, 16.00),
+    (N'A-101', N'A', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 5.00, 5.00, 22.00, 16.00),
+    (N'A-102', N'A', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 32.00, 5.00, 22.00, 16.00),
+    (N'A-103', N'A', 6, N'MINI-DRY', N'Kho hàng khô', 1.00, 1.00, 1.20, 1.00, 100.00, 100.00, 1000.00, 59.00, 5.00, 22.00, 16.00),
+    (N'A-104', N'A', 6, N'MINI-DRY', N'Kho hàng khô', 1.00, 1.00, 1.20, 1.00, 100.00, 100.00, 1000.00, 86.00, 5.00, 22.00, 16.00),
+    (N'A-105', N'A', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 113.00, 5.00, 22.00, 16.00),
+    (N'A-106', N'A', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 5.00, 35.00, 22.00, 16.00),
+    (N'A-107', N'A', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 32.00, 35.00, 22.00, 16.00),
+    (N'A-108', N'A', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 59.00, 35.00, 22.00, 16.00),
+    (N'A-109', N'A', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 86.00, 35.00, 22.00, 16.00),
+    (N'A-110', N'A', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 113.00, 35.00, 22.00, 16.00),
 
     -- ZONE B (B-101 -> B-110)
-    (N'B-101', N'F1-ZB', N'B', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 5.00, 5.00, 22.00, 16.00),
-    (N'B-102', N'F1-ZB', N'B', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 32.00, 5.00, 22.00, 16.00),
-    (N'B-103', N'F1-ZB', N'B', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 59.00, 5.00, 22.00, 16.00),
-    (N'B-104', N'F1-ZB', N'B', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 86.00, 5.00, 22.00, 16.00),
-    (N'B-105', N'F1-ZB', N'B', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 113.00, 5.00, 22.00, 16.00),
-    (N'B-106', N'F1-ZB', N'B', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 5.00, 35.00, 22.00, 16.00),
-    (N'B-107', N'F1-ZB', N'B', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 32.00, 35.00, 22.00, 16.00),
-    (N'B-108', N'F1-ZB', N'B', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 59.00, 35.00, 22.00, 16.00),
-    (N'B-109', N'F1-ZB', N'B', 5, N'XL-CLIMATE', N'Kho mát điều hòa', 4.00, 4.00, 3.00, 16.00, 100.00, 500.00, 2000.00, 86.00, 35.00, 22.00, 16.00),
-    (N'B-110', N'F1-ZB', N'B', 5, N'XL-CLIMATE', N'Kho mát điều hòa', 4.00, 4.00, 3.00, 16.00, 100.00, 500.00, 2000.00, 113.00, 35.00, 22.00, 16.00);
-
-    DECLARE @SeedFacilities TABLE ([fac_id] BIGINT);
-    INSERT INTO @SeedFacilities VALUES (1), (6);
+    (N'B-101', N'B', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 5.00, 5.00, 22.00, 16.00),
+    (N'B-102', N'B', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 32.00, 5.00, 22.00, 16.00),
+    (N'B-103', N'B', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 59.00, 5.00, 22.00, 16.00),
+    (N'B-104', N'B', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 86.00, 5.00, 22.00, 16.00),
+    (N'B-105', N'B', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 113.00, 5.00, 22.00, 16.00),
+    (N'B-106', N'B', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 5.00, 35.00, 22.00, 16.00),
+    (N'B-107', N'B', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 32.00, 35.00, 22.00, 16.00),
+    (N'B-108', N'B', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 59.00, 35.00, 22.00, 16.00),
+    (N'B-109', N'B', 5, N'XL-CLIMATE', N'Kho mát điều hòa', 4.00, 4.00, 3.00, 16.00, 100.00, 500.00, 2000.00, 86.00, 35.00, 22.00, 16.00),
+    (N'B-110', N'B', 5, N'XL-CLIMATE', N'Kho mát điều hòa', 4.00, 4.00, 3.00, 16.00, 100.00, 500.00, 2000.00, 113.00, 35.00, 22.00, 16.00);
 
     MERGE INTO [core].[storage_units] AS target
     USING (
         SELECT 
             f.fac_id AS facility_id,
             u.unit_code,
-            CASE WHEN u.zone_label = 'A' THEN za.id ELSE zb.id END AS area_id,
+            z.area_id,
             u.zone_label,
             N'1' AS floor_label,
             u.unit_type_id,
@@ -217,12 +278,11 @@ BEGIN TRY
             u.category_surcharge,
             u.custom_monthly_rate,
             u.storage_category + N' (' + CAST(u.area_m2 AS NVARCHAR(10)) + N' m2)' AS notes,
-            CASE WHEN f.fac_id = 1 AND u.unit_code = 'A-101' THEN 'occupied' ELSE 'available' END AS physical_status,
+            CASE WHEN f.fac_id = @FacTD AND u.unit_code = 'A-101' THEN 'occupied' ELSE 'available' END AS physical_status,
             1 AS is_listed
-        FROM @SeedFacilities f
+        FROM (SELECT @FacTD AS fac_id UNION SELECT @FacCG) f
         CROSS JOIN @UnitTemplate u
-        LEFT JOIN [core].[facility_areas] za ON za.facility_id = f.fac_id AND za.code = 'F1-ZA'
-        LEFT JOIN [core].[facility_areas] zb ON zb.facility_id = f.fac_id AND zb.code = 'F1-ZB'
+        JOIN @FacilityZones z ON z.facility_id = f.fac_id AND z.zone_label = u.zone_label
     ) AS src
     ON (target.facility_id = src.facility_id AND target.unit_code = src.unit_code)
     WHEN MATCHED THEN
@@ -273,7 +333,7 @@ BEGIN TRY
             N'{}' AS metadata
         FROM [core].[storage_units] u
         JOIN @UnitTemplate t ON u.unit_code = t.unit_code
-        WHERE u.facility_id IN (1, 6)
+        WHERE u.facility_id IN (@FacTD, @FacCG)
     ) AS src
     ON (target.unit_id = src.unit_id)
     WHEN MATCHED THEN
@@ -340,9 +400,9 @@ BEGIN TRY
 
     DELETE FROM [core].[staff_facility_assignments] WHERE [employee_id] = @ManagerId;
     INSERT INTO [core].[staff_facility_assignments] ([employee_id], [facility_id], [assignment_role], [starts_at], [assigned_by], [created_at])
-    VALUES (@ManagerId, 1, 'facility_manager', '2026-01-01', @AdminId, SYSUTCDATETIME());
+    VALUES (@ManagerId, @FacTD, 'facility_manager', '2026-01-01', @AdminId, SYSUTCDATETIME());
 
-    -- 6.3. MANAGER CẦU GIẤY (manager1@gmail.com) -> Cơ sở 6
+    -- 6.3. MANAGER CẦU GIẤY (manager1@gmail.com) -> Cơ sở Cầu Giấy (@FacCG)
     IF NOT EXISTS (SELECT 1 FROM [core].[users] WHERE [email] = 'manager1@gmail.com')
     BEGIN
         INSERT INTO [core].[users] ([email], [phone_number], [password_hash], [status], [created_at], [updated_at])
@@ -367,9 +427,9 @@ BEGIN TRY
 
     DELETE FROM [core].[staff_facility_assignments] WHERE [employee_id] = @Manager1Id;
     INSERT INTO [core].[staff_facility_assignments] ([employee_id], [facility_id], [assignment_role], [starts_at], [assigned_by], [created_at])
-    VALUES (@Manager1Id, 6, 'facility_manager', '2026-01-01', @AdminId, SYSUTCDATETIME());
+    VALUES (@Manager1Id, @FacCG, 'facility_manager', '2026-01-01', @AdminId, SYSUTCDATETIME());
 
-    -- 6.4. STAFF THỦ ĐỨC (staff@gmail.com) -> Cơ sở 1
+    -- 6.4. STAFF THỦ ĐỨC (staff@gmail.com) -> Cơ sở Thủ Đức (@FacTD)
     IF NOT EXISTS (SELECT 1 FROM [core].[users] WHERE [email] = 'staff@gmail.com')
     BEGIN
         INSERT INTO [core].[users] ([email], [phone_number], [password_hash], [status], [created_at], [updated_at])
@@ -394,9 +454,9 @@ BEGIN TRY
 
     DELETE FROM [core].[staff_facility_assignments] WHERE [employee_id] = @StaffId;
     INSERT INTO [core].[staff_facility_assignments] ([employee_id], [facility_id], [assignment_role], [starts_at], [assigned_by], [created_at])
-    VALUES (@StaffId, 1, 'facility_staff', '2026-01-01', @AdminId, SYSUTCDATETIME());
+    VALUES (@StaffId, @FacTD, 'facility_staff', '2026-01-01', @AdminId, SYSUTCDATETIME());
 
-    -- 6.5. STAFF CẦU GIẤY (staff1@gmail.com) -> Cơ sở 6
+    -- 6.5. STAFF CẦU GIẤY (staff1@gmail.com) -> Cơ sở Cầu Giấy (@FacCG)
     IF NOT EXISTS (SELECT 1 FROM [core].[users] WHERE [email] = 'staff1@gmail.com')
     BEGIN
         INSERT INTO [core].[users] ([email], [phone_number], [password_hash], [status], [created_at], [updated_at])
@@ -421,7 +481,7 @@ BEGIN TRY
 
     DELETE FROM [core].[staff_facility_assignments] WHERE [employee_id] = @Staff1Id;
     INSERT INTO [core].[staff_facility_assignments] ([employee_id], [facility_id], [assignment_role], [starts_at], [assigned_by], [created_at])
-    VALUES (@Staff1Id, 6, 'facility_staff', '2026-01-01', @AdminId, SYSUTCDATETIME());
+    VALUES (@Staff1Id, @FacCG, 'facility_staff', '2026-01-01', @AdminId, SYSUTCDATETIME());
 
     -- 6.6. CUSTOMER (customer@gmail.com)
     IF NOT EXISTS (SELECT 1 FROM [core].[users] WHERE [email] = 'customer@gmail.com')
@@ -461,14 +521,19 @@ BEGIN TRY
     DECLARE @Yesterday DATE = DATEADD(DAY, -1, @Today);
     DECLARE @StartDate DATE = DATEADD(MONTH, -1, @Yesterday);
 
+    DECLARE @UnitA101_TD BIGINT = (SELECT TOP 1 id FROM [core].[storage_units] WHERE facility_id = @FacTD AND unit_code = 'A-101');
+
     -- 7.1. Đơn đặt chỗ (converted)
+    DECLARE @FacRate1 BIGINT = (SELECT TOP 1 id FROM [core].[facility_rates] WHERE facility_id = @FacTD AND unit_type_id = 1);
+    IF @FacRate1 IS NULL SET @FacRate1 = 1;
+
     INSERT INTO [core].[reservations] (
         [reservation_code], [customer_id], [facility_id], [unit_type_id], [facility_rate_id],
         [start_date], [end_date], [monthly_rate_snapshot], [deposit_snapshot], [booking_fee_snapshot],
         [discount_snapshot], [quoted_total], [hold_until], [status], [confirmed_at], [created_at], [updated_at]
     )
     VALUES (
-        'RES-HCM-OVERDUE-01', @CustomerId, 1, 1, 97,
+        'RES-HCM-OVERDUE-01', @CustomerId, @FacTD, 1, @FacRate1,
         @StartDate, @Yesterday, 1000.00, 1000.00, 0.00,
         0.00, 2000.00, DATEADD(MINUTE, 15, CAST(@StartDate AS DATETIME2)), 'converted',
         CAST(@StartDate AS DATETIME2), CAST(@StartDate AS DATETIME2), CAST(@StartDate AS DATETIME2)
@@ -483,7 +548,7 @@ BEGIN TRY
         [status], [signed_at], [checked_in_at], [created_at], [updated_at]
     )
     VALUES (
-        'AGR-HCM-OVERDUE-01', @ResId, @CustomerId, 1, 1,
+        'AGR-HCM-OVERDUE-01', @ResId, @CustomerId, @FacTD, 1,
         @StartDate, @Yesterday, 1000.00, 1000.00, 1000.00,
         'overdue', CAST(@StartDate AS DATETIME2), CAST(@StartDate AS DATETIME2),
         CAST(@StartDate AS DATETIME2), SYSUTCDATETIME()
@@ -491,14 +556,14 @@ BEGIN TRY
 
     DECLARE @AgrId BIGINT = SCOPE_IDENTITY();
 
-    -- 7.3. Phân bổ ô kho A-101 (ID=121) cho hợp đồng này
+    -- 7.3. Phân bổ ô kho A-101 cho hợp đồng này
     INSERT INTO [core].[unit_allocations] (
         [storage_unit_id], [agreement_id], [allocation_kind],
         [allocation_start_date], [allocation_end_date], [status],
         [assigned_by], [created_at]
     )
     VALUES (
-        121, @AgrId, 'primary',
+        @UnitA101_TD, @AgrId, 'primary',
         @StartDate, @Yesterday, 'active',
         @StaffId, CAST(@StartDate AS DATETIME2)
     );
