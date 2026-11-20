@@ -894,7 +894,6 @@ public class CustomerPaymentService : ICustomerPaymentService
         foreach (var dc in openCases)
         {
             dc.Status = DelinquencyCaseStatusConstants.Cured;
-            dc.OutstandingSnapshot = 0m;
             dc.ResolvedAt = now;
             _dbContext.DelinquencyActions.Add(new DelinquencyAction
             {
@@ -973,7 +972,6 @@ public class CustomerPaymentService : ICustomerPaymentService
         foreach (var dc in openCases)
         {
             dc.Status = DelinquencyCaseStatusConstants.Cured;
-            dc.OutstandingSnapshot = 0m;
             dc.ResolvedAt = now;
             _dbContext.DelinquencyActions.Add(new DelinquencyAction
             {

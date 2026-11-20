@@ -90,7 +90,6 @@ public partial class FacilityManagerService
             foreach (var dc in agreement.DelinquencyCases.Where(c => c.ResolvedAt == null))
             {
                 dc.Status = remainingDebt == 0m ? DelinquencyCaseStatusConstants.Cured : DelinquencyCaseStatusConstants.Waived;
-                dc.OutstandingSnapshot = 0m;
                 dc.ResolvedAt = now;
                 _dbContext.DelinquencyActions.Add(new DelinquencyAction
                 {
