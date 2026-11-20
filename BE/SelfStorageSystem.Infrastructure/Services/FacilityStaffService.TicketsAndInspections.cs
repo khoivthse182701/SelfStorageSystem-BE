@@ -882,7 +882,12 @@ public partial class FacilityStaffService : IFacilityStaffService
             "unsafe" => OverallConditionConstants.Unsafe,
             _ => damage > 0 ? OverallConditionConstants.Damaged : OverallConditionConstants.Good
         };
-        inspection.Summary = request.Summary;
+        var safeSummary = string.IsNullOrWhiteSpace(request.Summary) ? null : request.Summary.Trim();
+        if (safeSummary != null && safeSummary.Length > 255)
+            safeSummary = safeSummary[..255];
+
+        inspection.InspectedBy = employeeUserId;
+        inspection.Summary = safeSummary;
         inspection.Status = InspectionStatusConstants.Completed;
         inspection.InspectedAt = now;
 
