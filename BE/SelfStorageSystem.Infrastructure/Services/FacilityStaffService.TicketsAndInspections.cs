@@ -1251,6 +1251,26 @@ public partial class FacilityStaffService : IFacilityStaffService
         await _dbContext.SaveChangesAsync(cancellationToken);
         await tx.CommitAsync(cancellationToken);
 
+        if (extraPenalty > 0 && penaltyInvoiceId.HasValue && _realtimeNotifier != null)
+        {
+            var notifyUserId = agreement.Customer?.UserId ?? agreement.CustomerId;
+            if (notifyUserId > 0)
+            {
+                await _realtimeNotifier.SendNotificationToUserAsync(
+                    notifyUserId,
+                    $"[CẢNH BÁO CÔNG NỢ] Hóa đơn phạt nghiệm thu trả kho ({extraPenalty:N0} đ)",
+                    settlementSummary,
+                    new
+                    {
+                        type = "penalty_invoice",
+                        agreementId = agreement.Id,
+                        agreementNo = agreement.AgreementNo,
+                        invoiceId = penaltyInvoiceId.Value,
+                        extraPenalty
+                    });
+            }
+        }
+
         return new StaffInspectionResultDto
         {
             InspectionId = inspection.Id,

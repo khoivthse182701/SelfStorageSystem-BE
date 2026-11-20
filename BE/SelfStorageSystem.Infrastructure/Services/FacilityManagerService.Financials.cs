@@ -282,6 +282,22 @@ public partial class FacilityManagerService : IFacilityManagerService
 
             generatedInvoiceId = invoice.Id;
 
+            if (_realtimeNotifier != null && proposal.Ticket.CustomerId > 0)
+            {
+                await _realtimeNotifier.SendNotificationToUserAsync(
+                    proposal.Ticket.CustomerId,
+                    $"Hóa đơn phụ phí mới #{generatedInvoiceNo} ({proposal.Amount:N0} đ)",
+                    $"Quản lý cơ sở đã duyệt đề xuất phụ phí cho sự cố #{proposal.Ticket.TicketNo}. Vui lòng kiểm tra và thanh toán.",
+                    new
+                    {
+                        type = "ticket_charge_invoice",
+                        ticketId = proposal.TicketId,
+                        invoiceId = invoice.Id,
+                        invoiceNo = generatedInvoiceNo,
+                        amount = proposal.Amount
+                    });
+            }
+
         }
 
         else
