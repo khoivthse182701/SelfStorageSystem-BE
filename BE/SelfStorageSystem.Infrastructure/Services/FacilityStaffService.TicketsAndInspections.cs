@@ -827,6 +827,15 @@ public partial class FacilityStaffService : IFacilityStaffService
         if (agreement == null)
             throw AppException.FromError(StaffErrors.AgreementNotFound);
 
+        if (string.Equals(inspection.Status, InspectionStatusConstants.Completed, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(agreement.Status, RentalAgreementStatusConstants.CheckoutPending, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(agreement.Status, RentalAgreementStatusConstants.Completed, StringComparison.OrdinalIgnoreCase))
+        {
+            throw AppException.FromError(Error.Conflict(
+                "Staff.InspectionAlreadyCompleted",
+                "Biên bản nghiệm thu này đã được hoàn tất trước đó, không thể xuất lại hóa đơn phạt."));
+        }
+
         var now = DateTimeOffset.UtcNow;
         var isTerminated = string.Equals(agreement.Status, RentalAgreementStatusConstants.Terminated, StringComparison.OrdinalIgnoreCase);
         var deposit = isTerminated ? 0m : Math.Max(0m, agreement.DepositBalance);
