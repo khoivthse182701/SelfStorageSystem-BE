@@ -157,8 +157,9 @@ public class CustomerPaymentService : ICustomerPaymentService
                 throw AppException.FromError(PaymentErrors.AlreadyConfirmed);
 
             invoice = reservation.Invoices.FirstOrDefault(i =>
-                i.Status == InvoiceStatusConstants.Open || i.Status == InvoiceStatusConstants.Draft ||
-                i.Status == InvoiceStatusConstants.PartiallyPaid || i.Status == InvoiceStatusConstants.Overdue);
+                i.Status?.Trim().ToLowerInvariant() is
+                    InvoiceStatusConstants.Open or InvoiceStatusConstants.Draft or
+                    InvoiceStatusConstants.PartiallyPaid or InvoiceStatusConstants.Overdue);
         }
         else
         {
@@ -178,7 +179,8 @@ public class CustomerPaymentService : ICustomerPaymentService
             }
         }
 
-        if (invoice == null || invoice.Status is not (
+        var normalizedInvoiceStatus = invoice?.Status?.Trim().ToLowerInvariant();
+        if (invoice == null || normalizedInvoiceStatus is not (
             InvoiceStatusConstants.Open or InvoiceStatusConstants.Draft or InvoiceStatusConstants.PartiallyPaid or InvoiceStatusConstants.Overdue))
         {
             throw AppException.FromError(PaymentErrors.InvoiceNotFound);
