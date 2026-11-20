@@ -381,7 +381,9 @@ public record StaffMoveOutSummaryDto(
     decimal? RefundAmount = null,
     string? RefundMethod = null,
     string? PayoutStatus = null,
-    decimal DepositAmount = 0m
+    decimal DepositAmount = 0m,
+    decimal ExtraPenaltyAmount = 0m,
+    decimal DamageDeductionAmount = 0m
 );
 
 public record InspectMoveOutRequest(

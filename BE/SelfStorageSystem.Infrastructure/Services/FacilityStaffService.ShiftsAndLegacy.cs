@@ -525,6 +525,12 @@ public partial class FacilityStaffService : IFacilityStaffService
             refundByAgreement.TryGetValue(m.AgreementId, out var refItem);
 
             var deposit = m.Agreement.DepositSnapshot > 0 ? m.Agreement.DepositSnapshot : m.Agreement.DepositBalance;
+            var extraPenalty = m.Agreement.DepositBalance < 0 ? Math.Abs(m.Agreement.DepositBalance) : 0m;
+            var effectiveStatus = (m.Status != MoveOutStatusConstants.Completed &&
+                                   m.Status != MoveOutStatusConstants.Cancelled &&
+                                   m.Agreement.Status == RentalAgreementStatusConstants.CheckoutPending)
+                ? RentalAgreementStatusConstants.CheckoutPending
+                : m.Status;
 
             return new StaffMoveOutSummaryDto(
                 m.Id,
@@ -535,14 +541,16 @@ public partial class FacilityStaffService : IFacilityStaffService
                 m.Agreement.FacilityId,
                 unitCode,
                 m.RequestedMoveOutDate,
-                m.Status,
+                effectiveStatus,
                 m.Reason,
                 m.CreatedAt,
                 refItem?.Id,
                 refItem?.Amount,
                 refItem?.Provider,
                 refItem?.Status,
-                deposit
+                deposit,
+                extraPenalty,
+                m.DamageDeductionAmount
             );
         }).ToList();
 
@@ -588,9 +596,12 @@ public partial class FacilityStaffService : IFacilityStaffService
                 extraRefundByAgreement.TryGetValue(agr.Id, out var refItem);
 
                 var deposit = agr.DepositSnapshot > 0 ? agr.DepositSnapshot : agr.DepositBalance;
-                var itemStatus = (insp.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) || insp.Status.Equals("resolved", StringComparison.OrdinalIgnoreCase))
-                    ? "completed"
-                    : MoveOutStatusConstants.InspectionPending;
+                var extraPenalty = agr.DepositBalance < 0 ? Math.Abs(agr.DepositBalance) : 0m;
+                var itemStatus = agr.Status == RentalAgreementStatusConstants.CheckoutPending
+                    ? RentalAgreementStatusConstants.CheckoutPending
+                    : ((insp.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) || insp.Status.Equals("resolved", StringComparison.OrdinalIgnoreCase))
+                        ? "completed"
+                        : MoveOutStatusConstants.InspectionPending);
 
                 var moveOutDate = DateOnly.FromDateTime(agr.EndDate.ToDateTime(TimeOnly.MinValue));
                 if (date.HasValue && moveOutDate != date.Value) continue;
@@ -611,7 +622,9 @@ public partial class FacilityStaffService : IFacilityStaffService
                     refItem?.Amount,
                     refItem?.Provider,
                     refItem?.Status,
-                    deposit
+                    deposit,
+                    extraPenalty,
+                    0m
                 ));
             }
         }
