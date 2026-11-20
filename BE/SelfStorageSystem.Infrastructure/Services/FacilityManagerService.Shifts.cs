@@ -976,7 +976,12 @@ public partial class FacilityManagerService : IFacilityManagerService
 
                 .ThenInclude(ep => ep.User)
 
-            .Where(sfa => sfa.FacilityId == facilityId && (sfa.EndsAt == null || sfa.EndsAt > now))
+            .Where(sfa => sfa.FacilityId == facilityId 
+                && (sfa.EndsAt == null || sfa.EndsAt > now)
+                && sfa.AssignmentRole != RoleConstants.FacilityManager
+                && sfa.AssignmentRole != "facility_manager"
+                && sfa.Employee.UserId != currentUserId
+                && !_dbContext.UserRoles.Any(ur => ur.UserId == sfa.Employee.UserId && (ur.Role.Code == RoleConstants.FacilityManager || ur.Role.Code == RoleConstants.SystemAdministrator)))
 
             .OrderBy(sfa => sfa.Employee.FullName)
 

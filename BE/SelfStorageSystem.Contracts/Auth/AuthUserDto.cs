@@ -46,7 +46,17 @@ public sealed record CustomerProfileDto(
     int RemainingEditsThisMonth,
     bool HasNegativeDepositDebt,
     decimal TotalNegativeDebtAmount,
-    List<NegativeDebtInvoiceItemDto> NegativeDebtInvoices);
+    List<NegativeDebtInvoiceItemDto> NegativeDebtInvoices,
+    string? EmployeeCode = null,
+    string? AssignedFacilityName = null,
+    long? AssignedFacilityId = null,
+    string? EmergencyContactName = null,
+    string? EmergencyContactPhone = null,
+    string? CompanyName = null,
+    string? TaxId = null,
+    string? InvoiceAddress = null,
+    DateTimeOffset? LastLoginAt = null,
+    string? LastLoginIp = null);
 
 public sealed class UpdateCustomerProfileRequest
 {
@@ -54,6 +64,11 @@ public sealed class UpdateCustomerProfileRequest
     public string PhoneNumber { get; set; } = string.Empty;
     public string? Address { get; set; }
     public string? IdentityNumber { get; set; }
+    public string? EmergencyContactName { get; set; }
+    public string? EmergencyContactPhone { get; set; }
+    public string? CompanyName { get; set; }
+    public string? TaxId { get; set; }
+    public string? InvoiceAddress { get; set; }
 }
 
 public sealed record ResendOtpResponse(int CooldownSeconds);

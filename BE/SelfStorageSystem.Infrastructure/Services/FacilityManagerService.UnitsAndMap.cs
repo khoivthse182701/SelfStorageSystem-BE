@@ -12,6 +12,7 @@ using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
 using SelfStorageSystem.Domain.Errors;
 using SelfStorageSystem.Domain.Exceptions;
+using SelfStorageSystem.Infrastructure.Common;
 using SelfStorageSystem.Infrastructure.Persistence;
 
 namespace SelfStorageSystem.Infrastructure.Services;
@@ -138,6 +139,13 @@ public partial class FacilityManagerService : IFacilityManagerService
         var items = rawUnits.Select(u =>
         {
             var (cleanNotes, imageUrl) = ExtractNotesAndImageUrl(u.Notes);
+            var len = u.CustomLengthM ?? u.UnitType.LengthM;
+            var wid = u.CustomWidthM ?? u.UnitType.WidthM;
+            var hei = u.CustomHeightM ?? u.UnitType.HeightM;
+            var area = u.CustomAreaM2 ?? (u.CustomLengthM.HasValue && u.CustomWidthM.HasValue ? u.CustomLengthM.Value * u.CustomWidthM.Value : u.UnitType.AreaM2);
+            var category = !string.IsNullOrWhiteSpace(u.StorageCategory) ? u.StorageCategory : u.UnitType.Name;
+            var finalImg = !string.IsNullOrWhiteSpace(u.ImageUrl) ? u.ImageUrl : imageUrl;
+
             return new ManagerStorageUnitDto
             {
                 Id = u.Id,
@@ -145,12 +153,21 @@ public partial class FacilityManagerService : IFacilityManagerService
                 UnitCode = u.UnitCode,
                 UnitTypeId = u.UnitTypeId,
                 UnitTypeCode = u.UnitType.Code,
-                UnitTypeName = u.UnitType.Name,
-                WidthM = u.UnitType.WidthM,
-                LengthM = u.UnitType.LengthM,
-                HeightM = u.UnitType.HeightM,
-                AreaM2 = u.UnitType.AreaM2,
-                VolumeM3 = u.UnitType.VolumeM3,
+                UnitTypeName = category,
+                WidthM = wid,
+                LengthM = len,
+                HeightM = hei,
+                AreaM2 = area,
+                VolumeM3 = u.UnitType.VolumeM3 ?? (area * hei),
+                CustomWidthM = u.CustomWidthM,
+                CustomLengthM = u.CustomLengthM,
+                CustomHeightM = u.CustomHeightM,
+                CustomAreaM2 = u.CustomAreaM2,
+                StorageCategory = category,
+                CategoryName = category,
+                CustomMonthlyRate = u.CustomMonthlyRate,
+                BasePricePerSqm = u.BasePricePerSqm,
+                CategorySurcharge = u.CategorySurcharge,
                 AreaId = u.AreaId,
                 AreaName = u.Area != null ? u.Area.Name : null,
                 FloorLabel = u.FloorLabel,
@@ -158,7 +175,7 @@ public partial class FacilityManagerService : IFacilityManagerService
                 PhysicalStatus = u.PhysicalStatus,
                 IsListed = u.IsListed,
                 Notes = cleanNotes,
-                ImageUrl = imageUrl,
+                ImageUrl = finalImg,
                 CreatedAt = u.CreatedAt,
                 UpdatedAt = u.UpdatedAt
             };
@@ -208,93 +225,104 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        var unitType = await _dbContext.UnitTypes
-
-            .FirstOrDefaultAsync(ut => ut.Id == request.UnitTypeId, cancellationToken);
+        var unitType = request.UnitTypeId > 0
+            ? await _dbContext.UnitTypes.FirstOrDefaultAsync(ut => ut.Id == request.UnitTypeId, cancellationToken)
+            : await _dbContext.UnitTypes.OrderBy(ut => ut.Id).FirstOrDefaultAsync(cancellationToken);
 
         if (unitType == null)
-
         {
-
-            throw AppException.FromError(ManagerErrors.UnitTypeNotFound);
-
+            unitType = await _dbContext.UnitTypes.OrderBy(ut => ut.Id).FirstOrDefaultAsync(cancellationToken)
+                ?? throw AppException.FromError(ManagerErrors.UnitTypeNotFound);
         }
-
-
 
         if (request.AreaId.HasValue)
-
         {
-
             var area = await _dbContext.FacilityAreas
-
                 .FirstOrDefaultAsync(a => a.Id == request.AreaId.Value && a.FacilityId == facilityId, cancellationToken);
-
             if (area == null)
-
             {
-
                 throw AppException.FromError(ManagerErrors.AreaNotFound);
-
             }
-
         }
 
-
-
         var status = !string.IsNullOrWhiteSpace(request.PhysicalStatus) 
-
             ? request.PhysicalStatus.Trim().ToLowerInvariant() 
-
             : StorageUnitStatusConstants.Available;
-
-
 
         var now = DateTimeOffset.UtcNow;
 
-        var unit = new StorageUnit
+        var len = request.CustomLengthM ?? request.LengthM ?? unitType.LengthM;
+        var wid = request.CustomWidthM ?? request.WidthM ?? unitType.WidthM;
+        var hei = request.CustomHeightM ?? request.HeightM ?? unitType.HeightM;
+        var areaM2 = request.CustomAreaM2 ?? (len * wid);
+        var catName = !string.IsNullOrWhiteSpace(request.StorageCategory)
+            ? request.StorageCategory.Trim()
+            : (!string.IsNullOrWhiteSpace(request.CategoryName) ? request.CategoryName.Trim() : unitType.Name);
 
+        var canonicalCat = StorageCategoryClassifier.ClassifyCanonicalGroup(catName);
+        if (!StorageCategoryClassifier.IsUnitTypeMatchingCategory(unitType.Code, unitType.Name, canonicalCat))
         {
+            var allTypes = await _dbContext.UnitTypes.Where(t => t.IsActive).ToListAsync(cancellationToken);
+            var bestTypeId = StorageCategoryClassifier.FindBestMatchingUnitTypeId(allTypes, catName, areaM2);
+            var resolvedType = allTypes.FirstOrDefault(t => t.Id == bestTypeId);
+            if (resolvedType != null)
+            {
+                unitType = resolvedType;
+            }
+        }
 
+        decimal basePricePerSqm = 100m;
+        var pricingConfig = await _dbContext.PricingConfigs.OrderBy(x => x.Id).FirstOrDefaultAsync(cancellationToken);
+        if (pricingConfig != null && pricingConfig.PricePerSquareMeter > 0)
+        {
+            basePricePerSqm = pricingConfig.PricePerSquareMeter;
+        }
+
+        decimal categorySurcharge = 0m;
+        var matchedCat = await _dbContext.StorageCategories
+            .FirstOrDefaultAsync(c => c.Name.ToLower() == catName.ToLower(), cancellationToken);
+        if (matchedCat != null)
+        {
+            categorySurcharge = matchedCat.SurchargeAmount;
+        }
+
+        var monthlyRate = (request.CustomMonthlyRate.HasValue && request.CustomMonthlyRate.Value > 0)
+            ? request.CustomMonthlyRate.Value
+            : (areaM2 * basePricePerSqm + categorySurcharge);
+
+        var (createdCleanNotes, extractedImg) = ExtractNotesAndImageUrl(request.Notes);
+        var finalImg = !string.IsNullOrWhiteSpace(request.ImageUrl) ? request.ImageUrl.Trim() : extractedImg;
+
+        var unit = new StorageUnit
+        {
             FacilityId = facilityId,
-
             UnitCode = unitCode,
-
-            UnitTypeId = request.UnitTypeId,
-
+            UnitTypeId = unitType.Id,
             AreaId = request.AreaId,
-
             FloorLabel = request.FloorLabel?.Trim(),
-
             ZoneLabel = request.ZoneLabel?.Trim(),
-
             PhysicalStatus = status,
-
             IsListed = request.IsListed,
-
-            Notes = PackNotesAndImageUrl(request.Notes, request.ImageUrl),
-
+            Notes = PackNotesAndImageUrl(createdCleanNotes, finalImg),
+            ImageUrl = finalImg,
+            CustomLengthM = len,
+            CustomWidthM = wid,
+            CustomHeightM = hei,
+            CustomAreaM2 = areaM2,
+            StorageCategory = catName,
+            CustomMonthlyRate = monthlyRate,
+            BasePricePerSqm = basePricePerSqm,
+            CategorySurcharge = categorySurcharge,
             CreatedAt = now,
-
             UpdatedAt = now
-
         };
 
-
-
         _dbContext.StorageUnits.Add(unit);
-
         await _dbContext.SaveChangesAsync(cancellationToken);
 
+        _logger.LogInformation("User {UserId} created unit {UnitCode} at facility {FacilityId} with custom size {Len}x{Wid} ({Area}m2), category {Cat}, monthly rate {Rate}.",
+            currentUserId, unitCode, facilityId, len, wid, areaM2, catName, monthlyRate);
 
-
-        _logger.LogInformation("User {UserId} created unit {UnitCode} at facility {FacilityId}.",
-
-            currentUserId, unitCode, facilityId);
-
-
-
-        var (createdCleanNotes, createdImageUrl) = ExtractNotesAndImageUrl(unit.Notes);
         return new ManagerStorageUnitDto
         {
             Id = unit.Id,
@@ -302,19 +330,28 @@ public partial class FacilityManagerService : IFacilityManagerService
             UnitCode = unit.UnitCode,
             UnitTypeId = unit.UnitTypeId,
             UnitTypeCode = unitType.Code,
-            UnitTypeName = unitType.Name,
-            WidthM = unitType.WidthM,
-            LengthM = unitType.LengthM,
-            HeightM = unitType.HeightM,
-            AreaM2 = unitType.AreaM2,
-            VolumeM3 = unitType.VolumeM3,
+            UnitTypeName = catName,
+            WidthM = wid,
+            LengthM = len,
+            HeightM = hei,
+            AreaM2 = areaM2,
+            VolumeM3 = (areaM2 * hei),
+            CustomWidthM = wid,
+            CustomLengthM = len,
+            CustomHeightM = hei,
+            CustomAreaM2 = areaM2,
+            StorageCategory = catName,
+            CategoryName = catName,
+            CustomMonthlyRate = monthlyRate,
+            BasePricePerSqm = basePricePerSqm,
+            CategorySurcharge = categorySurcharge,
             AreaId = unit.AreaId,
             FloorLabel = unit.FloorLabel,
             ZoneLabel = unit.ZoneLabel,
             PhysicalStatus = unit.PhysicalStatus,
             IsListed = unit.IsListed,
             Notes = createdCleanNotes,
-            ImageUrl = createdImageUrl,
+            ImageUrl = finalImg,
             CreatedAt = unit.CreatedAt,
             UpdatedAt = unit.UpdatedAt
         };
@@ -445,6 +482,76 @@ public partial class FacilityManagerService : IFacilityManagerService
         if (request.FloorLabel != null) unit.FloorLabel = request.FloorLabel.Trim();
         if (request.ZoneLabel != null) unit.ZoneLabel = request.ZoneLabel.Trim();
         if (request.IsListed.HasValue) unit.IsListed = request.IsListed.Value;
+
+        if (request.CustomLengthM.HasValue || request.LengthM.HasValue)
+        {
+            unit.CustomLengthM = request.CustomLengthM ?? request.LengthM;
+        }
+        if (request.CustomWidthM.HasValue || request.WidthM.HasValue)
+        {
+            unit.CustomWidthM = request.CustomWidthM ?? request.WidthM;
+        }
+        if (request.CustomHeightM.HasValue || request.HeightM.HasValue)
+        {
+            unit.CustomHeightM = request.CustomHeightM ?? request.HeightM;
+        }
+
+        var effectiveLen = unit.CustomLengthM ?? unitType.LengthM;
+        var effectiveWid = unit.CustomWidthM ?? unitType.WidthM;
+        var effectiveHei = unit.CustomHeightM ?? unitType.HeightM;
+        var effectiveArea = request.CustomAreaM2 ?? (unit.CustomLengthM.HasValue && unit.CustomWidthM.HasValue ? unit.CustomLengthM.Value * unit.CustomWidthM.Value : (effectiveLen * effectiveWid));
+        unit.CustomAreaM2 = effectiveArea;
+
+        if (!string.IsNullOrWhiteSpace(request.StorageCategory))
+        {
+            unit.StorageCategory = request.StorageCategory.Trim();
+        }
+        else if (!string.IsNullOrWhiteSpace(request.CategoryName))
+        {
+            unit.StorageCategory = request.CategoryName.Trim();
+        }
+
+        var effectiveCat = !string.IsNullOrWhiteSpace(unit.StorageCategory) ? unit.StorageCategory : unitType.Name;
+
+        var canonicalEffectiveCat = StorageCategoryClassifier.ClassifyCanonicalGroup(effectiveCat);
+        if (!StorageCategoryClassifier.IsUnitTypeMatchingCategory(unitType.Code, unitType.Name, canonicalEffectiveCat))
+        {
+            var allTypes = await _dbContext.UnitTypes.Where(t => t.IsActive).ToListAsync(cancellationToken);
+            var bestTypeId = StorageCategoryClassifier.FindBestMatchingUnitTypeId(allTypes, effectiveCat, effectiveArea);
+            var resolvedType = allTypes.FirstOrDefault(t => t.Id == bestTypeId);
+            if (resolvedType != null)
+            {
+                unitType = resolvedType;
+                unit.UnitTypeId = resolvedType.Id;
+            }
+        }
+
+        // Recalculate price if requested or not yet set
+        if (request.CustomMonthlyRate.HasValue && request.CustomMonthlyRate.Value > 0)
+        {
+            unit.CustomMonthlyRate = request.CustomMonthlyRate.Value;
+        }
+        else
+        {
+            decimal basePricePerSqm = unit.BasePricePerSqm ?? 100m;
+            var pricingConfig = await _dbContext.PricingConfigs.OrderBy(x => x.Id).FirstOrDefaultAsync(cancellationToken);
+            if (pricingConfig != null && pricingConfig.PricePerSquareMeter > 0)
+            {
+                basePricePerSqm = pricingConfig.PricePerSquareMeter;
+            }
+            unit.BasePricePerSqm = basePricePerSqm;
+
+            decimal categorySurcharge = unit.CategorySurcharge ?? 0m;
+            var matchedCat = await _dbContext.StorageCategories
+                .FirstOrDefaultAsync(c => c.Name.ToLower() == effectiveCat.ToLower(), cancellationToken);
+            if (matchedCat != null)
+            {
+                categorySurcharge = matchedCat.SurchargeAmount;
+            }
+            unit.CategorySurcharge = categorySurcharge;
+            unit.CustomMonthlyRate = (effectiveArea * basePricePerSqm + categorySurcharge);
+        }
+
         if (request.Notes != null || request.ImageUrl != null)
         {
             var (existingCleanNotes, existingImg) = ExtractNotesAndImageUrl(unit.Notes);
@@ -458,12 +565,14 @@ public partial class FacilityManagerService : IFacilityManagerService
                 : (reqExtractedImg ?? existingImg);
 
             unit.Notes = PackNotesAndImageUrl(targetNotes, targetImg);
+            unit.ImageUrl = targetImg;
         }
         unit.UpdatedAt = now;
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         var (updatedCleanNotes, updatedImageUrl) = ExtractNotesAndImageUrl(unit.Notes);
+        var finalUpdatedImg = !string.IsNullOrWhiteSpace(unit.ImageUrl) ? unit.ImageUrl : updatedImageUrl;
         return new ManagerStorageUnitDto
         {
             Id = unit.Id,
@@ -471,12 +580,21 @@ public partial class FacilityManagerService : IFacilityManagerService
             UnitCode = unit.UnitCode,
             UnitTypeId = unit.UnitTypeId,
             UnitTypeCode = unitType.Code,
-            UnitTypeName = unitType.Name,
-            WidthM = unitType.WidthM,
-            LengthM = unitType.LengthM,
-            HeightM = unitType.HeightM,
-            AreaM2 = unitType.AreaM2,
-            VolumeM3 = unitType.VolumeM3,
+            UnitTypeName = effectiveCat,
+            WidthM = effectiveWid,
+            LengthM = effectiveLen,
+            HeightM = effectiveHei,
+            AreaM2 = effectiveArea,
+            VolumeM3 = (effectiveArea * effectiveHei),
+            CustomWidthM = unit.CustomWidthM,
+            CustomLengthM = unit.CustomLengthM,
+            CustomHeightM = unit.CustomHeightM,
+            CustomAreaM2 = unit.CustomAreaM2,
+            StorageCategory = effectiveCat,
+            CategoryName = effectiveCat,
+            CustomMonthlyRate = unit.CustomMonthlyRate,
+            BasePricePerSqm = unit.BasePricePerSqm,
+            CategorySurcharge = unit.CategorySurcharge,
             AreaId = unit.AreaId,
             AreaName = unit.Area?.Name,
             FloorLabel = unit.FloorLabel,
@@ -484,7 +602,7 @@ public partial class FacilityManagerService : IFacilityManagerService
             PhysicalStatus = unit.PhysicalStatus,
             IsListed = unit.IsListed,
             Notes = updatedCleanNotes,
-            ImageUrl = updatedImageUrl,
+            ImageUrl = finalUpdatedImg,
             CreatedAt = unit.CreatedAt,
             UpdatedAt = unit.UpdatedAt
         };

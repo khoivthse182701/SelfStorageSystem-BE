@@ -472,6 +472,7 @@ public class AuthService : IAuthService
         var user = await _dbContext.Users
             .Include(u => u.CustomerProfile)
             .Include(u => u.EmployeeProfile)
+            .Include(u => u.UserRoleUsers).ThenInclude(ur => ur.Role)
             .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
 
         if (user == null)
@@ -482,6 +483,35 @@ public class AuthService : IAuthService
         var now = DateTimeOffset.UtcNow;
         var currentMonth = now.ToString("yyyy-MM");
 
+        var userRoles = user.UserRoleUsers?
+            .Select(ur => ur.Role.Code.ToLowerInvariant())
+            .ToList() ?? new List<string>();
+
+        bool isEmployee = userRoles.Any(r => r.Contains("staff") || r.Contains("manager") || r.Contains("admin"));
+
+        // If Internal Staff / Manager / Admin: Họ tên and CCCD are managed by HR/Admin -> Read-only
+        if (isEmployee)
+        {
+            if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
+            {
+                user.PhoneNumber = request.PhoneNumber.Trim();
+            }
+
+            if (user.CustomerProfile != null)
+            {
+                if (request.Address != null)
+                {
+                    user.CustomerProfile.Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim();
+                }
+                user.CustomerProfile.UpdatedAt = now;
+            }
+
+            user.UpdatedAt = now;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            return await BuildCustomerProfileDtoAsync(user, cancellationToken);
+        }
+
+        // Customer Logic
         if (user.CustomerProfile == null)
         {
             user.CustomerProfile = new CustomerProfile
@@ -554,11 +584,54 @@ public class AuthService : IAuthService
             profile.Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim();
         }
 
+        if (request.EmergencyContactName != null)
+        {
+            profile.EmergencyContactName = string.IsNullOrWhiteSpace(request.EmergencyContactName) ? null : request.EmergencyContactName.Trim();
+        }
+
+        if (request.EmergencyContactPhone != null)
+        {
+            profile.EmergencyContactPhone = string.IsNullOrWhiteSpace(request.EmergencyContactPhone) ? null : request.EmergencyContactPhone.Trim();
+        }
+
         profile.UpdatedAt = now;
         user.UpdatedAt = now;
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         return await BuildCustomerProfileDtoAsync(user, cancellationToken);
+    }
+
+    public async Task ChangePasswordAsync(long userId, ChangePasswordRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 6)
+        {
+            throw AppException.FromError(AuthErrors.PasswordTooShort);
+        }
+
+        if (!string.Equals(request.NewPassword, request.ConfirmNewPassword, StringComparison.Ordinal))
+        {
+            throw AppException.FromError(AuthErrors.NewPasswordMismatch);
+        }
+
+        var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
+        if (user == null)
+        {
+            throw AppException.FromError(AuthErrors.UserNotFound);
+        }
+
+        if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+        {
+            throw AppException.FromError(AuthErrors.CurrentPasswordIncorrect);
+        }
+
+        if (BCrypt.Net.BCrypt.Verify(request.NewPassword, user.PasswordHash))
+        {
+            throw AppException.FromError(AuthErrors.NewPasswordSameAsOld);
+        }
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        user.UpdatedAt = DateTimeOffset.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<CustomerProfileDto> BuildCustomerProfileDtoAsync(User user, CancellationToken cancellationToken)
@@ -570,6 +643,34 @@ public class AuthService : IAuthService
             : 0;
         var debtItems = await GetNegativeDebtInvoicesAsync(user.Id, cancellationToken);
         var totalNegativeDebt = debtItems.Sum(d => d.OutstandingAmount);
+
+        // Fetch employee assignment details if employee
+        string? employeeCode = user.EmployeeProfile?.EmployeeCode;
+        string? assignedFacilityName = null;
+        long? assignedFacilityId = null;
+
+        var assignment = await _dbContext.StaffFacilityAssignments
+            .AsNoTracking()
+            .Include(sfa => sfa.Facility)
+            .Where(sfa => sfa.EmployeeId == user.Id)
+            .OrderByDescending(sfa => sfa.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (assignment != null)
+        {
+            assignedFacilityName = assignment.Facility?.Name;
+            assignedFacilityId = assignment.FacilityId;
+        }
+
+        // Fetch last login history
+        var lastLogin = await _dbContext.LoginHistories
+            .AsNoTracking()
+            .Where(lh => lh.UserId == user.Id && lh.Result == "SUCCESS")
+            .OrderByDescending(lh => lh.OccurredAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var lastLoginAt = lastLogin?.OccurredAt ?? user.LastLoginAt;
+        var lastLoginIp = lastLogin?.IpAddress ?? "127.0.0.1";
 
         return new CustomerProfileDto(
             UserId: user.Id,
@@ -585,7 +686,17 @@ public class AuthService : IAuthService
             RemainingEditsThisMonth: Math.Max(0, 2 - editsUsed),
             HasNegativeDepositDebt: debtItems.Count > 0,
             TotalNegativeDebtAmount: totalNegativeDebt,
-            NegativeDebtInvoices: debtItems);
+            NegativeDebtInvoices: debtItems,
+            EmployeeCode: employeeCode,
+            AssignedFacilityName: assignedFacilityName,
+            AssignedFacilityId: assignedFacilityId,
+            EmergencyContactName: profile?.EmergencyContactName,
+            EmergencyContactPhone: profile?.EmergencyContactPhone,
+            CompanyName: null,
+            TaxId: null,
+            InvoiceAddress: null,
+            LastLoginAt: lastLoginAt,
+            LastLoginIp: lastLoginIp);
     }
 
     private async Task<List<NegativeDebtInvoiceItemDto>> GetNegativeDebtInvoicesAsync(long userId, CancellationToken cancellationToken)

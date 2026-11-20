@@ -6,6 +6,7 @@ public static class RoleConstants
     public const string FacilityStaff = "facility_staff";
     public const string FacilityManager = "facility_manager";
     public const string SystemAdministrator = "system_administrator";
+    public const string SystemAdmin = "system_administrator";
 
     public const string Staff = "facility_staff";
     public const string Manager = "facility_manager";

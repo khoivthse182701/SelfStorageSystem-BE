@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SelfStorageSystem.Contracts.Common;
+using SelfStorageSystem.Domain.Constants;
 using SelfStorageSystem.Domain.Entities;
 using SelfStorageSystem.Infrastructure.Persistence;
 
@@ -18,13 +19,35 @@ public sealed class PricingConfigController(SelfStorageDbContext dbContext) : Co
     [AllowAnonymous]
     public async Task<IActionResult> GetPricingConfig(CancellationToken ct)
     {
-        var config = await dbContext.PricingConfigs.AsNoTracking().OrderBy(x => x.Id).FirstOrDefaultAsync(ct);
-        var categories = await dbContext.StorageCategories.AsNoTracking().OrderBy(x => x.Id).ToListAsync(ct);
+        var config = await dbContext.PricingConfigs.OrderBy(x => x.Id).FirstOrDefaultAsync(ct);
+        if (config == null)
+        {
+            config = new PricingConfig { PricePerSquareMeter = 100m, UpdatedAt = DateTimeOffset.UtcNow };
+            dbContext.PricingConfigs.Add(config);
+            await dbContext.SaveChangesAsync(ct);
+        }
+
+        var categories = await dbContext.StorageCategories.OrderBy(x => x.Id).ToListAsync(ct);
+        if (categories.Count == 0)
+        {
+            var defaultCategories = new List<StorageCategory>
+            {
+                new() { Name = "Kho hàng khô", SurchargeAmount = 0m, IsActive = true, CreatedAt = DateTimeOffset.UtcNow },
+                new() { Name = "Kho mát điều hòa", SurchargeAmount = 500m, IsActive = true, CreatedAt = DateTimeOffset.UtcNow },
+                new() { Name = "Kho lạnh / Thủy hải sản", SurchargeAmount = 1000m, IsActive = true, CreatedAt = DateTimeOffset.UtcNow },
+                new() { Name = "Kho hóa chất", SurchargeAmount = 2000m, IsActive = true, CreatedAt = DateTimeOffset.UtcNow },
+                new() { Name = "Kho sưởi ấm", SurchargeAmount = 800m, IsActive = true, CreatedAt = DateTimeOffset.UtcNow },
+                new() { Name = "Kho tài liệu / Hồ sơ", SurchargeAmount = 300m, IsActive = true, CreatedAt = DateTimeOffset.UtcNow }
+            };
+            dbContext.StorageCategories.AddRange(defaultCategories);
+            await dbContext.SaveChangesAsync(ct);
+            categories = defaultCategories;
+        }
 
         return Ok(ApiResponse<object>.Ok(new
         {
-            pricePerSquareMeter = config?.PricePerSquareMeter ?? 100m,
-            updatedAt = config?.UpdatedAt,
+            pricePerSquareMeter = config.PricePerSquareMeter,
+            updatedAt = config.UpdatedAt,
             categories = categories.Select(c => new
             {
                 id = c.Id,
@@ -35,8 +58,9 @@ public sealed class PricingConfigController(SelfStorageDbContext dbContext) : Co
         }, "Pricing config retrieved successfully."));
     }
 
+    [HttpPut("api/v1/pricing-config")]
     [HttpPut("api/v1/admin/pricing-config")]
-    [Authorize(Roles = "Admin,Manager")]
+    [Authorize(Roles = RoleConstants.OperationsOrManager)]
     public async Task<IActionResult> UpdatePricingConfig([FromBody] UpdatePricingConfigRequest request, CancellationToken ct)
     {
         if (request.PricePerSquareMeter < 0)
@@ -67,7 +91,8 @@ public sealed class PricingConfigController(SelfStorageDbContext dbContext) : Co
     }
 
     [HttpPost("api/v1/admin/storage-categories")]
-    [Authorize(Roles = "Admin,Manager")]
+    [HttpPost("api/v1/storage-categories")]
+    [Authorize(Roles = RoleConstants.OperationsOrManager)]
     public async Task<IActionResult> CreateCategory([FromBody] UpsertStorageCategoryRequest request, CancellationToken ct)
     {
         var name = request.Name?.Trim();
@@ -91,7 +116,8 @@ public sealed class PricingConfigController(SelfStorageDbContext dbContext) : Co
     }
 
     [HttpPut("api/v1/admin/storage-categories/{id:long}")]
-    [Authorize(Roles = "Admin,Manager")]
+    [HttpPut("api/v1/storage-categories/{id:long}")]
+    [Authorize(Roles = RoleConstants.OperationsOrManager)]
     public async Task<IActionResult> UpdateCategory(long id, [FromBody] UpsertStorageCategoryRequest request, CancellationToken ct)
     {
         var cat = await dbContext.StorageCategories.FirstOrDefaultAsync(c => c.Id == id, ct);
@@ -105,5 +131,19 @@ public sealed class PricingConfigController(SelfStorageDbContext dbContext) : Co
 
         await dbContext.SaveChangesAsync(ct);
         return Ok(ApiResponse<object>.Ok(cat, "Storage category updated successfully."));
+    }
+
+    [HttpDelete("api/v1/admin/storage-categories/{id:long}")]
+    [HttpDelete("api/v1/storage-categories/{id:long}")]
+    [Authorize(Roles = RoleConstants.OperationsOrManager)]
+    public async Task<IActionResult> DeleteCategory(long id, CancellationToken ct)
+    {
+        var cat = await dbContext.StorageCategories.FirstOrDefaultAsync(c => c.Id == id, ct);
+        if (cat == null)
+            return NotFound(ApiResponse.Fail("Storage category not found."));
+
+        dbContext.StorageCategories.Remove(cat);
+        await dbContext.SaveChangesAsync(ct);
+        return Ok(ApiResponse<object>.Ok(new { id }, "Storage category deleted successfully."));
     }
 }

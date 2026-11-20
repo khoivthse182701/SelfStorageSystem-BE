@@ -296,23 +296,52 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 u.UnitCode,
                 u.FloorLabel,
                 u.ZoneLabel,
+                u.CustomLengthM,
+                u.CustomWidthM,
+                u.CustomHeightM,
+                u.CustomAreaM2,
+                u.StorageCategory,
+                u.CustomMonthlyRate,
+                u.ImageUrl,
+                u.UnitType,
                 u.UnitMapPosition
             })
             .ToListAsync(ct);
 
-        return units.Select(u => new AvailableUnitDto
+        return units.Select(u =>
         {
-            Id = u.Id,
-            FacilityId = u.FacilityId,
-            UnitTypeId = u.UnitTypeId,
-            FacilityAreaId = u.AreaId,
-            UnitCode = u.UnitCode,
-            FloorLabel = u.FloorLabel,
-            ZoneLabel = u.ZoneLabel,
-            MonthlyRate = rates.FirstOrDefault(r => r.FacilityId == u.FacilityId && r.UnitTypeId == u.UnitTypeId)?.MonthlyRate ?? 0m,
-            MapPosition = u.UnitMapPosition is { } pos
-                ? new UnitMapPositionDto(pos.X, pos.Y, pos.Width, pos.Height)
-                : null
+            var len = u.CustomLengthM ?? u.UnitType?.LengthM;
+            var wid = u.CustomWidthM ?? u.UnitType?.WidthM;
+            var hei = u.CustomHeightM ?? u.UnitType?.HeightM;
+            var area = u.CustomAreaM2 ?? (u.CustomLengthM.HasValue && u.CustomWidthM.HasValue ? u.CustomLengthM.Value * u.CustomWidthM.Value : u.UnitType?.AreaM2);
+            var catName = !string.IsNullOrWhiteSpace(u.StorageCategory) ? u.StorageCategory : u.UnitType?.Name;
+            var monthlyRate = (u.CustomMonthlyRate.HasValue && u.CustomMonthlyRate.Value > 0)
+                ? u.CustomMonthlyRate.Value
+                : (rates.FirstOrDefault(r => r.FacilityId == u.FacilityId && r.UnitTypeId == u.UnitTypeId)?.MonthlyRate ?? 0m);
+
+            return new AvailableUnitDto
+            {
+                Id = u.Id,
+                FacilityId = u.FacilityId,
+                UnitTypeId = u.UnitTypeId,
+                FacilityAreaId = u.AreaId,
+                UnitCode = u.UnitCode,
+                FloorLabel = u.FloorLabel,
+                ZoneLabel = u.ZoneLabel,
+                CategoryName = catName,
+                StorageCategory = catName,
+                Length = len,
+                Width = wid,
+                Height = hei,
+                Area = area,
+                AreaM2 = area,
+                MonthlyRate = monthlyRate,
+                CustomMonthlyRate = u.CustomMonthlyRate,
+                ImageUrl = u.ImageUrl,
+                MapPosition = u.UnitMapPosition is { } pos
+                    ? new UnitMapPositionDto(pos.X, pos.Y, pos.Width, pos.Height)
+                    : null
+            };
         }).ToList();
     }
 
@@ -374,23 +403,52 @@ public sealed class CustomerCatalogService(SelfStorageDbContext db) : ICustomerC
                 u.UnitCode,
                 u.FloorLabel,
                 u.ZoneLabel,
+                u.CustomLengthM,
+                u.CustomWidthM,
+                u.CustomHeightM,
+                u.CustomAreaM2,
+                u.StorageCategory,
+                u.CustomMonthlyRate,
+                u.ImageUrl,
+                u.UnitType,
                 u.UnitMapPosition
             })
             .ToListAsync(cancellationToken);
 
-        return units.Select(u => new AvailableUnitDto
+        return units.Select(u =>
         {
-            Id = u.Id,
-            FacilityId = u.FacilityId,
-            UnitTypeId = u.UnitTypeId,
-            FacilityAreaId = u.AreaId,
-            UnitCode = u.UnitCode,
-            FloorLabel = u.FloorLabel,
-            ZoneLabel = u.ZoneLabel,
-            MonthlyRate = rates.FirstOrDefault(r => r.UnitTypeId == u.UnitTypeId)?.MonthlyRate ?? 0m,
-            MapPosition = u.UnitMapPosition is { } pos
-                ? new UnitMapPositionDto(pos.X, pos.Y, pos.Width, pos.Height)
-                : null
+            var len = u.CustomLengthM ?? u.UnitType?.LengthM;
+            var wid = u.CustomWidthM ?? u.UnitType?.WidthM;
+            var hei = u.CustomHeightM ?? u.UnitType?.HeightM;
+            var area = u.CustomAreaM2 ?? (u.CustomLengthM.HasValue && u.CustomWidthM.HasValue ? u.CustomLengthM.Value * u.CustomWidthM.Value : u.UnitType?.AreaM2);
+            var catName = !string.IsNullOrWhiteSpace(u.StorageCategory) ? u.StorageCategory : u.UnitType?.Name;
+            var monthlyRate = (u.CustomMonthlyRate.HasValue && u.CustomMonthlyRate.Value > 0)
+                ? u.CustomMonthlyRate.Value
+                : (rates.FirstOrDefault(r => r.UnitTypeId == u.UnitTypeId)?.MonthlyRate ?? 0m);
+
+            return new AvailableUnitDto
+            {
+                Id = u.Id,
+                FacilityId = u.FacilityId,
+                UnitTypeId = u.UnitTypeId,
+                FacilityAreaId = u.AreaId,
+                UnitCode = u.UnitCode,
+                FloorLabel = u.FloorLabel,
+                ZoneLabel = u.ZoneLabel,
+                CategoryName = catName,
+                StorageCategory = catName,
+                Length = len,
+                Width = wid,
+                Height = hei,
+                Area = area,
+                AreaM2 = area,
+                MonthlyRate = monthlyRate,
+                CustomMonthlyRate = u.CustomMonthlyRate,
+                ImageUrl = u.ImageUrl,
+                MapPosition = u.UnitMapPosition is { } pos
+                    ? new UnitMapPositionDto(pos.X, pos.Y, pos.Width, pos.Height)
+                    : null
+            };
         }).ToList();
     }
 

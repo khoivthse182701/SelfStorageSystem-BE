@@ -64,13 +64,17 @@ public partial class FacilityManagerService : IFacilityManagerService
 
 
 
-        // Retrieve the latest assignment for each staff member at this facility (including active and inactive)
+        // Retrieve the latest assignment for each staff member at this facility (excluding managers and self)
         var query = _dbContext.StaffFacilityAssignments
             .AsNoTracking()
             .Include(sfa => sfa.Employee)
                 .ThenInclude(e => e.User)
             .Include(sfa => sfa.Facility)
             .Where(sfa => sfa.FacilityId == targetFacilityId
+                && sfa.AssignmentRole != RoleConstants.FacilityManager
+                && sfa.AssignmentRole != "facility_manager"
+                && sfa.Employee.UserId != currentUserId
+                && !_dbContext.UserRoles.Any(ur => ur.UserId == sfa.Employee.UserId && (ur.Role.Code == RoleConstants.FacilityManager || ur.Role.Code == RoleConstants.SystemAdministrator))
                 && !_dbContext.StaffFacilityAssignments.Any(newer => newer.EmployeeId == sfa.EmployeeId
                     && newer.FacilityId == targetFacilityId
                     && newer.CreatedAt > sfa.CreatedAt));
@@ -366,7 +370,17 @@ public partial class FacilityManagerService : IFacilityManagerService
 
         await ValidateFacilityAccessAsync(assignment.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
 
+        if (!isSystemAdmin)
+        {
+            var isTargetManagerOrSelf = staffUserId == currentUserId
+                || string.Equals(assignment.AssignmentRole, RoleConstants.FacilityManager, StringComparison.OrdinalIgnoreCase)
+                || await _dbContext.UserRoles.AnyAsync(ur => ur.UserId == staffUserId && (ur.Role.Code == RoleConstants.FacilityManager || ur.Role.Code == RoleConstants.SystemAdministrator), cancellationToken);
 
+            if (isTargetManagerOrSelf)
+            {
+                throw AppException.FromError(ManagerErrors.CannotManageManagerAccount);
+            }
+        }
 
         var employee = assignment.Employee;
 
@@ -495,7 +509,17 @@ public partial class FacilityManagerService : IFacilityManagerService
 
         await ValidateFacilityAccessAsync(assignment.FacilityId, currentUserId, isSystemAdmin, cancellationToken);
 
+        if (!isSystemAdmin)
+        {
+            var isTargetManagerOrSelf = staffUserId == currentUserId
+                || string.Equals(assignment.AssignmentRole, RoleConstants.FacilityManager, StringComparison.OrdinalIgnoreCase)
+                || await _dbContext.UserRoles.AnyAsync(ur => ur.UserId == staffUserId && (ur.Role.Code == RoleConstants.FacilityManager || ur.Role.Code == RoleConstants.SystemAdministrator), cancellationToken);
 
+            if (isTargetManagerOrSelf)
+            {
+                throw AppException.FromError(ManagerErrors.CannotManageManagerAccount);
+            }
+        }
 
         var isActive = request.IsActive ?? (!string.IsNullOrWhiteSpace(request.Status) && request.Status.Equals("active", StringComparison.OrdinalIgnoreCase));
 
