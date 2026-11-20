@@ -142,34 +142,151 @@ BEGIN TRY
         END
     WHERE [facility_id] IN (1, 6);
 
-    PRINT N'>>> 5. Chuẩn hóa đúng 10 ô kho mỗi cơ sở (A-101..A-105, B-101..B-105) với giá 100đ/m2...';
-    -- Xóa các ô kho phụ ngoài 10 ô chuẩn nếu có ở cơ sở 1
-    DELETE FROM [core].[storage_units] WHERE [facility_id] = 1 AND [id] NOT IN (121, 122, 123, 124, 125, 126, 127, 128, 129, 130);
-
+    PRINT N'>>> 5. Chuẩn hóa đúng 20 ô kho mỗi cơ sở (A-101..A-110, B-101..B-110) với giá 100đ/m2...';
     -- Ẩn tất cả các ô kho ở các cơ sở không kích hoạt
     UPDATE [core].[storage_units]
     SET [is_listed] = 0,
         [updated_at] = SYSUTCDATETIME()
     WHERE [facility_id] NOT IN (1, 6);
 
-    -- Đặt base_price_per_sqm = 100đ cho tất cả ô kho tại Thủ Đức (1) và Cầu Giấy (6)
-    UPDATE [core].[storage_units]
-    SET [base_price_per_sqm] = 100.00,
-        [physical_status] = 'available',
-        [is_listed] = 1,
-        [custom_monthly_rate] = CASE 
-            WHEN [custom_area_m2] IS NOT NULL THEN ([custom_area_m2] * 100.00) + ISNULL([category_surcharge], 0)
-            ELSE 1000.00
-        END,
-        [updated_at] = SYSUTCDATETIME()
-    WHERE [facility_id] IN (1, 6);
+    -- Bảng tạm chứa thông tin 20 mẫu thiết kế ô kho chuẩn cho cả 2 cơ sở
+    DECLARE @UnitTemplate TABLE (
+        [unit_code] NVARCHAR(50),
+        [zone_code] NVARCHAR(20),
+        [zone_label] NVARCHAR(10),
+        [unit_type_id] BIGINT,
+        [type_code] NVARCHAR(50),
+        [storage_category] NVARCHAR(100),
+        [width_m] DECIMAL(10,2),
+        [length_m] DECIMAL(10,2),
+        [height_m] DECIMAL(10,2),
+        [area_m2] DECIMAL(10,2),
+        [base_price_sqm] DECIMAL(18,2),
+        [category_surcharge] DECIMAL(18,2),
+        [custom_monthly_rate] DECIMAL(18,2),
+        [map_x] DECIMAL(10,2),
+        [map_y] DECIMAL(10,2),
+        [map_width] DECIMAL(10,2),
+        [map_height] DECIMAL(10,2)
+    );
 
-    -- Riêng ô kho A-101 (ID=121, cơ sở 1 Thủ Đức) sẽ được gán cho hợp đồng hết hạn -> đặt occupied
-    UPDATE [core].[storage_units]
-    SET [physical_status] = 'occupied',
-        [is_listed] = 1,
-        [updated_at] = SYSUTCDATETIME()
-    WHERE [id] = 121;
+    INSERT INTO @UnitTemplate
+    VALUES
+    -- ZONE A (A-101 -> A-110)
+    (N'A-101', N'F1-ZA', N'A', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 5.00, 5.00, 22.00, 16.00),
+    (N'A-102', N'F1-ZA', N'A', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 32.00, 5.00, 22.00, 16.00),
+    (N'A-103', N'F1-ZA', N'A', 6, N'MINI-DRY', N'Kho hàng khô', 1.00, 1.00, 1.20, 1.00, 100.00, 100.00, 1000.00, 59.00, 5.00, 22.00, 16.00),
+    (N'A-104', N'F1-ZA', N'A', 6, N'MINI-DRY', N'Kho hàng khô', 1.00, 1.00, 1.20, 1.00, 100.00, 100.00, 1000.00, 86.00, 5.00, 22.00, 16.00),
+    (N'A-105', N'F1-ZA', N'A', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 113.00, 5.00, 22.00, 16.00),
+    (N'A-106', N'F1-ZA', N'A', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 5.00, 35.00, 22.00, 16.00),
+    (N'A-107', N'F1-ZA', N'A', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 32.00, 35.00, 22.00, 16.00),
+    (N'A-108', N'F1-ZA', N'A', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 59.00, 35.00, 22.00, 16.00),
+    (N'A-109', N'F1-ZA', N'A', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 86.00, 35.00, 22.00, 16.00),
+    (N'A-110', N'F1-ZA', N'A', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 113.00, 35.00, 22.00, 16.00),
+
+    -- ZONE B (B-101 -> B-110)
+    (N'B-101', N'F1-ZB', N'B', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 5.00, 5.00, 22.00, 16.00),
+    (N'B-102', N'F1-ZB', N'B', 1, N'S-DRY', N'Kho hàng khô', 1.50, 2.00, 2.50, 3.00, 100.00, 100.00, 1000.00, 32.00, 5.00, 22.00, 16.00),
+    (N'B-103', N'F1-ZB', N'B', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 59.00, 5.00, 22.00, 16.00),
+    (N'B-104', N'F1-ZB', N'B', 2, N'M-DRY', N'Kho hàng khô', 2.00, 3.00, 2.50, 6.00, 100.00, 100.00, 1200.00, 86.00, 5.00, 22.00, 16.00),
+    (N'B-105', N'F1-ZB', N'B', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 113.00, 5.00, 22.00, 16.00),
+    (N'B-106', N'F1-ZB', N'B', 7, N'S-SEAFOOD', N'Kho lạnh / Thủy hải sản', 1.50, 2.00, 2.50, 3.00, 100.00, 1000.00, 1300.00, 5.00, 35.00, 22.00, 16.00),
+    (N'B-107', N'F1-ZB', N'B', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 32.00, 35.00, 22.00, 16.00),
+    (N'B-108', N'F1-ZB', N'B', 8, N'M-WARM', N'Kho sưởi ấm', 2.00, 3.00, 2.50, 6.00, 100.00, 800.00, 1400.00, 59.00, 35.00, 22.00, 16.00),
+    (N'B-109', N'F1-ZB', N'B', 5, N'XL-CLIMATE', N'Kho mát điều hòa', 4.00, 4.00, 3.00, 16.00, 100.00, 500.00, 2000.00, 86.00, 35.00, 22.00, 16.00),
+    (N'B-110', N'F1-ZB', N'B', 5, N'XL-CLIMATE', N'Kho mát điều hòa', 4.00, 4.00, 3.00, 16.00, 100.00, 500.00, 2000.00, 113.00, 35.00, 22.00, 16.00);
+
+    DECLARE @SeedFacilities TABLE ([fac_id] BIGINT);
+    INSERT INTO @SeedFacilities VALUES (1), (6);
+
+    MERGE INTO [core].[storage_units] AS target
+    USING (
+        SELECT 
+            f.fac_id AS facility_id,
+            u.unit_code,
+            CASE WHEN u.zone_label = 'A' THEN za.id ELSE zb.id END AS area_id,
+            u.zone_label,
+            N'1' AS floor_label,
+            u.unit_type_id,
+            u.storage_category,
+            u.width_m AS custom_width_m,
+            u.length_m AS custom_length_m,
+            u.height_m AS custom_height_m,
+            u.area_m2 AS custom_area_m2,
+            u.base_price_sqm AS base_price_per_sqm,
+            u.category_surcharge,
+            u.custom_monthly_rate,
+            u.storage_category + N' (' + CAST(u.area_m2 AS NVARCHAR(10)) + N' m2)' AS notes,
+            CASE WHEN f.fac_id = 1 AND u.unit_code = 'A-101' THEN 'occupied' ELSE 'available' END AS physical_status,
+            1 AS is_listed
+        FROM @SeedFacilities f
+        CROSS JOIN @UnitTemplate u
+        LEFT JOIN [core].[facility_areas] za ON za.facility_id = f.fac_id AND za.code = 'F1-ZA'
+        LEFT JOIN [core].[facility_areas] zb ON zb.facility_id = f.fac_id AND zb.code = 'F1-ZB'
+    ) AS src
+    ON (target.facility_id = src.facility_id AND target.unit_code = src.unit_code)
+    WHEN MATCHED THEN
+        UPDATE SET 
+            target.unit_type_id = src.unit_type_id,
+            target.area_id = src.area_id,
+            target.floor_label = src.floor_label,
+            target.zone_label = src.zone_label,
+            target.physical_status = src.physical_status,
+            target.is_listed = src.is_listed,
+            target.custom_width_m = src.custom_width_m,
+            target.custom_length_m = src.custom_length_m,
+            target.custom_height_m = src.custom_height_m,
+            target.custom_area_m2 = src.custom_area_m2,
+            target.storage_category = src.storage_category,
+            target.base_price_per_sqm = src.base_price_per_sqm,
+            target.category_surcharge = src.category_surcharge,
+            target.custom_monthly_rate = src.custom_monthly_rate,
+            target.notes = src.notes,
+            target.updated_at = SYSUTCDATETIME()
+    WHEN NOT MATCHED THEN
+        INSERT (
+            facility_id, unit_type_id, area_id, unit_code,
+            floor_label, zone_label, physical_status, is_listed,
+            custom_width_m, custom_length_m, custom_height_m, custom_area_m2,
+            storage_category, base_price_per_sqm, category_surcharge,
+            custom_monthly_rate, notes, created_at, updated_at
+        )
+        VALUES (
+            src.facility_id, src.unit_type_id, src.area_id, src.unit_code,
+            src.floor_label, src.zone_label, src.physical_status, src.is_listed,
+            src.custom_width_m, src.custom_length_m, src.custom_height_m, src.custom_area_m2,
+            src.storage_category, src.base_price_per_sqm, src.category_surcharge,
+            src.custom_monthly_rate, src.notes, SYSUTCDATETIME(), SYSUTCDATETIME()
+        );
+
+    -- Đồng bộ sơ đồ vị trí [core].[unit_map_positions]
+    MERGE INTO [core].[unit_map_positions] AS target
+    USING (
+        SELECT 
+            u.id AS unit_id,
+            u.area_id,
+            t.map_x AS x,
+            t.map_y AS y,
+            t.map_width AS width,
+            t.map_height AS height,
+            0 AS rotation_degrees,
+            N'{}' AS metadata
+        FROM [core].[storage_units] u
+        JOIN @UnitTemplate t ON u.unit_code = t.unit_code
+        WHERE u.facility_id IN (1, 6)
+    ) AS src
+    ON (target.unit_id = src.unit_id)
+    WHEN MATCHED THEN
+        UPDATE SET 
+            target.area_id = src.area_id,
+            target.x = src.x,
+            target.y = src.y,
+            target.width = src.width,
+            target.height = src.height,
+            target.rotation_degrees = src.rotation_degrees
+    WHEN NOT MATCHED THEN
+        INSERT (unit_id, area_id, x, y, width, height, rotation_degrees, metadata)
+        VALUES (src.unit_id, src.area_id, src.x, src.y, src.width, src.height, src.rotation_degrees, src.metadata);
 
     PRINT N'>>> 6. Tạo/Cập nhật các tài khoản với MẬT KHẨU = 1...';
     -- Mật khẩu "1" (BCrypt factor 11): $2a$11$HWcRgUvFaROkssbvAG.1COvFAbaL1dHcF0tCNYHP5B3vyCsdSGZ0O
