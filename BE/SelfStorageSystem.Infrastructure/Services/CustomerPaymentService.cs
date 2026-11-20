@@ -183,6 +183,9 @@ public class CustomerPaymentService : ICustomerPaymentService
         if (invoice == null || normalizedInvoiceStatus is not (
             InvoiceStatusConstants.Open or InvoiceStatusConstants.Draft or InvoiceStatusConstants.PartiallyPaid or InvoiceStatusConstants.Overdue))
         {
+            _logger.LogWarning(
+                "CreateCheckout InvoiceNotFound: RequestInvoiceId={InvoiceId}, RequestReservationId={ReservationId}, RequestCustomerId={CustomerId}, Found={Found}, ActualCustomerId={ActualCustomerId}, ActualStatus={ActualStatus}, Total={Total}, Paid={Paid}",
+                request.InvoiceId, request.ReservationId, customerId, invoice != null, invoice?.CustomerId, invoice?.Status, invoice?.TotalAmount, invoice?.PaidAmount);
             throw AppException.FromError(PaymentErrors.InvoiceNotFound);
         }
 
